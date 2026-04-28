@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""OpenStreetMap (Map)
-
-"""
+"""OpenStreetMap (Map)"""
 
 import re
 import urllib.parse
@@ -29,7 +27,6 @@ about = {
 categories = ['map']
 paging = False
 language_support = True
-send_accept_language_header = True
 
 # search-url
 base_url = 'https://nominatim.openstreetmap.org/'
@@ -448,7 +445,7 @@ def get_key_label(key_name, lang):
         # https://taginfo.openstreetmap.org/keys/currency#values
         currency = key_name.split(':')
         if len(currency) > 1:
-            o = CURRENCIES['iso4217'].get(currency[1])
+            o = CURRENCIES.iso4217_to_name(currency[1], lang)
             if o:
                 return get_label(o, lang).lower()
             return currency[1]

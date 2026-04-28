@@ -1,18 +1,19 @@
 """
-    babel.lists
-    ~~~~~~~~~~~
+babel.lists
+~~~~~~~~~~~
 
-    Locale dependent formatting of lists.
+Locale dependent formatting of lists.
 
-    The default locale for the functions in this module is determined by the
-    following environment variables, in that order:
+The default locale for the functions in this module is determined by the
+following environment variables, in that order:
 
-     * ``LC_ALL``, and
-     * ``LANG``
+ * ``LC_ALL``, and
+ * ``LANG``
 
-    :copyright: (c) 2015-2025 by the Babel Team.
-    :license: BSD, see LICENSE for more details.
+:copyright: (c) 2015-2026 by the Babel Team.
+:license: BSD, see LICENSE for more details.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -37,18 +38,26 @@ def __getattr__(name):
 
 def format_list(
     lst: Sequence[str],
-    style: Literal['standard', 'standard-short', 'or', 'or-short', 'unit', 'unit-short', 'unit-narrow'] = 'standard',
+    style: Literal[
+        'standard',
+        'standard-short',
+        'or',
+        'or-short',
+        'unit',
+        'unit-short',
+        'unit-narrow',
+    ] = 'standard',
     locale: Locale | str | None = None,
 ) -> str:
     """
     Format the items in `lst` as a list.
 
     >>> format_list(['apples', 'oranges', 'pears'], locale='en')
-    u'apples, oranges, and pears'
+    'apples, oranges, and pears'
     >>> format_list(['apples', 'oranges', 'pears'], locale='zh')
-    u'apples\u3001oranges\u548cpears'
+    'apples、oranges和pears'
     >>> format_list(['omena', 'peruna', 'aplari'], style='or', locale='fi')
-    u'omena, peruna tai aplari'
+    'omena, peruna tai aplari'
 
     Not all styles are necessarily available in all locales.
     The function will attempt to fall back to replacement styles according to the rules

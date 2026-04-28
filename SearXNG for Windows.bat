@@ -2,20 +2,31 @@
 title SearXNG for Windows
 echo Starting SearXNG for Windows...
 
-:: 检查是否存在 python.exe 和 webapp.py
+:: Check embedded python
 if not exist ".\python\python.exe" (
-    echo Error: python.exe not found in the current directory.
-    pause
-    exit /b
+  echo Error: python.exe not found in the current directory.
+  pause
+  exit /b
 )
 
+:: Check webapp
 if not exist ".\python\Lib\site-packages\searx\webapp.py" (
-    echo Error: webapp.py not found in the specified path.
-    pause
-    exit /b
+  echo Error: webapp.py not found in the specified path.
+  pause
+  exit /b
 )
 
-:: 启动 Searx
+:: Check custom config
+if not exist ".\config\settings.yml" (
+  echo Error: .\config\settings.yml not found.
+  pause
+  exit /b
+)
+
+:: IMPORTANT: tell SearXNG which settings.yml to use
+set "SEARXNG_SETTINGS_PATH=%CD%\config\settings.yml"
+
+:: Start SearXNG with embedded python
 .\python\python.exe .\python\Lib\site-packages\searx\webapp.py
 
 pause

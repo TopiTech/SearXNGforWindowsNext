@@ -1,14 +1,15 @@
 """
-    babel.messages.checkers
-    ~~~~~~~~~~~~~~~~~~~~~~~
+babel.messages.checkers
+~~~~~~~~~~~~~~~~~~~~~~~
 
-    Various routines that help with validation of translations.
+Various routines that help with validation of translations.
 
-    :since: version 0.9
+:since: version 0.9
 
-    :copyright: (c) 2013-2025 by the Babel Team.
-    :license: BSD, see LICENSE for more details.
+:copyright: (c) 2013-2026 by the Babel Team.
+:license: BSD, see LICENSE for more details.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -27,8 +28,7 @@ def num_plurals(catalog: Catalog | None, message: Message) -> None:
     """Verify the number of plurals in the translation."""
     if not message.pluralizable:
         if not isinstance(message.string, str):
-            raise TranslationError("Found plural forms for non-pluralizable "
-                                   "message")
+            raise TranslationError("Found plural forms for non-pluralizable message")
         return
 
     # skip further tests if no catalog is provided.
@@ -39,8 +39,9 @@ def num_plurals(catalog: Catalog | None, message: Message) -> None:
     if not isinstance(msgstrs, (list, tuple)):
         msgstrs = (msgstrs,)
     if len(msgstrs) != catalog.num_plurals:
-        raise TranslationError("Wrong number of plural forms (expected %d)" %
-                               catalog.num_plurals)
+        raise TranslationError(
+            f"Wrong number of plural forms (expected {catalog.num_plurals})",
+        )
 
 
 def python_format(catalog: Catalog | None, message: Message) -> None:
@@ -54,9 +55,12 @@ def python_format(catalog: Catalog | None, message: Message) -> None:
     if not isinstance(msgstrs, (list, tuple)):
         msgstrs = (msgstrs,)
 
-    for msgid, msgstr in zip(msgids, msgstrs):
-        if msgstr:
-            _validate_format(msgid, msgstr)
+    if msgstrs[0]:
+        _validate_format(msgids[0], msgstrs[0])
+    if message.pluralizable:
+        for msgstr in msgstrs[1:]:
+            if msgstr:
+                _validate_format(msgids[1], msgstr)
 
 
 def _validate_format(format: str, alternative: str) -> None:
@@ -112,17 +116,20 @@ def _validate_format(format: str, alternative: str) -> None:
                 positional = name is None
             else:
                 if (name is None) != positional:
-                    raise TranslationError('format string mixes positional '
-                                           'and named placeholders')
+                    raise TranslationError(
+                        'format string mixes positional and named placeholders',
+                    )
         return bool(positional)
 
-    a, b = map(_parse, (format, alternative))
+    a = _parse(format)
+    b = _parse(alternative)
 
     if not a:
         return
 
     # now check if both strings are positional or named
-    a_positional, b_positional = map(_check_positional, (a, b))
+    a_positional = _check_positional(a)
+    b_positional = _check_positional(b)
     if a_positional and not b_positional and not b:
         raise TranslationError('placeholders are incompatible')
     elif a_positional != b_positional:
@@ -132,13 +139,13 @@ def _validate_format(format: str, alternative: str) -> None:
     # same number of format chars and those must be compatible
     if a_positional:
         if len(a) != len(b):
-            raise TranslationError('positional format placeholders are '
-                                   'unbalanced')
+            raise TranslationError('positional format placeholders are unbalanced')
         for idx, ((_, first), (_, second)) in enumerate(zip(a, b)):
             if not _compatible(first, second):
-                raise TranslationError('incompatible format for placeholder '
-                                       '%d: %r and %r are not compatible' %
-                                       (idx + 1, first, second))
+                raise TranslationError(
+                    f'incompatible format for placeholder {idx + 1:d}: '
+                    f'{first!r} and {second!r} are not compatible',
+                )
 
     # otherwise the second string must not have names the first one
     # doesn't have and the types of those included must be compatible
@@ -156,6 +163,7 @@ def _validate_format(format: str, alternative: str) -> None:
 
 def _find_checkers() -> list[Callable[[Catalog | None, Message], object]]:
     from babel.messages._compat import find_entrypoints
+
     checkers: list[Callable[[Catalog | None, Message], object]] = []
     checkers.extend(load() for (name, load) in find_entrypoints('babel.checkers'))
     if len(checkers) == 0:

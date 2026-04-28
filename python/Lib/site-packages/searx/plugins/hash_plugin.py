@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # pylint: disable=missing-module-docstring, missing-class-docstring
-from __future__ import annotations
 import typing
 
 import re
@@ -32,7 +31,9 @@ class SXNGPlugin(Plugin):
         self.info = PluginInfo(
             id=self.id,
             name=gettext("Hash plugin"),
-            description=gettext("Converts strings to different hash digests."),
+            description=gettext(
+                "Converts strings to different hash digests. Available functions: md5, sha1, sha224, sha256, sha384, sha512."  # pylint:disable=line-too-long
+            ),
             examples=["sha512 The quick brown fox jumps over the lazy dog"],
             preference_section="query",
         )

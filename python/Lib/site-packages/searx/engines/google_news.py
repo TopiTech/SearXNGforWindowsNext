@@ -24,8 +24,6 @@ The google news API ignores some parameters from the common :ref:`google API`:
 .. _save: https://developers.google.com/custom-search/docs/xml_results#safesp
 """
 
-from typing import TYPE_CHECKING
-
 from urllib.parse import urlencode
 import base64
 from lxml import html
@@ -46,13 +44,6 @@ from searx.engines.google import (
 )
 from searx.enginelib.traits import EngineTraits
 
-if TYPE_CHECKING:
-    import logging
-
-    logger: logging.Logger
-
-traits: EngineTraits
-
 # about
 about = {
     "website": 'https://news.google.com',
@@ -69,11 +60,10 @@ paging = False
 time_range_support = False
 
 # Google-News results are always *SafeSearch*. Option 'safesearch' is set to
-# False here, otherwise checker will report safesearch-errors::
+# False here.
 #
 #  safesearch : results are identical for safesearch=0 and safesearch=2
 safesearch = True
-# send_accept_language_header = True
 
 
 def request(query, params):
