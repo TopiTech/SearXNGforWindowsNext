@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # pylint: disable=too-few-public-methods, missing-module-docstring
 
-from __future__ import annotations
 
 import abc
 import importlib
@@ -21,7 +20,7 @@ log: logging.Logger = logging.getLogger("searx.answerers")
 
 @dataclass
 class AnswererInfo:
-    """Object that holds informations about an answerer, these infos are shown
+    """Object that holds information about an answerer, these infos are shown
     to the user in the Preferences menu.
 
     To be able to translate the information into other languages, the text must
@@ -53,7 +52,7 @@ class Answerer(abc.ABC):
 
     @abc.abstractmethod
     def info(self) -> AnswererInfo:
-        """Informations about the *answerer*, see :py:obj:`AnswererInfo`."""
+        """Information about the *answerer*, see :py:obj:`AnswererInfo`."""
 
 
 class ModuleAnswerer(Answerer):
@@ -85,7 +84,7 @@ class ModuleAnswerer(Answerer):
         return AnswererInfo(**kwargs)
 
 
-class AnswerStorage(dict):
+class AnswerStorage(dict):  # type: ignore
     """A storage for managing the *answerers* of SearXNG.  With the
     :py:obj:`AnswerStorage.ask`” method, a caller can ask questions to all
     *answerers* and receives a list of the results."""

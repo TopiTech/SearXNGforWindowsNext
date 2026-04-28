@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Google Play Apps & Google Play Movies
-"""
+"""Google Play Apps & Google Play Movies"""
 
 from urllib.parse import urlencode
 from lxml import html
@@ -19,8 +18,6 @@ about = {
     "require_api_key": False,
     "results": "HTML",
 }
-
-send_accept_language_header = True
 
 play_categ = None  # apps|movies
 base_url = 'https://play.google.com'

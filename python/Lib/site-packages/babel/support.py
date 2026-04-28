@@ -1,15 +1,16 @@
 """
-    babel.support
-    ~~~~~~~~~~~~~
+babel.support
+~~~~~~~~~~~~~
 
-    Several classes and functions that help with integrating and using Babel
-    in applications.
+Several classes and functions that help with integrating and using Babel
+in applications.
 
-    .. note: the code in this module is not used by Babel itself
+.. note: the code in this module is not used by Babel itself
 
-    :copyright: (c) 2013-2025 by the Babel Team.
-    :license: BSD, see LICENSE for more details.
+:copyright: (c) 2013-2026 by the Babel Team.
+:license: BSD, see LICENSE for more details.
 """
+
 from __future__ import annotations
 
 import gettext
@@ -44,9 +45,9 @@ class Format:
     >>> from datetime import date
     >>> fmt = Format('en_US', UTC)
     >>> fmt.date(date(2007, 4, 1))
-    u'Apr 1, 2007'
+    'Apr 1, 2007'
     >>> fmt.decimal(1.2345)
-    u'1.234'
+    '1.234'
     """
 
     def __init__(
@@ -77,7 +78,7 @@ class Format:
         >>> from datetime import date
         >>> fmt = Format('en_US')
         >>> fmt.date(date(2007, 4, 1))
-        u'Apr 1, 2007'
+        'Apr 1, 2007'
         """
         return format_date(date, format, locale=self.locale)
 
@@ -92,7 +93,7 @@ class Format:
         >>> from babel.dates import get_timezone
         >>> fmt = Format('en_US', tzinfo=get_timezone('US/Eastern'))
         >>> fmt.datetime(datetime(2007, 4, 1, 15, 30))
-        u'Apr 1, 2007, 11:30:00\u202fAM'
+        'Apr 1, 2007, 11:30:00\\u202fAM'
         """
         return format_datetime(datetime, format, tzinfo=self.tzinfo, locale=self.locale)
 
@@ -107,14 +108,22 @@ class Format:
         >>> from babel.dates import get_timezone
         >>> fmt = Format('en_US', tzinfo=get_timezone('US/Eastern'))
         >>> fmt.time(datetime(2007, 4, 1, 15, 30))
-        u'11:30:00\u202fAM'
+        '11:30:00\\u202fAM'
         """
         return format_time(time, format, tzinfo=self.tzinfo, locale=self.locale)
 
     def timedelta(
         self,
         delta: _datetime.timedelta | int,
-        granularity: Literal["year", "month", "week", "day", "hour", "minute", "second"] = "second",
+        granularity: Literal[
+            "year",
+            "month",
+            "week",
+            "day",
+            "hour",
+            "minute",
+            "second",
+        ] = "second",
         threshold: float = 0.85,
         format: Literal["narrow", "short", "medium", "long"] = "long",
         add_direction: bool = False,
@@ -124,30 +133,43 @@ class Format:
         >>> from datetime import timedelta
         >>> fmt = Format('en_US')
         >>> fmt.timedelta(timedelta(weeks=11))
-        u'3 months'
+        '3 months'
         """
-        return format_timedelta(delta, granularity=granularity,
-                                threshold=threshold,
-                                format=format, add_direction=add_direction,
-                                locale=self.locale)
+        return format_timedelta(
+            delta,
+            granularity=granularity,
+            threshold=threshold,
+            format=format,
+            add_direction=add_direction,
+            locale=self.locale,
+        )
 
     def number(self, number: float | Decimal | str) -> str:
         """Return an integer number formatted for the locale.
 
         >>> fmt = Format('en_US')
         >>> fmt.number(1099)
-        u'1,099'
+        '1,099'
         """
-        return format_decimal(number, locale=self.locale, numbering_system=self.numbering_system)
+        return format_decimal(
+            number,
+            locale=self.locale,
+            numbering_system=self.numbering_system,
+        )
 
     def decimal(self, number: float | Decimal | str, format: str | None = None) -> str:
         """Return a decimal number formatted for the locale.
 
         >>> fmt = Format('en_US')
         >>> fmt.decimal(1.2345)
-        u'1.234'
+        '1.234'
         """
-        return format_decimal(number, format, locale=self.locale, numbering_system=self.numbering_system)
+        return format_decimal(
+            number,
+            format,
+            locale=self.locale,
+            numbering_system=self.numbering_system,
+        )
 
     def compact_decimal(
         self,
@@ -159,7 +181,7 @@ class Format:
 
         >>> fmt = Format('en_US')
         >>> fmt.compact_decimal(123456789)
-        u'123M'
+        '123M'
         >>> fmt.compact_decimal(1234567, format_type='long', fraction_digits=2)
         '1.23 million'
         """
@@ -172,9 +194,13 @@ class Format:
         )
 
     def currency(self, number: float | Decimal | str, currency: str) -> str:
-        """Return a number in the given currency formatted for the locale.
-        """
-        return format_currency(number, currency, locale=self.locale, numbering_system=self.numbering_system)
+        """Return a number in the given currency formatted for the locale."""
+        return format_currency(
+            number,
+            currency,
+            locale=self.locale,
+            numbering_system=self.numbering_system,
+        )
 
     def compact_currency(
         self,
@@ -189,22 +215,36 @@ class Format:
         >>> Format('en_US').compact_currency(1234567, "USD", format_type='short', fraction_digits=2)
         '$1.23M'
         """
-        return format_compact_currency(number, currency, format_type=format_type, fraction_digits=fraction_digits,
-                                       locale=self.locale, numbering_system=self.numbering_system)
+        return format_compact_currency(
+            number,
+            currency,
+            format_type=format_type,
+            fraction_digits=fraction_digits,
+            locale=self.locale,
+            numbering_system=self.numbering_system,
+        )
 
     def percent(self, number: float | Decimal | str, format: str | None = None) -> str:
         """Return a number formatted as percentage for the locale.
 
         >>> fmt = Format('en_US')
         >>> fmt.percent(0.34)
-        u'34%'
+        '34%'
         """
-        return format_percent(number, format, locale=self.locale, numbering_system=self.numbering_system)
+        return format_percent(
+            number,
+            format,
+            locale=self.locale,
+            numbering_system=self.numbering_system,
+        )
 
     def scientific(self, number: float | Decimal | str) -> str:
-        """Return a number formatted using scientific notation for the locale.
-        """
-        return format_scientific(number, locale=self.locale, numbering_system=self.numbering_system)
+        """Return a number formatted using scientific notation for the locale."""
+        return format_scientific(
+            number,
+            locale=self.locale,
+            numbering_system=self.numbering_system,
+        )
 
 
 class LazyProxy:
@@ -216,10 +256,10 @@ class LazyProxy:
     >>> lazy_greeting = LazyProxy(greeting, name='Joe')
     >>> print(lazy_greeting)
     Hello, Joe!
-    >>> u'  ' + lazy_greeting
-    u'  Hello, Joe!'
-    >>> u'(%s)' % lazy_greeting
-    u'(Hello, Joe!)'
+    >>> '  ' + lazy_greeting
+    '  Hello, Joe!'
+    >>> '(%s)' % lazy_greeting
+    '(Hello, Joe!)'
 
     This can be used, for example, to implement lazy translation functions that
     delay the actual translation until the string is actually used. The
@@ -242,7 +282,15 @@ class LazyProxy:
     Hello, universe!
     Hello, world!
     """
-    __slots__ = ['_func', '_args', '_kwargs', '_value', '_is_cache_enabled', '_attribute_error']
+
+    __slots__ = [
+        '_func',
+        '_args',
+        '_kwargs',
+        '_value',
+        '_is_cache_enabled',
+        '_attribute_error',
+    ]
 
     if TYPE_CHECKING:
         _func: Callable[..., Any]
@@ -252,7 +300,13 @@ class LazyProxy:
         _value: Any
         _attribute_error: AttributeError | None
 
-    def __init__(self, func: Callable[..., Any], *args: Any, enable_cache: bool = True, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        enable_cache: bool = True,
+        **kwargs: Any,
+    ) -> None:
         # Avoid triggering our own __setattr__ implementation
         object.__setattr__(self, '_func', func)
         object.__setattr__(self, '_args', args)
@@ -362,6 +416,7 @@ class LazyProxy:
 
     def __deepcopy__(self, memo: Any) -> LazyProxy:
         from copy import deepcopy
+
         return LazyProxy(
             deepcopy(self._func, memo),
             enable_cache=deepcopy(self._is_cache_enabled, memo),
@@ -371,7 +426,6 @@ class LazyProxy:
 
 
 class NullTranslations(gettext.NullTranslations):
-
     if TYPE_CHECKING:
         _info: dict[str, str]
         _fallback: NullTranslations | None
@@ -406,6 +460,7 @@ class NullTranslations(gettext.NullTranslations):
         domain.
         """
         import warnings
+
         warnings.warn(
             'ldgettext() is deprecated, use dgettext() instead',
             DeprecationWarning,
@@ -418,6 +473,7 @@ class NullTranslations(gettext.NullTranslations):
         domain.
         """
         return self._domains.get(domain, self).ugettext(message)
+
     # backward compatibility with 0.9
     dugettext = udgettext
 
@@ -432,6 +488,7 @@ class NullTranslations(gettext.NullTranslations):
         domain.
         """
         import warnings
+
         warnings.warn(
             'ldngettext() is deprecated, use dngettext() instead',
             DeprecationWarning,
@@ -444,6 +501,7 @@ class NullTranslations(gettext.NullTranslations):
         domain.
         """
         return self._domains.get(domain, self).ungettext(singular, plural, num)
+
     # backward compatibility with 0.9
     dungettext = udngettext
 
@@ -479,6 +537,7 @@ class NullTranslations(gettext.NullTranslations):
         ``bind_textdomain_codeset()``.
         """
         import warnings
+
         warnings.warn(
             'lpgettext() is deprecated, use pgettext() instead',
             DeprecationWarning,
@@ -517,6 +576,7 @@ class NullTranslations(gettext.NullTranslations):
         ``bind_textdomain_codeset()``.
         """
         import warnings
+
         warnings.warn(
             'lnpgettext() is deprecated, use npgettext() instead',
             DeprecationWarning,
@@ -583,6 +643,7 @@ class NullTranslations(gettext.NullTranslations):
         `domain`.
         """
         return self._domains.get(domain, self).upgettext(context, message)
+
     # backward compatibility with 0.9
     dupgettext = udpgettext
 
@@ -593,29 +654,34 @@ class NullTranslations(gettext.NullTranslations):
         """
         return self._domains.get(domain, self).lpgettext(context, message)
 
-    def dnpgettext(self, domain: str, context: str, singular: str, plural: str, num: int) -> str:
+    def dnpgettext(self, domain: str, context: str, singular: str, plural: str, num: int) -> str:  # fmt: skip
         """Like ``npgettext``, but look the message up in the specified
         `domain`.
         """
-        return self._domains.get(domain, self).npgettext(context, singular,
-                                                         plural, num)
+        return self._domains.get(domain, self).npgettext(context, singular, plural, num)
 
-    def udnpgettext(self, domain: str, context: str, singular: str, plural: str, num: int) -> str:
+    def udnpgettext(self, domain: str, context: str, singular: str, plural: str, num: int) -> str:  # fmt: skip
         """Like ``unpgettext``, but look the message up in the specified
         `domain`.
         """
-        return self._domains.get(domain, self).unpgettext(context, singular,
-                                                          plural, num)
+        return self._domains.get(domain, self).unpgettext(context, singular, plural, num)
+
     # backward compatibility with 0.9
     dunpgettext = udnpgettext
 
-    def ldnpgettext(self, domain: str, context: str, singular: str, plural: str, num: int) -> str | bytes:
+    def ldnpgettext(
+        self,
+        domain: str,
+        context: str,
+        singular: str,
+        plural: str,
+        num: int,
+    ) -> str | bytes:
         """Equivalent to ``dnpgettext()``, but the translation is returned in
         the preferred system encoding, if no other encoding was explicitly set
         with ``bind_textdomain_codeset()``.
         """
-        return self._domains.get(domain, self).lnpgettext(context, singular,
-                                                          plural, num)
+        return self._domains.get(domain, self).lnpgettext(context, singular, plural, num)
 
     ugettext = gettext.NullTranslations.gettext
     ungettext = gettext.NullTranslations.ngettext
@@ -626,7 +692,11 @@ class Translations(NullTranslations, gettext.GNUTranslations):
 
     DEFAULT_DOMAIN = 'messages'
 
-    def __init__(self, fp: gettext._TranslationsReader | None = None, domain: str | None = None):
+    def __init__(
+        self,
+        fp: gettext._TranslationsReader | None = None,
+        domain: str | None = None,
+    ):
         """Initialize the translations catalog.
 
         :param fp: the file-like object the translation should be read from

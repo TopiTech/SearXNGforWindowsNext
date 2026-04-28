@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # pylint: disable=missing-module-docstring
-from __future__ import annotations
+
 
 from functools import reduce
 from operator import mul
@@ -21,6 +21,7 @@ kw2func = [
     ("avg", lambda args: sum(args) / len(args)),
     ("sum", sum),
     ("prod", lambda args: reduce(mul, args, 1)),
+    ("range", lambda args: max(args) - min(args)),
 ]
 
 

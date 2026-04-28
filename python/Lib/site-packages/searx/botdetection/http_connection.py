@@ -11,15 +11,14 @@ the Connection_ header is set to ``close``.
 
 """
 
-from __future__ import annotations
+
 from ipaddress import (
     IPv4Network,
     IPv6Network,
 )
 
 import werkzeug
-
-from searx.extended_types import SXNG_Request
+import flask
 
 from . import config
 from ._helpers import too_many_requests
@@ -27,7 +26,7 @@ from ._helpers import too_many_requests
 
 def filter_request(
     network: IPv4Network | IPv6Network,
-    request: SXNG_Request,
+    request: flask.Request,
     cfg: config.Config,  # pylint: disable=unused-argument
 ) -> werkzeug.Response | None:
 

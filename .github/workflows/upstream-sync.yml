@@ -1,0 +1,149 @@
+name: Sync Upstream SearXNG
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Upstream ref to sync (commit SHA, branch, or ref name)"
+        required: false
+        default: "master"
+      force_pr:
+        description: "Create/update PR even if only metadata changed"
+        required: false
+        default: "false"
+  schedule:
+    # Every Monday at 03:15 UTC
+    - cron: "15 3 * * 1"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: windows-latest
+
+    env:
+      DEFAULT_REF: master
+
+    steps:
+      - name: Checkout fork repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure Git identity
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Resolve requested ref
+        id: ref
+        shell: pwsh
+        run: |
+          $ref = "${{ github.event.inputs.ref }}"
+          if ([string]::IsNullOrWhiteSpace($ref)) {
+            $ref = "${{ env.DEFAULT_REF }}"
+          }
+          "requested_ref=$ref" >> $env:GITHUB_OUTPUT
+
+      - name: Run upstream sync
+        shell: pwsh
+        run: |
+          .\tools\sync-upstream.ps1 -Ref "${{ steps.ref.outputs.requested_ref }}" -CleanTemp
+
+      - name: Read upstream version metadata
+        id: meta
+        shell: pwsh
+        run: |
+          if (-not (Test-Path .\UPSTREAM_VERSION.txt)) {
+            throw "UPSTREAM_VERSION.txt not found after sync."
+          }
+
+          $map = @{}
+          Get-Content .\UPSTREAM_VERSION.txt | ForEach-Object {
+            if ($_ -match '^\s*([^=]+)=(.*)$') {
+              $map[$matches[1].Trim()] = $matches[2].Trim()
+            }
+          }
+
+          $resolved = $map["resolved_commit"]
+          $requested = $map["ref_requested"]
+          $date = $map["resolved_commit_date"]
+
+          if ([string]::IsNullOrWhiteSpace($resolved)) {
+            throw "resolved_commit not found in UPSTREAM_VERSION.txt"
+          }
+
+          "resolved_commit=$resolved" >> $env:GITHUB_OUTPUT
+          "requested_ref=$requested" >> $env:GITHUB_OUTPUT
+          "resolved_commit_date=$date" >> $env:GITHUB_OUTPUT
+
+      - name: Detect repository changes
+        id: changes
+        shell: pwsh
+        run: |
+          $status = git status --porcelain
+          if ([string]::IsNullOrWhiteSpace($status)) {
+            "has_changes=false" >> $env:GITHUB_OUTPUT
+          } else {
+            "has_changes=true" >> $env:GITHUB_OUTPUT
+            $status | Out-File -FilePath changed_files.txt -Encoding utf8
+          }
+
+      - name: Show changed files
+        if: steps.changes.outputs.has_changes == 'true'
+        shell: pwsh
+        run: |
+          Get-Content .\changed_files.txt
+
+      - name: Optional sanity checks
+        if: steps.changes.outputs.has_changes == 'true'
+        shell: pwsh
+        run: |
+          python -m py_compile .\python\Lib\site-packages\searx\valkeydb.py
+          python -m py_compile .\python\Lib\site-packages\searx\webapp.py
+
+      - name: Create or update PR
+        if: steps.changes.outputs.has_changes == 'true' || github.event.inputs.force_pr == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "sync: upstream searxng ${{ steps.meta.outputs.resolved_commit }}"
+          branch: "sync/upstream-${{ steps.meta.outputs.resolved_commit }}"
+          delete-branch: true
+          title: "sync: upstream searxng ${{ steps.meta.outputs.resolved_commit }}"
+          body: |
+            This automated PR syncs the Windows fork with upstream **searxng/searxng**.
+
+            ## Sync metadata
+            - Requested ref: `${{ steps.meta.outputs.requested_ref }}`
+            - Resolved commit: `${{ steps.meta.outputs.resolved_commit }}`
+            - Resolved commit date: `${{ steps.meta.outputs.resolved_commit_date }}`
+
+            ## Notes
+            - Source of truth is **searxng/searxng**
+            - Windows compatibility patches are re-applied after sync
+            - This PR was generated automatically by GitHub Actions
+
+            ## Suggested checks
+            - Start with `SearXNG for Windows.bat`
+            - Verify `http://127.0.0.1:8888`
+            - Verify `/search?q=test&format=json` if JSON API is enabled
+          branch-suffix: timestamp
+
+      - name: No changes summary
+        if: steps.changes.outputs.has_changes == 'false'
+        shell: pwsh
+        run: |
+          Write-Host "No upstream changes detected. No PR created." -ForegroundColor Green

@@ -1,11 +1,11 @@
 """
-    babel.core
-    ~~~~~~~~~~
+babel.core
+~~~~~~~~~~
 
-    Core locale representation and locale data access.
+Core locale representation and locale data access.
 
-    :copyright: (c) 2013-2025 by the Babel Team.
-    :license: BSD, see LICENSE for more details.
+:copyright: (c) 2013-2026 by the Babel Team.
+:license: BSD, see LICENSE for more details.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ __all__ = [
     'Locale',
     'UnknownLocaleError',
     'default_locale',
+    'get_cldr_version',
     'get_global',
     'get_locale_identifier',
     'negotiate_locale',
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
 
     _GLOBAL_KEY: TypeAlias = Literal[
         "all_currencies",
+        "cldr",
         "currency_fractions",
         "language_aliases",
         "likely_subtags",
@@ -56,12 +58,14 @@ _default_plural_rule = PluralRule({})
 
 
 def _raise_no_data_error():
-    raise RuntimeError('The babel data files are not available. '
-                       'This usually happens because you are using '
-                       'a source checkout from Babel and you did '
-                       'not build the data files.  Just make sure '
-                       'to run "python setup.py import_cldr" before '
-                       'installing the library.')
+    raise RuntimeError(
+        'The babel data files are not available. '
+        'This usually happens because you are using '
+        'a source checkout from Babel and you did '
+        'not build the data files.  Just make sure '
+        'to run "python setup.py import_cldr" before '
+        'installing the library.',
+    )
 
 
 def get_global(key: _GLOBAL_KEY) -> Mapping[str, Any]:
@@ -71,13 +75,14 @@ def get_global(key: _GLOBAL_KEY) -> Mapping[str, Any]:
     information independent of individual locales.
 
     >>> get_global('zone_aliases')['UTC']
-    u'Etc/UTC'
+    'Etc/UTC'
     >>> get_global('zone_territories')['Europe/Berlin']
-    u'DE'
+    'DE'
 
     The keys available are:
 
     - ``all_currencies``
+    - ``cldr`` (metadata)
     - ``currency_fractions``
     - ``language_aliases``
     - ``likely_subtags``
@@ -119,7 +124,7 @@ LOCALE_ALIASES = {
     'mk': 'mk_MK', 'nl': 'nl_NL', 'nn': 'nn_NO', 'no': 'nb_NO', 'pl': 'pl_PL',
     'pt': 'pt_PT', 'ro': 'ro_RO', 'ru': 'ru_RU', 'sk': 'sk_SK', 'sl': 'sl_SI',
     'sv': 'sv_SE', 'th': 'th_TH', 'tr': 'tr_TR', 'uk': 'uk_UA',
-}
+}  # fmt: skip
 
 
 class UnknownLocaleError(Exception):
@@ -145,7 +150,7 @@ class Locale:
     >>> repr(locale)
     "Locale('en', territory='US')"
     >>> locale.display_name
-    u'English (United States)'
+    'English (United States)'
 
     A `Locale` object can also be instantiated from a raw locale string:
 
@@ -157,7 +162,7 @@ class Locale:
     territory and language names, number and date format patterns, and more:
 
     >>> locale.number_symbols['latn']['decimal']
-    u'.'
+    '.'
 
     If a locale is requested for which no locale data is available, an
     `UnknownLocaleError` is raised:
@@ -216,7 +221,11 @@ class Locale:
             raise UnknownLocaleError(identifier)
 
     @classmethod
-    def default(cls, category: str | None = None, aliases: Mapping[str, str] = LOCALE_ALIASES) -> Locale:
+    def default(
+        cls,
+        category: str | None = None,
+        aliases: Mapping[str, str] = LOCALE_ALIASES,
+    ) -> Locale:
         """Return the system default locale for the specified category.
 
         >>> for name in ['LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'LC_MESSAGES']:
@@ -268,8 +277,7 @@ class Locale:
         :param aliases: a dictionary of aliases for locale identifiers
         :param sep: separator for parsing; e.g. Windows tends to use '-' instead of '_'.
         """
-        identifier = negotiate_locale(preferred, available, sep=sep,
-                                      aliases=aliases)
+        identifier = negotiate_locale(preferred, available, sep=sep, aliases=aliases)
         if identifier:
             return Locale.parse(identifier, sep=sep)
         return None
@@ -285,7 +293,7 @@ class Locale:
 
         >>> l = Locale.parse('de-DE', sep='-')
         >>> l.display_name
-        u'Deutsch (Deutschland)'
+        'Deutsch (Deutschland)'
 
         If the `identifier` parameter is not a string, but actually a `Locale`
         object, that object is returned:
@@ -343,10 +351,11 @@ class Locale:
                 f"Empty locale identifier value: {identifier!r}\n\n"
                 f"If you didn't explicitly pass an empty value to a Babel function, "
                 f"this could be caused by there being no suitable locale environment "
-                f"variables for the API you tried to use.",
+                f"variables for the API you tried to use."
             )
             if isinstance(identifier, str):
-                raise ValueError(msg)  # `parse_locale` would raise a ValueError, so let's do that here
+                # `parse_locale` would raise a ValueError, so let's do that here
+                raise ValueError(msg)
             raise TypeError(msg)
 
         if not isinstance(identifier, str):
@@ -420,7 +429,9 @@ class Locale:
             else:
                 language2, _, script2, variant2 = parts2
                 modifier2 = None
-            locale = _try_load_reducing((language2, territory, script2, variant2, modifier2))
+            locale = _try_load_reducing(
+                (language2, territory, script2, variant2, modifier2),
+            )
             if locale is not None:
                 return locale
 
@@ -431,19 +442,18 @@ class Locale:
             if not hasattr(other, key):
                 return False
         return (
-            self.language == getattr(other, 'language') and  # noqa: B009
-            self.territory == getattr(other, 'territory') and  # noqa: B009
-            self.script == getattr(other, 'script') and  # noqa: B009
-            self.variant == getattr(other, 'variant') and  # noqa: B009
-            self.modifier == getattr(other, 'modifier')  # noqa: B009
+            self.language == getattr(other, 'language')  # noqa: B009
+            and self.territory == getattr(other, 'territory')  # noqa: B009
+            and self.script == getattr(other, 'script')  # noqa: B009
+            and self.variant == getattr(other, 'variant')  # noqa: B009
+            and self.modifier == getattr(other, 'modifier')  # noqa: B009
         )
 
     def __ne__(self, other: object) -> bool:
         return not self.__eq__(other)
 
     def __hash__(self) -> int:
-        return hash((self.language, self.territory, self.script,
-                     self.variant, self.modifier))
+        return hash((self.language, self.territory, self.script, self.variant, self.modifier))
 
     def __repr__(self) -> str:
         parameters = ['']
@@ -454,9 +464,9 @@ class Locale:
         return f"Locale({self.language!r}{', '.join(parameters)})"
 
     def __str__(self) -> str:
-        return get_locale_identifier((self.language, self.territory,
-                                      self.script, self.variant,
-                                      self.modifier))
+        return get_locale_identifier(
+            (self.language, self.territory, self.script, self.variant, self.modifier),
+        )
 
     @property
     def _data(self) -> localedata.LocaleDataDict:
@@ -471,12 +481,12 @@ class Locale:
         variant, if those are specified.
 
         >>> Locale('zh', 'CN', script='Hans').get_display_name('en')
-        u'Chinese (Simplified, China)'
+        'Chinese (Simplified, China)'
 
         Modifiers are currently passed through verbatim:
 
         >>> Locale('it', 'IT', modifier='euro').get_display_name('en')
-        u'Italian (Italy, euro)'
+        'Italian (Italy, euro)'
 
         :param locale: the locale to use
         """
@@ -499,24 +509,27 @@ class Locale:
                 retval += f" ({detail_string})"
         return retval
 
-    display_name = property(get_display_name, doc="""\
+    display_name = property(
+        get_display_name,
+        doc="""\
         The localized display name of the locale.
 
         >>> Locale('en').display_name
-        u'English'
+        'English'
         >>> Locale('en', 'US').display_name
-        u'English (United States)'
+        'English (United States)'
         >>> Locale('sv').display_name
-        u'svenska'
+        'svenska'
 
         :type: `unicode`
-        """)
+        """,
+    )
 
     def get_language_name(self, locale: Locale | str | None = None) -> str | None:
         """Return the language of this locale in the given locale.
 
         >>> Locale('zh', 'CN', script='Hans').get_language_name('de')
-        u'Chinesisch'
+        'Chinesisch'
 
         .. versionadded:: 1.0
 
@@ -527,12 +540,15 @@ class Locale:
         locale = Locale.parse(locale)
         return locale.languages.get(self.language)
 
-    language_name = property(get_language_name, doc="""\
+    language_name = property(
+        get_language_name,
+        doc="""\
         The localized language name of the locale.
 
         >>> Locale('en', 'US').language_name
-        u'English'
-    """)
+        'English'
+    """,
+    )
 
     def get_territory_name(self, locale: Locale | str | None = None) -> str | None:
         """Return the territory name in the given locale."""
@@ -541,12 +557,15 @@ class Locale:
         locale = Locale.parse(locale)
         return locale.territories.get(self.territory or '')
 
-    territory_name = property(get_territory_name, doc="""\
+    territory_name = property(
+        get_territory_name,
+        doc="""\
         The localized territory name of the locale if available.
 
         >>> Locale('de', 'DE').territory_name
-        u'Deutschland'
-    """)
+        'Deutschland'
+    """,
+    )
 
     def get_script_name(self, locale: Locale | str | None = None) -> str | None:
         """Return the script name in the given locale."""
@@ -555,21 +574,24 @@ class Locale:
         locale = Locale.parse(locale)
         return locale.scripts.get(self.script or '')
 
-    script_name = property(get_script_name, doc="""\
+    script_name = property(
+        get_script_name,
+        doc="""\
         The localized script name of the locale if available.
 
         >>> Locale('sr', 'ME', script='Latn').script_name
-        u'latinica'
-    """)
+        'latinica'
+    """,
+    )
 
     @property
     def english_name(self) -> str | None:
         """The english display name of the locale.
 
         >>> Locale('de').english_name
-        u'German'
+        'German'
         >>> Locale('de', 'DE').english_name
-        u'German (Germany)'
+        'German (Germany)'
 
         :type: `unicode`"""
         return self.get_display_name(Locale('en'))
@@ -581,7 +603,7 @@ class Locale:
         """Mapping of language codes to translated language names.
 
         >>> Locale('de', 'DE').languages['ja']
-        u'Japanisch'
+        'Japanisch'
 
         See `ISO 639 <https://www.loc.gov/standards/iso639-2/>`_ for
         more information.
@@ -593,7 +615,7 @@ class Locale:
         """Mapping of script codes to translated script names.
 
         >>> Locale('en', 'US').scripts['Hira']
-        u'Hiragana'
+        'Hiragana'
 
         See `ISO 15924 <https://www.unicode.org/iso15924/>`_
         for more information.
@@ -605,7 +627,7 @@ class Locale:
         """Mapping of script codes to translated script names.
 
         >>> Locale('es', 'CO').territories['DE']
-        u'Alemania'
+        'Alemania'
 
         See `ISO 3166 <https://en.wikipedia.org/wiki/ISO_3166>`_
         for more information.
@@ -617,7 +639,7 @@ class Locale:
         """Mapping of script codes to translated script names.
 
         >>> Locale('de', 'DE').variants['1901']
-        u'Alte deutsche Rechtschreibung'
+        'Alte deutsche Rechtschreibung'
         """
         return self._data['variants']
 
@@ -631,9 +653,9 @@ class Locale:
         :func:`babel.numbers.get_currency_name` function.
 
         >>> Locale('en').currencies['COP']
-        u'Colombian Peso'
+        'Colombian Peso'
         >>> Locale('de', 'DE').currencies['COP']
-        u'Kolumbianischer Peso'
+        'Kolumbianischer Peso'
         """
         return self._data['currency_names']
 
@@ -642,9 +664,9 @@ class Locale:
         """Mapping of currency codes to symbols.
 
         >>> Locale('en', 'US').currency_symbols['USD']
-        u'$'
+        '$'
         >>> Locale('es', 'CO').currency_symbols['USD']
-        u'US$'
+        'US$'
         """
         return self._data['currency_symbols']
 
@@ -656,11 +678,11 @@ class Locale:
                   Babel versions.
 
         >>> Locale('fr', 'FR').number_symbols["latn"]['decimal']
-        u','
+        ','
         >>> Locale('fa', 'IR').number_symbols["arabext"]['decimal']
-        u'٫'
+        '٫'
         >>> Locale('fa', 'IR').number_symbols["latn"]['decimal']
-        u'.'
+        '.'
         """
         return self._data['number_symbols']
 
@@ -671,7 +693,7 @@ class Locale:
         See: https://www.unicode.org/reports/tr35/tr35-numbers.html#otherNumberingSystems
 
         >>> Locale('el', 'GR').other_numbering_systems['traditional']
-        u'grek'
+        'grek'
 
         .. note:: The format of the value returned may change between
                   Babel versions.
@@ -682,7 +704,7 @@ class Locale:
     def default_numbering_system(self) -> str:
         """The default numbering system used by the locale.
         >>> Locale('el', 'GR').default_numbering_system
-        u'latn'
+        'latn'
         """
         return self._data['default_numbering_system']
 
@@ -694,7 +716,7 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en', 'US').decimal_formats[None]
-        <NumberPattern u'#,##0.###'>
+        <NumberPattern '#,##0.###'>
         """
         return self._data['decimal_formats']
 
@@ -706,7 +728,7 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en', 'US').compact_decimal_formats["short"]["one"]["1000"]
-        <NumberPattern u'0K'>
+        <NumberPattern '0K'>
         """
         return self._data['compact_decimal_formats']
 
@@ -718,9 +740,9 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en', 'US').currency_formats['standard']
-        <NumberPattern u'\\xa4#,##0.00'>
+        <NumberPattern '\\xa4#,##0.00'>
         >>> Locale('en', 'US').currency_formats['accounting']
-        <NumberPattern u'\\xa4#,##0.00;(\\xa4#,##0.00)'>
+        <NumberPattern '\\xa4#,##0.00;(\\xa4#,##0.00)'>
         """
         return self._data['currency_formats']
 
@@ -732,7 +754,7 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en', 'US').compact_currency_formats["short"]["one"]["1000"]
-        <NumberPattern u'¤0K'>
+        <NumberPattern '¤0K'>
         """
         return self._data['compact_currency_formats']
 
@@ -744,7 +766,7 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en', 'US').percent_formats[None]
-        <NumberPattern u'#,##0%'>
+        <NumberPattern '#,##0%'>
         """
         return self._data['percent_formats']
 
@@ -756,7 +778,7 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en', 'US').scientific_formats[None]
-        <NumberPattern u'#E0'>
+        <NumberPattern '#E0'>
         """
         return self._data['scientific_formats']
 
@@ -767,7 +789,7 @@ class Locale:
         """Locale display names for day periods (AM/PM).
 
         >>> Locale('en', 'US').periods['am']
-        u'AM'
+        'AM'
         """
         try:
             return self._data['day_periods']['stand-alone']['wide']
@@ -784,8 +806,7 @@ class Locale:
 
     @property
     def day_period_rules(self) -> localedata.LocaleDataDict:
-        """Day period rules for the locale.  Used by `get_period_id`.
-        """
+        """Day period rules for the locale.  Used by `get_period_id`."""
         return self._data.get('day_period_rules', localedata.LocaleDataDict({}))
 
     @property
@@ -793,7 +814,7 @@ class Locale:
         """Locale display names for weekdays.
 
         >>> Locale('de', 'DE').days['format']['wide'][3]
-        u'Donnerstag'
+        'Donnerstag'
         """
         return self._data['days']
 
@@ -802,7 +823,7 @@ class Locale:
         """Locale display names for months.
 
         >>> Locale('de', 'DE').months['format']['wide'][10]
-        u'Oktober'
+        'Oktober'
         """
         return self._data['months']
 
@@ -811,7 +832,7 @@ class Locale:
         """Locale display names for quarters.
 
         >>> Locale('de', 'DE').quarters['format']['wide'][1]
-        u'1. Quartal'
+        '1. Quartal'
         """
         return self._data['quarters']
 
@@ -823,9 +844,9 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en', 'US').eras['wide'][1]
-        u'Anno Domini'
+        'Anno Domini'
         >>> Locale('en', 'US').eras['abbreviated'][0]
-        u'BC'
+        'BC'
         """
         return self._data['eras']
 
@@ -837,9 +858,9 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en', 'US').time_zones['Europe/London']['long']['daylight']
-        u'British Summer Time'
+        'British Summer Time'
         >>> Locale('en', 'US').time_zones['America/St_Johns']['city']
-        u'St. John\u2019s'
+        'St. John’s'
         """
         return self._data['time_zones']
 
@@ -854,7 +875,7 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en', 'US').meta_zones['Europe_Central']['long']['daylight']
-        u'Central European Summer Time'
+        'Central European Summer Time'
 
         .. versionadded:: 0.9
         """
@@ -868,9 +889,9 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en', 'US').zone_formats['fallback']
-        u'%(1)s (%(0)s)'
+        '%(1)s (%(0)s)'
         >>> Locale('pt', 'BR').zone_formats['region']
-        u'Hor\\xe1rio %s'
+        'Horário %s'
 
         .. versionadded:: 0.9
         """
@@ -923,9 +944,9 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en', 'US').date_formats['short']
-        <DateTimePattern u'M/d/yy'>
+        <DateTimePattern 'M/d/yy'>
         >>> Locale('fr', 'FR').date_formats['long']
-        <DateTimePattern u'd MMMM y'>
+        <DateTimePattern 'd MMMM y'>
         """
         return self._data['date_formats']
 
@@ -937,9 +958,9 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en', 'US').time_formats['short']
-        <DateTimePattern u'h:mm\u202fa'>
+        <DateTimePattern 'h:mm\\u202fa'>
         >>> Locale('fr', 'FR').time_formats['long']
-        <DateTimePattern u'HH:mm:ss z'>
+        <DateTimePattern 'HH:mm:ss z'>
         """
         return self._data['time_formats']
 
@@ -951,9 +972,9 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en').datetime_formats['full']
-        u'{1}, {0}'
+        '{1}, {0}'
         >>> Locale('th').datetime_formats['medium']
-        u'{1} {0}'
+        '{1} {0}'
         """
         return self._data['datetime_formats']
 
@@ -962,11 +983,11 @@ class Locale:
         """Locale patterns for formatting parts of a datetime.
 
         >>> Locale('en').datetime_skeletons['MEd']
-        <DateTimePattern u'E, M/d'>
+        <DateTimePattern 'E, M/d'>
         >>> Locale('fr').datetime_skeletons['MEd']
-        <DateTimePattern u'E dd/MM'>
+        <DateTimePattern 'E dd/MM'>
         >>> Locale('fr').datetime_skeletons['H']
-        <DateTimePattern u"HH 'h'">
+        <DateTimePattern "HH 'h'">
         """
         return self._data['datetime_skeletons']
 
@@ -981,7 +1002,7 @@ class Locale:
         smallest changing component:
 
         >>> Locale('fi_FI').interval_formats['MEd']['d']
-        [u'E d.\u2009\u2013\u2009', u'E d.M.']
+        ['E d.\\u2009–\\u2009', 'E d.M.']
 
         .. seealso::
 
@@ -1015,11 +1036,11 @@ class Locale:
                   Babel versions.
 
         >>> Locale('en').list_patterns['standard']['start']
-        u'{0}, {1}'
+        '{0}, {1}'
         >>> Locale('en').list_patterns['standard']['end']
-        u'{0}, and {1}'
+        '{0}, and {1}'
         >>> Locale('en_GB').list_patterns['standard']['end']
-        u'{0} and {1}'
+        '{0} and {1}'
         """
         return self._data['list_patterns']
 
@@ -1045,9 +1066,9 @@ class Locale:
         """Localized names for various measurement systems.
 
         >>> Locale('fr', 'FR').measurement_systems['US']
-        u'am\\xe9ricain'
+        'américain'
         >>> Locale('en', 'US').measurement_systems['US']
-        u'US'
+        'US'
 
         """
         return self._data['measurement_systems']
@@ -1149,7 +1170,12 @@ def default_locale(
     return None
 
 
-def negotiate_locale(preferred: Iterable[str], available: Iterable[str], sep: str = '_', aliases: Mapping[str, str] = LOCALE_ALIASES) -> str | None:
+def negotiate_locale(
+    preferred: Iterable[str],
+    available: Iterable[str],
+    sep: str = '_',
+    aliases: Mapping[str, str] = LOCALE_ALIASES,
+) -> str | None:
     """Find the best match between available and requested locale strings.
 
     >>> negotiate_locale(['de_DE', 'en_US'], ['de_DE', 'de_AT'])
@@ -1215,7 +1241,10 @@ def negotiate_locale(preferred: Iterable[str], available: Iterable[str], sep: st
 def parse_locale(
     identifier: str,
     sep: str = '_',
-) -> tuple[str, str | None, str | None, str | None] | tuple[str, str | None, str | None, str | None, str | None]:
+) -> (
+    tuple[str, str | None, str | None, str | None]
+    | tuple[str, str | None, str | None, str | None, str | None]
+):
     """Parse a locale identifier into a tuple of the form ``(language,
     territory, script, variant, modifier)``.
 
@@ -1293,8 +1322,10 @@ def parse_locale(
             territory = parts.pop(0)
 
     if parts and (
-        len(parts[0]) == 4 and parts[0][0].isdigit() or
-        len(parts[0]) >= 5 and parts[0][0].isalpha()
+        len(parts[0]) == 4
+        and parts[0][0].isdigit()
+        or len(parts[0]) >= 5
+        and parts[0][0].isalpha()
     ):
         variant = parts.pop().upper()
 
@@ -1335,3 +1366,19 @@ def get_locale_identifier(
     lang, territory, script, variant, modifier = tup + (None,) * (5 - len(tup))
     ret = sep.join(filter(None, (lang, script, territory, variant)))
     return f'{ret}@{modifier}' if modifier else ret
+
+
+def get_cldr_version() -> str:
+    """Return the Unicode CLDR version used by this Babel installation.
+
+    Generally, you should be able to assume that the return value of this
+    function is a string representing a version number, e.g. '47'.
+
+    >>> get_cldr_version()
+    '47'
+
+    .. versionadded:: 2.18
+
+    :rtype: str
+    """
+    return str(get_global("cldr")["version"])

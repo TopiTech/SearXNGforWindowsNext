@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Yep (general, images, news)
-"""
+"""Yep (general, images, news)"""
 
 from datetime import datetime
 from urllib.parse import urlencode
@@ -20,6 +19,8 @@ search_type = "web"  # 'web', 'images', 'news'
 safesearch = True
 safesearch_map = {0: 'off', 1: 'moderate', 2: 'strict'}
 
+enable_http2 = False
+
 
 def request(query, params):
     args = {
@@ -31,6 +32,7 @@ def request(query, params):
     }
     params['url'] = f"{base_url}/fs/2/search?{urlencode(args)}"
     params['headers']['Referer'] = 'https://yep.com/'
+    params['headers']['Origin'] = 'https://yep.com'
     return params
 
 

@@ -22,7 +22,7 @@ Metadata`_.  A request is filtered out in case of:
 """
 # pylint: disable=unused-argument
 
-from __future__ import annotations
+
 from ipaddress import (
     IPv4Network,
     IPv6Network,
@@ -31,8 +31,6 @@ from ipaddress import (
 import re
 import flask
 import werkzeug
-
-from searx.extended_types import SXNG_Request
 
 from . import config
 from ._helpers import logger
@@ -78,9 +76,15 @@ def is_browser_supported(user_agent: str) -> bool:
 
 def filter_request(
     network: IPv4Network | IPv6Network,
-    request: SXNG_Request,
+    request: flask.Request,
     cfg: config.Config,
 ) -> werkzeug.Response | None:
+
+    if not request.is_secure:
+        logger.warning(
+            "Sec-Fetch cannot be verified for non-secure requests (HTTP headers are not set/sent by the client)."
+        )
+        return None
 
     # Only check Sec-Fetch headers for supported browsers
     user_agent = request.headers.get('User-Agent', '')

@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Pinterest (images)
-"""
+"""Pinterest (images)"""
 
 from json import dumps
 
@@ -28,6 +27,11 @@ def request(query, params):
         'context': {},
     }
     params['url'] = f"{base_url}/resource/BaseSearchResource/get/?data={dumps(args)}"
+    params['headers'] = {
+        'X-Pinterest-AppState': 'active',
+        'X-Pinterest-Source-Url': '/ideas/',
+        'X-Pinterest-PWS-Handler': 'www/ideas.js',
+    }
 
     return params
 
@@ -51,15 +55,18 @@ def response(resp):
         if result['type'] == 'story':
             continue
 
+        main_image = result['images']['orig']
         results.append(
             {
                 'template': 'images.html',
-                'url': result['link'] or f"{base_url}/pin/{result['id']}/",
+                'url': result.get('link') or f"{base_url}/pin/{result['id']}/",
                 'title': result.get('title') or result.get('grid_title'),
                 'content': (result.get('rich_summary') or {}).get('display_description') or "",
-                'img_src': result['images']['orig']['url'],
+                'img_src': main_image['url'],
                 'thumbnail_src': result['images']['236x']['url'],
                 'source': (result.get('rich_summary') or {}).get('site_name'),
+                'resolution': f"{main_image['width']}x{main_image['height']}",
+                'author': f"{result['pinner'].get('full_name')} ({result['pinner']['username']})",
             }
         )
 
