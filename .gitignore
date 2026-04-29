@@ -12,6 +12,13 @@ __pycache__/
 !/python/Lib/site-packages/valkey/
 !/python/Lib/site-packages/valkey/**
 
+# Keep pip and its files in repository, but keep bytecode ignored.
+!/python/Lib/site-packages/pip/
+!/python/Lib/site-packages/pip-26.1.dist-info/
+!/python/Scripts/pip.exe
+!/python/Scripts/pip3.exe
+!/python/Scripts/pip3.11.exe
+
 # Keep bytecode ignored even inside whitelisted packages
 **/__pycache__/
 **/*.py[cod]
