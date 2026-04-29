@@ -15,6 +15,10 @@ __pycache__/
 # Keep pip and its files in repository, but keep bytecode ignored.
 !/python/Lib/site-packages/pip/
 !/python/Lib/site-packages/pip-26.1.dist-info/
+!/python/Lib/site-packages/setuptools/
+!/python/Lib/site-packages/setuptools-82.0.1.dist-info/
+!/python/Lib/site-packages/wheel/
+!/python/Lib/site-packages/wheel-0.47.0.dist-info/
 !/python/Scripts/pip.exe
 !/python/Scripts/pip3.exe
 !/python/Scripts/pip3.11.exe
