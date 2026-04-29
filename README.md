@@ -1,4 +1,4 @@
-﻿# SearXNG for Windows
+﻿# SearXNG for Windows Next
 
 このリポジトリは、Windows 環境で SearXNG を動作させつつ、生成AIや CLI ワークフローから使いやすい JSON 検索結果取得を実現することを目的としています。
 
