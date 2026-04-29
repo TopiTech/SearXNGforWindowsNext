@@ -1,87 +1,104 @@
-# SearXNG for Windows
+﻿# SearXNG for Windows
 
-[SearXNG 是一个免费的互联网元搜索引擎，它汇总了来自各种搜索服务和数据库的结果。用户既不会被跟踪，也不会被分析。](https://github.com/searxng/searxng)
+このリポジトリは、Windows 環境で SearXNG を動作させつつ、生成AIや CLI ワークフローから使いやすい JSON 検索結果取得を実現することを目的としています。
 
-SearXNG 可以部署在 Liunx 主机或 Docker 环境，虽基于 python 开发，但未适配 Windows 环境。
+## 目的
 
-网络上查到的 Windows 环境部署 SearXNG 全是基于 WSL 的 Docker (Desktop)，或者是通过虚拟机。
+- Windows で SearXNG をネイティブに動かす
+- ブラウザ UI に依存せず、`/search?q=...&format=json` で JSON レスポンスを取得できるようにする
+- `searxng/searxng` の upstream 変更を反映し、Windows 互換パッチを維持する
 
-本仓库通过修改 SearXNG 源码，无需通过 WSL 和 虚拟机，完美适配 Windows 环境，且仓库搭配好 Python 环境，可直接启动运行。
+## 構成
 
+- `SearXNG for Windows.bat`: Windows 上で組み込み Python を使い、SearXNG を起動するバッチ
+- `python/`: 埋め込み Python 環境と依存パッケージ
+- `config/settings.yml`: Windows 向け設定と JSON 出力有効化
+- `.github/workflows/upstream-sync.yml`: upstream 同期を自動化するワークフロー
+- `tools/`: upstream 同期・パッチ適用・動作確認用スクリプト
+- `UPSTREAM_VERSION.txt`: upstream 同期の metadata
 
+## 使い方
 
-## 仓库介绍
-
-**python**
-
-> 基于 python-3.11.9-embed-amd64，已安装好 searxng 运行所需要的依赖包
-
-**searx**
-
-> 20250513：同步 SearXNG仓库，基于 *5d99373bc65c7087ee743a1fe44897bad6065338*
->
-> 20250424：基于 SearXNG 2025.4.25+9ec9499d8，已修改适配 Windows 环境
-
-
-
-### 直接使用
-
-下载后直接执行 SearXNG for Windows.bat 或者 SearXNG for Windows.exe 可启动 SearXNG，默认访问路径
-
-```http
-http://localhost:8888
-```
-
-或
+1. リポジトリを展開する
+2. `SearXNG for Windows.bat` を実行する
+3. ブラウザから以下にアクセスする
 
 ```http
 http://127.0.0.1:8888
 ```
 
+### 初回セットアップ（必須）
 
+リポジトリには最小限のファイルのみを同梱しています。起動前に埋め込み Python 環境へ必要なパッケージをインストールしてください。
 
-### 代理配置
+PowerShell での実行例:
 
-配置文件 config/settings.yml， 找到 outgoing 部分配置，参考以下修改
-
-```yaml
-outgoing:
-  proxies: "http://127.0.0.1:7897" # 代理地址，根据实际使用配置
-  request_timeout: 10.0 # 可适当延长超时时间
-  max_retries: 3
+```powershell
+.\tools\install-requirements.ps1
 ```
 
+またはバッチ:
 
-
-### 使用本地 python 环境
-
-安装 config/requirements.txt 中依赖包
-
-```bash
-pip install -r config/requirements.txt
+```bat
+.\tools\install-requirements.bat
 ```
 
-启动 SearXNG
+これにより `config/requirements.txt`（および存在する場合 `config/requirements-server.upstream.txt`）がインストールされます。
 
-```bash
-python ./python/Lib/site-packages/searx/webapp.py
+### CLI / JSON API の利用例
+
+ブラウザではなくコマンドや生成AIから直接使う場合:
+
+```powershell
+curl "http://127.0.0.1:8888/search?q=example&format=json"
 ```
 
-访问路径同上
+または PowerShell の場合:
 
-为了方便使用，默认禁用了大部分搜索引擎，仅保留了搜狗和百度，启动后可在首选项页面进行修改
+```powershell
+Invoke-WebRequest -Uri "http://127.0.0.1:8888/search?q=example&format=json" | Select-Object -ExpandProperty Content
+```
 
-> 其他使用事项可参考原仓库 https://github.com/searxng/searxng
+このプロジェクトは、Web UI は利用できるままにしつつも、JSON API を第一に使うことを想定しています。
 
+## Windows での起動
 
-## ソース提供とライセンス
+`SearXNG for Windows.bat` は次のように動作します:
 
-- **ライセンス**: 本プロジェクトはルートにある `LICENSE` ファイルに従い、GNU Affero General Public License v3（AGPL-3.0）で配布されます。
-- **ソースの入手方法**: ソースコードはこのリポジトリで公開されています。バイナリやビルド済みアーカイブを配布する場合、対応するソース（本リポジトリと `UPSTREAM_VERSION.txt` に記載の upstream 情報を含む）を同梱するか、入手先を明記してください。
-- **ネットワーク提供の場合**: サービスとしてネットワーク経由で本ソフトウェアを提供する場合、利用者に対してソースの入手方法を明示する必要があります（AGPL-3.0 による義務）。
-- **サードパーティ依存**: 同梱しているライブラリは各々のライセンスに従います。配布時は `LICENSE` を同梱し、README にソース入手手順を明記してください。
+- `python\python.exe` を使って起動
+- `SEARXNG_SETTINGS_PATH` で `config/settings.yml` を指定
+- Windows ネイティブで `python\Lib\site-packages\searx\webapp.py` を実行
 
-例: 配布アーカイブに `LICENSE` と `UPSTREAM_VERSION.txt` を含め、README に「ソースは https://github.com/<your-fork> で入手可能」と明記すると良いです。
+## 設定
 
+`config/settings.yml` はデフォルトで JSON 出力を許可し、Windows 向けに調整されています。
 
+- `search.formats`: `html` と `json`
+- `server.bind_address`: `127.0.0.1`
+- `server.port`: `8888`
+- `outgoing.request_timeout`: `3.0`
+- `outgoing.pool_maxsize`: `20`
 
+必要に応じて `config/settings.yml` を編集してください。
+
+## upstream 同期
+
+このリポジトリには、`searxng/searxng` からの同期を想定した次の仕組みがあります:
+
+- `.github/workflows/upstream-sync.yml`: GitHub Actions で upstream を定期的／手動で同期
+- `tools/sync-upstream.ps1`: upstream ソースの取得と Windows パッチ適用
+- `UPSTREAM_VERSION.txt`: 同期済み upstream commit を記録
+
+これにより、Windows 固有の改修を維持しつつ upstream 変更を取り込むことができます。
+
+## 推奨環境
+
+- Windows 10 / 11
+- 32bit/64bit 共に動作可能な埋め込み Python 環境
+- ローカルのみで動作させることを前提とした設定
+
+## ライセンス
+
+このプロジェクトはルートの `LICENSE` に従い、GNU Affero General Public License v3（AGPL-3.0）で配布されます。
+
+`UPSTREAM_VERSION.txt` に記載された upstream 情報を併せて管理してください。

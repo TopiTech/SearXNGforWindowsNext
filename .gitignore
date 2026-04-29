@@ -174,3 +174,15 @@ __pycache__/
 
 # # PyPI configuration file
 # .pypirc
+
+# Ignore embedded Python third-party packages (keep project packages via whitelist)
+/python/Lib/site-packages/*
+!/python/Lib/site-packages/searx/
+!/python/Lib/site-packages/searx/**
+!/python/Lib/site-packages/searxng_extra/
+!/python/Lib/site-packages/searxng_extra/**
+!/python/Lib/site-packages/valkey/
+!/python/Lib/site-packages/valkey/**
+
+# Ignore embedded Scripts (users should install required CLI scripts themselves)
+/python/Scripts/*
