@@ -21,7 +21,7 @@
 
 1. リポジトリを展開する
 2. `SearXNG for Windows.bat` を実行する
-3. ブラウザから以下にアクセスする
+3. ブラウザから以下にアクセスする（起動確認）
 
 ```http
 http://127.0.0.1:8888
@@ -59,7 +59,7 @@ curl "http://127.0.0.1:8888/search?q=example&format=json"
 Invoke-WebRequest -Uri "http://127.0.0.1:8888/search?q=example&format=json" | Select-Object -ExpandProperty Content
 ```
 
-このプロジェクトは、Web UI は利用できるままにしつつも、JSON API を第一に使うことを想定しています。
+このプロジェクトは、Web UI からの検索は想定していません。JSON API を第一に使うことを想定しています。
 
 ## Windows での起動
 
