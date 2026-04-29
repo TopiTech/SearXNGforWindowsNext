@@ -1,4 +1,4 @@
-﻿general:
+general:
   # Debug mode, only for development. Is overwritten by ${SEARXNG_DEBUG}
   debug: false
   # displayed name
@@ -18,11 +18,11 @@
   open_metrics: ''
 
 brand:
-  new_issue_url: https://github.com/mbaozi/SearXNGforWindows/issues/new
+  new_issue_url: https://github.com/TopiTech/SearXNGforWindowsNext/issues/new
   docs_url: https://docs.searxng.org/
   public_instances: https://searx.space
-  wiki_url: https://github.com/mbaozi/SearXNGforWindows/wiki
-  issue_url: https://github.com/mbaozi/SearXNGforWindows/issues
+  wiki_url: https://github.com/TopiTech/SearXNGforWindowsNext/wiki
+  issue_url: https://github.com/TopiTech/SearXNGforWindowsNext/issues
   # custom:
   #   maintainer: "Jon Doe"
   #   # Custom entries in the footer: [title]: [link]
