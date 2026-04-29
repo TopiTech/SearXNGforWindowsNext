@@ -1,9 +1,7 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
-
-
-# *.py[cod]
-# *$py.class
+*.py[cod]
+*$py.class
 
 # # C extensions
 # *.so
@@ -183,6 +181,11 @@ __pycache__/
 !/python/Lib/site-packages/searxng_extra/**
 !/python/Lib/site-packages/valkey/
 !/python/Lib/site-packages/valkey/**
+
+# Ensure Python bytecode stays ignored even under whitelisted packages.
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
 
 # Ignore embedded Scripts (users should install required CLI scripts themselves)
 /python/Scripts/*
