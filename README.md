@@ -89,7 +89,7 @@ Invoke-WebRequest -Uri "http://127.0.0.1:8888/search?q=example&format=json" | Se
 - `tools/sync-upstream.ps1`: upstream ソースの取得と Windows パッチ適用
 - `UPSTREAM_VERSION.txt`: 同期済み upstream commit を記録
 
-これにより、Windows 固有の改修を維持しつつ upstream 変更を取り込むことができます。
+これにより、Windows 固有の改修を維持しつつ 最新のupstream 変更を取り込むことができます。
 
 ## 推奨環境
 
