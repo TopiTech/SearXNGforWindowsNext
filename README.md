@@ -74,4 +74,14 @@ python ./python/Lib/site-packages/searx/webapp.py
 > 其他使用事项可参考原仓库 https://github.com/searxng/searxng
 
 
+## ソース提供とライセンス
+
+- **ライセンス**: 本プロジェクトはルートにある `LICENSE` ファイルに従い、GNU Affero General Public License v3（AGPL-3.0）で配布されます。
+- **ソースの入手方法**: ソースコードはこのリポジトリで公開されています。バイナリやビルド済みアーカイブを配布する場合、対応するソース（本リポジトリと `UPSTREAM_VERSION.txt` に記載の upstream 情報を含む）を同梱するか、入手先を明記してください。
+- **ネットワーク提供の場合**: サービスとしてネットワーク経由で本ソフトウェアを提供する場合、利用者に対してソースの入手方法を明示する必要があります（AGPL-3.0 による義務）。
+- **サードパーティ依存**: 同梱しているライブラリは各々のライセンスに従います。配布時は `LICENSE` を同梱し、README にソース入手手順を明記してください。
+
+例: 配布アーカイブに `LICENSE` と `UPSTREAM_VERSION.txt` を含め、README に「ソースは https://github.com/<your-fork> で入手可能」と明記すると良いです。
+
+
 
