@@ -9,20 +9,20 @@
 
 ---
 
-## ✨ 主な特徴
+##  主な特徴
 
-- **🪟 Windows Native**: 組み込みPython環境により、DockerなしでWindows上で直接動作。
-- **🤖 GenAI Optimized**: LLMのトークン消費を抑える専用の `json_lite` フォーマットを搭載。
-- **🔍 High-Quality Engines**: Brave, DuckDuckGo, Mojeekなどの信頼性の高いエンジンを標準で最適化。
-- **🔄 Auto-Sync Architecture**: `searxng/searxng` 本家の最新コードを追従しつつ、Windows固有のパッチを自動適用。
-- **🛡️ Secure & Local**: ローカルホストでの動作に特化したセキュアなデフォルト設定。
+- ** Windows Native**: 組み込みPython環境により、DockerなしでWindows上で直接動作。
+- ** GenAI Optimized**: LLMのトークン消費を抑える専用の `json_lite` フォーマットを搭載。
+- **High-Quality Engines**: Brave, DuckDuckGo, Mojeekなどの信頼性の高いエンジンを標準で最適化。
+- ** Auto-Sync Architecture**: `searxng/searxng` 本家の最新コードを追従しつつ、Windows固有のパッチを自動適用。
+- ** Secure & Local**: ローカルホストでの動作に特化したセキュアなデフォルト設定。
 
 ---
 
-## 🛠️ クイックスタート
+##  クイックスタート
 
 ### 1. セットアップ
-リポジトリをダウンロード後、まずは依存パッケージをインストールします。
+リポジトリをダウンロード(クローン)後、まずは依存パッケージをインストールします。
 
 ```powershell
 # PowerShellで実行
@@ -34,7 +34,7 @@
 
 ---
 
-## 💡 GenAI / LLM での活用
+##  GenAI / LLM での活用
 
 このプロジェクトの最大の特徴は、AIエージェント向けの**超軽量JSONレスポンス**です。
 
@@ -62,7 +62,7 @@ GET http://127.0.0.1:8888/search?q=SearXNG&format=json_lite
 
 ---
 
-## ⚙️ 構成ファイル
+##  構成ファイル
 
 - **`SearXNG for Windows.bat`**: メインの起動スクリプト。
 - **`config/settings.yml`**: ユーザー設定（エンジン、ポート、フォーマットなど）。
@@ -71,7 +71,7 @@ GET http://127.0.0.1:8888/search?q=SearXNG&format=json_lite
 
 ---
 
-## 🔄 メンテナンスと同期
+##  メンテナンスと同期
 
 GitHub Actions（`.github/workflows/upstream-sync.yml`）により、本家のアップデートが週次で自動チェックされます。同期プロセスでは以下の処理が行われます：
 
