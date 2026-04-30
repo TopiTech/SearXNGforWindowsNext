@@ -13,7 +13,7 @@
 
 -  Windows Native: 組み込みPython環境により、DockerなしでWindows上で直接動作。
 -  GenAI Optimized: LLMのトークン消費を抑える専用の `json_lite` フォーマットを搭載。
-- High-Quality Engines: Brave, DuckDuckGo, Mojeekなどの信頼性の高いエンジンを標準で最適化。
+- High-Quality Engines: Bing, DuckDuckGo, Mojeekなどの信頼性の高いエンジンを標準で最適化。
 - Auto-Sync Architecture: `searxng/searxng` 本家の最新コードを追従しつつ、Windows固有のパッチを自動適用。
 - Secure & Local: ローカルホストでの動作に特化したセキュアなデフォルト設定。
 
