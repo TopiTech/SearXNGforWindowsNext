@@ -97,16 +97,26 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
 # --- 4. webapp.py (Handle json_lite in search) ---
 Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py") -Description "webapp.py (json_lite handler)" -PatchLogic {
     param($c)
-    if ($c -match "output_format == 'json_lite'") { return $c }
     
-    $handler = @"
+    # 4.1 Fix index_error (handle json_lite as standard json error)
+    # Check if already patched
+    if ($c -notmatch "if output_format in \('json', 'json_lite'\):") {
+        $c = $c -replace "if output_format == 'json':", "if output_format in ('json', 'json_lite'):"
+    }
+
+    # 4.2 Fix search() handler (with custom lite logic)
+    # Check if already patched
+    if ($c -notmatch "output_format == 'json_lite'") {
+        $handler = @"
     if output_format == 'json_lite':
         response = webutils.get_json_lite_response(search_query, result_container)
         return Response(response, mimetype='application/json')
 
 "@
-    # Insert before the standard json handler
-    $c = $c -replace '(if output_format == ''json'':)', "$handler    `$1"
+        # Insert specifically after the comment for formats without template
+        $c = $c -replace "(# 3\. formats without a template\r?\n\s+)(\r?\n)", "`$1$handler`$2"
+    }
+    
     return $c
 }
 
