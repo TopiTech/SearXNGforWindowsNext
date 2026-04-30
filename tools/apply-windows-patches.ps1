@@ -98,24 +98,33 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
 Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py") -Description "webapp.py (json_lite handler)" -PatchLogic {
     param($c)
     
-    # 4.1 Fix index_error (handle json_lite as standard json error)
+    # Normalize input content to use standard spaces for indentation logic
+    $c = $c -replace "\t", "    "
+
+    # 4.1 Fix index_error handler
     if ($c -notmatch "if output_format in \('json', 'json_lite'\):") {
-        $c = $c -replace "if output_format == 'json':", "if output_format in ('json', 'json_lite'):"
+        # Search for index_error and replace the json check immediately following it
+        $c = [Regex]::Replace($c, "(?m)^(def index_error\(.*?\):\r?\n)(\s+)if output_format == 'json':", {
+            param($m)
+            $indent = $m.Groups[2].Value
+            return $m.Groups[1].Value + $indent + "if output_format in ('json', 'json_lite'):"
+        })
     }
 
-    # 4.2 Fix search() handler (with custom lite logic)
+    # 4.2 Fix search() handler
     if ($c -notmatch "output_format == 'json_lite'") {
-        # Capture the indentation from the standard json handler to ensure perfect match
-        if ($c -match "(?m)^(\s+)if output_format == 'json':") {
+        # Target the "formats without a template" section
+        $handlerMarker = "# 3. formats without a template"
+        if ($c -match "(?m)^(\s+)$handlerMarker") {
             $indent = $Matches[1]
-            $handler = @"
+            $liteBlock = @"
+
 $($indent)if output_format == 'json_lite':
 $($indent)    response = webutils.get_json_lite_response(search_query, result_container)
 $($indent)    return Response(response, mimetype='application/json')
-
 "@
-            # Insert before the standard json handler in the search section
-            $c = $c -replace "(?m)^(\s+)if output_format == 'json':", "$handler`$1if output_format == 'json':"
+            # Insert after the marker and any following blank lines
+            $c = $c -replace "(?m)^(\s+$handlerMarker\s*\r?\n\s*)", "`$1$liteBlock"
         }
     }
     
