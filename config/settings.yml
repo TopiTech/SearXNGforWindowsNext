@@ -187,17 +187,17 @@ ui:
 #
 outgoing:
   # default timeout in seconds, can be override by engine
-  request_timeout: 3.0
+  request_timeout: 5.0
   # the maximum timeout in seconds
   # max_request_timeout: 10.0
   # suffix of searx_useragent, could contain information like an email address
   # to the administrator
   useragent_suffix: ""
   # The maximum number of concurrent connections that may be established.
-  pool_connections: 100
+  pool_connections: 50
   # Allow the connection pool to maintain keep-alive connections below this
   # point.
-  pool_maxsize: 20
+  pool_maxsize: 10
   # See https://www.python-httpx.org/http2/
   enable_http2: true
   # uncomment below section if you want to use a custom server certificate
@@ -1036,7 +1036,12 @@ engines:
   - name: google
     engine: google
     shortcut: go
-    disabled: true
+    disabled: false
+    use_mobile_ui: true
+    # use_google_com: true # Prefer google.com
+    # If you have a proxy (e.g. Tor or commercial proxy), uncomment below:
+    # proxies:
+    #   all://: http://127.0.0.1:8118
     # additional_tests:
     #   android: *test_android
 
@@ -1419,7 +1424,7 @@ engines:
     engine: mwmbl
     # api_url: https://api.mwmbl.org
     shortcut: mwm
-    disabled: false
+    disabled: true
 
   - name: niconico
     engine: niconico
@@ -2559,7 +2564,7 @@ engines:
   - name: brave
     engine: brave
     shortcut: br
-    disabled: false
+    disabled: true
     time_range_support: true
     paging: true
     categories: [general, web]
