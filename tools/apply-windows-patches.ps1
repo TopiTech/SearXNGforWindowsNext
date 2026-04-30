@@ -122,6 +122,7 @@ Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\weba
 $($indent)if output_format == 'json_lite':
 $($indent)    response = webutils.get_json_lite_response(search_query, result_container)
 $($indent)    return Response(response, mimetype='application/json')
+
 "@
             # Insert after the marker and any following blank lines
             $c = $c -replace "(?m)^(\s+$handlerMarker\s*\r?\n\s*)", "`$1$liteBlock"
