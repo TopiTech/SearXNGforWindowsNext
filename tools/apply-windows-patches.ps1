@@ -99,22 +99,24 @@ Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\weba
     param($c)
     
     # 4.1 Fix index_error (handle json_lite as standard json error)
-    # Check if already patched
     if ($c -notmatch "if output_format in \('json', 'json_lite'\):") {
         $c = $c -replace "if output_format == 'json':", "if output_format in ('json', 'json_lite'):"
     }
 
     # 4.2 Fix search() handler (with custom lite logic)
-    # Check if already patched
     if ($c -notmatch "output_format == 'json_lite'") {
-        $handler = @"
-    if output_format == 'json_lite':
-        response = webutils.get_json_lite_response(search_query, result_container)
-        return Response(response, mimetype='application/json')
+        # Capture the indentation from the standard json handler to ensure perfect match
+        if ($c -match "(?m)^(\s+)if output_format == 'json':") {
+            $indent = $Matches[1]
+            $handler = @"
+$($indent)if output_format == 'json_lite':
+$($indent)    response = webutils.get_json_lite_response(search_query, result_container)
+$($indent)    return Response(response, mimetype='application/json')
 
 "@
-        # Insert specifically after the comment for formats without template
-        $c = $c -replace "(# 3\. formats without a template\r?\n\s+)(\r?\n)", "`$1$handler`$2"
+            # Insert before the standard json handler in the search section
+            $c = $c -replace "(?m)^(\s+)if output_format == 'json':", "$handler`$1if output_format == 'json':"
+        }
     }
     
     return $c
