@@ -103,12 +103,12 @@ import sys, re
 path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f: content = f.read()
 modified = False
-if \"if output_format in ('json', 'json_lite'):\" not in content:
-    content = re.sub(r\"(?m)^(def index_error\(.*?\):\r?\n)(\s+)if output_format == 'json':\", r\"\\1\\2if output_format in ('json', 'json_lite'):\", content)
+if "if output_format in ('json', 'json_lite'):" not in content:
+    content = re.sub(r"(?m)^(def index_error\(.*?\):\r?\n)(\s+)if output_format == 'json':", r"\1\2if output_format in ('json', 'json_lite'):", content)
     modified = True
-if \"output_format == 'json_lite'\" not in content:
-    handler = \"\\n\\n    if output_format == 'json_lite':\\n        response = webutils.get_json_lite_response(search_query, result_container)\\n        return Response(response, mimetype='application/json')\\n\"
-    content = re.sub(r\"(# 3\. formats without a template\r?\n)\", r\"\\1\" + handler, content)
+if "output_format == 'json_lite'" not in content:
+    handler = "\n\n    if output_format == 'json_lite':\n        response = webutils.get_json_lite_response(search_query, result_container)\n        return Response(response, mimetype='application/json')\n"
+    content = re.sub(r"(# 3\. formats without a template\r?\n)", r"\1" + handler, content)
     modified = True
 if modified:
     with open(path, 'w', encoding='utf-8', newline='\n') as f: f.write(content)
