@@ -1,7 +1,18 @@
-﻿# Python bytecode and cache files
+# Python bytecode and cache files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Temporary and log files
+.upstream-tmp/
+changed_files.txt
+*.log
+/scratch/
+
+# OS and IDE files
+Thumbs.db
+Desktop.ini
+.vscode/
 
 # Ignore embedded Python third-party packages, except whitelisted libraries
 /python/Lib/site-packages/*
@@ -14,11 +25,11 @@ __pycache__/
 
 # Keep pip and its files in repository, but keep bytecode ignored.
 !/python/Lib/site-packages/pip/
-!/python/Lib/site-packages/pip-26.1.dist-info/
+!/python/Lib/site-packages/pip-*.dist-info/
 !/python/Lib/site-packages/setuptools/
-!/python/Lib/site-packages/setuptools-82.0.1.dist-info/
+!/python/Lib/site-packages/setuptools-*.dist-info/
 !/python/Lib/site-packages/wheel/
-!/python/Lib/site-packages/wheel-0.47.0.dist-info/
+!/python/Lib/site-packages/wheel-*.dist-info/
 !/python/Scripts/pip.exe
 !/python/Scripts/pip3.exe
 !/python/Scripts/pip3.11.exe
