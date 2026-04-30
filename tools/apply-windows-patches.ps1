@@ -18,8 +18,10 @@ function Update-Patch {
     $content = Get-Content $FilePath -Raw -Encoding UTF8
     $newContent = &$PatchLogic $content
 
-    if ($content -eq $newContent) {
-        Write-Host "No changes needed for ${Description}." -ForegroundColor Gray
+    if ($newContent -eq "ALREADY_APPLIED") {
+        Write-Host "Already applied ${Description}." -ForegroundColor Gray
+    } elseif ($content -eq $newContent) {
+        throw "Patch failed for ${Description}: Upstream code may have changed, could not find injection point."
     } else {
         Set-Content $FilePath -Value $newContent -Encoding UTF8
         Write-Host "Patched ${Description}: ${FilePath}" -ForegroundColor Green
@@ -29,7 +31,7 @@ function Update-Patch {
 # --- 1. valkeydb.py (Windows compatibility) ---
 Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\valkeydb.py") -Description "valkeydb.py (pwd removal)" -PatchLogic {
     param($c)
-    if ($c -match 'def _windows_safe_current_user\(') { return $c }
+    if ($c -match 'def _windows_safe_current_user\(') { return "ALREADY_APPLIED" }
     
     # Replace "import pwd" with try/except block
     $c = $c -replace '(?<=^|\r?\n)import pwd(?=\r?\n|$)', "try:`n    import pwd  # Unix only`nexcept ImportError:`n    pwd = None"
@@ -62,7 +64,7 @@ def _windows_safe_current_user():
 # --- 2. settings_defaults.py (Add json_lite format) ---
 Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\settings_defaults.py") -Description "settings_defaults.py (json_lite format)" -PatchLogic {
     param($c)
-    if ($c -match "'json_lite'") { return $c }
+    if ($c -match "'json_lite'") { return "ALREADY_APPLIED" }
     $c = $c -replace "OUTPUT_FORMATS = \['html', 'csv', 'json', 'rss'\]", "OUTPUT_FORMATS = ['html', 'csv', 'json', 'rss', 'json_lite']"
     return $c
 }
@@ -70,7 +72,7 @@ Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\sett
 # --- 3. webutils.py (Add get_json_lite_response) ---
 Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\webutils.py") -Description "webutils.py (get_json_lite_response)" -PatchLogic {
     param($c)
-    if ($c -match "def get_json_lite_response") { return $c }
+    if ($c -match "def get_json_lite_response") { return "ALREADY_APPLIED" }
     
     $liteFunc = @"
 
@@ -102,22 +104,48 @@ Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\weba
 import sys, re
 path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f: content = f.read()
+
+already_1 = "if output_format in ('json', 'json_lite'):" in content
+already_2 = "output_format == 'json_lite'" in content
+
+if already_1 and already_2:
+    print("ALREADY_APPLIED")
+    sys.exit(0)
+
 modified = False
-if "if output_format in ('json', 'json_lite'):" not in content:
-    content = re.sub(r"(?m)^(def index_error\(.*?\):\r?\n)(\s+)if output_format == 'json':", r"\1\2if output_format in ('json', 'json_lite'):", content)
+if not already_1:
+    new_content, count = re.subn(r"(?m)^(def index_error\(.*?\):\r?\n)(\s+)if output_format == 'json':", r"\1\2if output_format in ('json', 'json_lite'):", content)
+    if count == 0:
+        print("ERROR: index_error replacement failed")
+        sys.exit(1)
+    content = new_content
     modified = True
-if "output_format == 'json_lite'" not in content:
+
+if not already_2:
     handler = "\n\n    if output_format == 'json_lite':\n        response = webutils.get_json_lite_response(search_query, result_container)\n        return Response(response, mimetype='application/json')\n"
-    content = re.sub(r"(# 3\. formats without a template\r?\n)", r"\1" + handler, content)
+    new_content, count = re.subn(r"(# 3\. formats without a template\r?\n)", r"\1" + handler, content)
+    if count == 0:
+        print("ERROR: formats without template replacement failed")
+        sys.exit(1)
+    content = new_content
     modified = True
+
 if modified:
     with open(path, 'w', encoding='utf-8', newline='\n') as f: f.write(content)
+print("PATCHED")
 "@
     $tmpPy = Join-Path $env:TEMP "patch_webapp.py"
     $pyCode | Out-File -FilePath $tmpPy -Encoding utf8
-    & ".\python\python.exe" $tmpPy (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py")
+    $output = & ".\python\python.exe" $tmpPy (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py")
     Remove-Item $tmpPy
-    return (Get-Content -Path (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py") -Raw)
+    
+    if ($output -contains "ERROR: index_error replacement failed" -or $output -contains "ERROR: formats without template replacement failed") {
+        throw "webapp.py patch failed: Upstream code changed and injection point was not found."
+    } elseif ($output -contains "ALREADY_APPLIED") {
+        return "ALREADY_APPLIED"
+    } else {
+        return (Get-Content -Path (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py") -Raw)
+    }
 }
 
 Write-Host "All Windows patches applied successfully." -ForegroundColor Green
