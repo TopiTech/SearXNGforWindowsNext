@@ -1,12 +1,5 @@
  M UPSTREAM_VERSION.txt
- M config/requirements-server.upstream.txt
- M config/requirements.upstream.txt
- M python/Lib/site-packages/searx/data/ahmia_blacklist.txt
- M python/Lib/site-packages/searx/data/currencies.json
- M python/Lib/site-packages/searx/data/engine_descriptions.json
- M python/Lib/site-packages/searx/data/engine_traits.json
- M python/Lib/site-packages/searx/data/external_bangs.json
- M python/Lib/site-packages/searx/data/gsa_useragents.txt
- M python/Lib/site-packages/searx/data/useragents.json
- M python/Lib/site-packages/searx/data/wikidata_units.json
- M python/Lib/site-packages/searx/result_types/_base.py
+ M python/Lib/site-packages/searx/settings_defaults.py
+ M python/Lib/site-packages/searx/valkeydb.py
+ M python/Lib/site-packages/searx/webapp.py
+ M python/Lib/site-packages/searx/webutils.py
