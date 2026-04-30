@@ -97,39 +97,27 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
 # --- 4. webapp.py (Handle json_lite in search) ---
 Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py") -Description "webapp.py (json_lite handler)" -PatchLogic {
     param($c)
-    
-    # Normalize input content to use standard spaces for indentation logic
-    $c = $c -replace "\t", "    "
-
-    # 4.1 Fix index_error handler
-    if ($c -notmatch "if output_format in \('json', 'json_lite'\):") {
-        # Search for index_error and replace the json check immediately following it
-        $c = [Regex]::Replace($c, "(?m)^(def index_error\(.*?\):\r?\n)(\s+)if output_format == 'json':", {
-            param($m)
-            $indent = $m.Groups[2].Value
-            return $m.Groups[1].Value + $indent + "if output_format in ('json', 'json_lite'):"
-        })
-    }
-
-    # 4.2 Fix search() handler
-    if ($c -notmatch "output_format == 'json_lite'") {
-        # Target the "formats without a template" section
-        $handlerMarker = "# 3. formats without a template"
-        if ($c -match "(?m)^(\s+)$handlerMarker") {
-            $indent = $Matches[1]
-            $liteBlock = @"
-
-$($indent)if output_format == 'json_lite':
-$($indent)    response = webutils.get_json_lite_response(search_query, result_container)
-$($indent)    return Response(response, mimetype='application/json')
-
+    # Use embedded Python for robust indentation handling
+    $pyCode = @"
+import sys, re
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as f: content = f.read()
+modified = False
+if \"if output_format in ('json', 'json_lite'):\" not in content:
+    content = re.sub(r\"(?m)^(def index_error\(.*?\):\r?\n)(\s+)if output_format == 'json':\", r\"\\1\\2if output_format in ('json', 'json_lite'):\", content)
+    modified = True
+if \"output_format == 'json_lite'\" not in content:
+    handler = \"\\n\\n    if output_format == 'json_lite':\\n        response = webutils.get_json_lite_response(search_query, result_container)\\n        return Response(response, mimetype='application/json')\\n\"
+    content = re.sub(r\"(# 3\. formats without a template\r?\n)\", r\"\\1\" + handler, content)
+    modified = True
+if modified:
+    with open(path, 'w', encoding='utf-8', newline='\n') as f: f.write(content)
 "@
-            # Insert after the marker and any following blank lines
-            $c = $c -replace "(?m)^(\s+$handlerMarker\s*\r?\n\s*)", "`$1$liteBlock"
-        }
-    }
-    
-    return $c
+    $tmpPy = Join-Path $env:TEMP "patch_webapp.py"
+    $pyCode | Out-File -FilePath $tmpPy -Encoding utf8
+    & ".\python\python.exe" $tmpPy (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py")
+    Remove-Item $tmpPy
+    return (Get-Content -Path (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py") -Raw)
 }
 
 Write-Host "All Windows patches applied successfully." -ForegroundColor Green
