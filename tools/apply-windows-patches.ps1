@@ -1,27 +1,40 @@
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$valkeydb = Join-Path $repoRoot "python\Lib\site-packages\searx\valkeydb.py"
 
-if (-not (Test-Path $valkeydb)) {
-    throw "File not found: $valkeydb"
+# --- Helper function for patching ---
+function Update-Patch {
+    param(
+        [string]$FilePath,
+        [string]$Description,
+        [scriptblock]$PatchLogic
+    )
+
+    if (-not (Test-Path $FilePath)) {
+        Write-Host "Warning: File not found, skipping ${Description}: ${FilePath}" -ForegroundColor Yellow
+        return
+    }
+
+    $content = Get-Content $FilePath -Raw -Encoding UTF8
+    $newContent = &$PatchLogic $content
+
+    if ($content -eq $newContent) {
+        Write-Host "No changes needed for ${Description}." -ForegroundColor Gray
+    } else {
+        Set-Content $FilePath -Value $newContent -Encoding UTF8
+        Write-Host "Patched ${Description}: ${FilePath}" -ForegroundColor Green
+    }
 }
 
-$content = Get-Content $valkeydb -Raw -Encoding UTF8
-
-# Check if already patched by looking for the helper function
-if ($content -match 'def _windows_safe_current_user\(') {
-    Write-Host "valkeydb.py already patched. Skipping." -ForegroundColor Yellow
-    exit 0
-}
-
-Write-Host "Patching valkeydb.py for Windows compatibility..." -ForegroundColor Cyan
-
-# Step 1: Replace "import pwd" with try/except block
-$content = $content -replace '(?<=^|\r?\n)import pwd(?=\r?\n|$)', "try:`n    import pwd  # Unix only`nexcept ImportError:`n    pwd = None"
-
-# Step 2: Add helper function after logger definition
-$helperFunction = @"
+# --- 1. valkeydb.py (Windows compatibility) ---
+Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\valkeydb.py") -Description "valkeydb.py (pwd removal)" -PatchLogic {
+    param($c)
+    if ($c -match 'def _windows_safe_current_user\(') { return $c }
+    
+    # Replace "import pwd" with try/except block
+    $c = $c -replace '(?<=^|\r?\n)import pwd(?=\r?\n|$)', "try:`n    import pwd  # Unix only`nexcept ImportError:`n    pwd = None"
+    
+    $helper = @"
 
 def _windows_safe_current_user():
     if pwd is not None and hasattr(os, "getuid"):
@@ -40,23 +53,61 @@ def _windows_safe_current_user():
     return username, -1
 
 "@
+    $c = $c -replace '(logger = logging\.getLogger\(__name__\))', "`$1$helper"
+    $c = $c -replace '_pw = pwd\.getpwuid\(os\.getuid\(\)\)', '_user_name, _user_uid = _windows_safe_current_user()'
+    $c = $c -replace '_pw\.pw_name, _pw\.pw_uid', '_user_name, _user_uid'
+    return $c
+}
 
-# Insert helper function after "logger = logging.getLogger(__name__)"
-$content = $content -replace (
-    '(logger = logging\.getLogger\(__name__\))',
-    "`$1$helperFunction"
-)
+# --- 2. settings_defaults.py (Add json_lite format) ---
+Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\settings_defaults.py") -Description "settings_defaults.py (json_lite format)" -PatchLogic {
+    param($c)
+    if ($c -match "'json_lite'") { return $c }
+    $c = $c -replace "OUTPUT_FORMATS = \['html', 'csv', 'json', 'rss'\]", "OUTPUT_FORMATS = ['html', 'csv', 'json', 'rss', 'json_lite']"
+    return $c
+}
 
-# Step 3: Replace pwd.getpwuid call with helper function call
-$content = $content -replace '_pw = pwd\.getpwuid\(os\.getuid\(\)\)', '_user_name, _user_uid = _windows_safe_current_user()'
+# --- 3. webutils.py (Add get_json_lite_response) ---
+Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\webutils.py") -Description "webutils.py (get_json_lite_response)" -PatchLogic {
+    param($c)
+    if ($c -match "def get_json_lite_response") { return $c }
+    
+    $liteFunc = @"
 
-# Step 4: Replace _pw.pw_name, _pw.pw_uid with _user_name, _user_uid
-$content = $content -replace '_pw\.pw_name, _pw\.pw_uid', '_user_name, _user_uid'
+def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
+    """Returns a simplified JSON string (GenAI friendly)"""
+    data = {
+        'query': sq.query,
+        'results': [
+            {
+                'title': _.title,
+                'url': _.url,
+                'content': _.content
+            } for _ in rc.get_ordered_results()
+        ]
+    }
+    return json.dumps(data, cls=JSONEncoder)
 
-Set-Content $valkeydb -Value $content -Encoding UTF8
+"@
+    # Insert before get_themes
+    $c = $c -replace '(def get_themes)', "$liteFunc`$1"
+    return $c
+}
 
-Write-Host "Patched: $valkeydb" -ForegroundColor Green
-Write-Host "  - import pwd wrapped in try/except" -ForegroundColor DarkGray
-Write-Host "  - _windows_safe_current_user() helper added" -ForegroundColor DarkGray
-Write-Host "  - pwd.getpwuid call replaced with helper" -ForegroundColor DarkGray
-Write-Host "  - logger.exception updated" -ForegroundColor DarkGray
+# --- 4. webapp.py (Handle json_lite in search) ---
+Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py") -Description "webapp.py (json_lite handler)" -PatchLogic {
+    param($c)
+    if ($c -match "output_format == 'json_lite'") { return $c }
+    
+    $handler = @"
+    if output_format == 'json_lite':
+        response = webutils.get_json_lite_response(search_query, result_container)
+        return Response(response, mimetype='application/json')
+
+"@
+    # Insert before the standard json handler
+    $c = $c -replace '(if output_format == ''json'':)', "$handler    `$1"
+    return $c
+}
+
+Write-Host "All Windows patches applied successfully." -ForegroundColor Green

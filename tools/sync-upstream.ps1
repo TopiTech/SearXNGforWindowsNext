@@ -15,7 +15,7 @@ function Assert-Command {
     }
 }
 
-function Ensure-Dir {
+function Initialize-Directory {
     param([string]$Path)
 
     if (-not (Test-Path $Path)) {
@@ -23,20 +23,20 @@ function Ensure-Dir {
     }
 }
 
-function Mirror-Copy {
+function Sync-MirrorItem {
     param(
         [string]$Src,
         [string]$Dst
     )
 
-    Ensure-Dir (Split-Path -Parent $Dst)
+    Initialize-Directory (Split-Path -Parent $Dst)
     if (Test-Path $Dst) {
         Remove-Item -LiteralPath $Dst -Recurse -Force
     }
     Copy-Item -LiteralPath $Src -Destination $Dst -Recurse -Force
 }
 
-function Run-Git {
+function Invoke-GitAction {
     param(
         [string[]]$GitArgs,
         [string]$WorkingDirectory
@@ -70,12 +70,12 @@ if (Test-Path $tempRoot) {
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 
 # temp repo
-Run-Git -GitArgs @("init") -WorkingDirectory $tempRoot
-Run-Git -GitArgs @("remote", "add", "upstream", $UpstreamUrl) -WorkingDirectory $tempRoot
+Invoke-GitAction -GitArgs @("init") -WorkingDirectory $tempRoot
+Invoke-GitAction -GitArgs @("remote", "add", "upstream", $UpstreamUrl) -WorkingDirectory $tempRoot
 
 # Windows invalid path 回避
-Run-Git -GitArgs @("config", "--local", "core.protectNTFS", "false") -WorkingDirectory $tempRoot
-Run-Git -GitArgs @("sparse-checkout", "init", "--no-cone") -WorkingDirectory $tempRoot
+Invoke-GitAction -GitArgs @("config", "--local", "core.protectNTFS", "false") -WorkingDirectory $tempRoot
+Invoke-GitAction -GitArgs @("sparse-checkout", "init", "--no-cone") -WorkingDirectory $tempRoot
 
 # Windows fork に必要な安全なパスだけ取り込む
 $sparsePatterns = @(
@@ -95,8 +95,8 @@ $scFile = Join-Path $tempRoot ".git\info\sparse-checkout"
     (New-Object System.Text.UTF8Encoding($false))
 )
 
-Run-Git -GitArgs @("fetch", "--depth", "1", "upstream", $Ref) -WorkingDirectory $tempRoot
-Run-Git -GitArgs @("checkout", "FETCH_HEAD") -WorkingDirectory $tempRoot
+Invoke-GitAction -GitArgs @("fetch", "--depth", "1", "upstream", $Ref) -WorkingDirectory $tempRoot
+Invoke-GitAction -GitArgs @("checkout", "FETCH_HEAD") -WorkingDirectory $tempRoot
 
 $commitSha = (git -C $tempRoot rev-parse HEAD).Trim()
 $commitDate = (git -C $tempRoot show -s --format=%cI HEAD).Trim()
@@ -116,11 +116,11 @@ if (-not (Test-Path $srcSearx)) {
 }
 
 Write-Host "Syncing searx package..." -ForegroundColor Green
-Mirror-Copy -Src $srcSearx -Dst $dstSearx
+Sync-MirrorItem -Src $srcSearx -Dst $dstSearx
 
 if (Test-Path $srcExtra) {
     Write-Host "Syncing searxng_extra package..." -ForegroundColor Green
-    Mirror-Copy -Src $srcExtra -Dst $dstExtra
+    Sync-MirrorItem -Src $srcExtra -Dst $dstExtra
 }
 
 Copy-Item (Join-Path $tempRoot "requirements.txt") (Join-Path $repoRoot "config\requirements.upstream.txt") -Force
@@ -129,6 +129,18 @@ if (Test-Path (Join-Path $tempRoot "requirements-server.txt")) {
 }
 Copy-Item (Join-Path $tempRoot "setup.py") (Join-Path $repoRoot "config\setup.upstream.py") -Force
 Copy-Item (Join-Path $tempRoot "README.rst") (Join-Path $repoRoot "config\README.upstream.rst") -Force
+
+# Detect if requirements changed
+$oldReqHash = ""
+if (Test-Path (Join-Path $repoRoot "config\requirements.upstream.txt")) {
+    $oldReqHash = (Get-FileHash (Join-Path $repoRoot "config\requirements.upstream.txt")).Hash
+}
+$newReqHash = (Get-FileHash (Join-Path $tempRoot "requirements.txt")).Hash
+
+if ($oldReqHash -and ($oldReqHash -ne $newReqHash)) {
+    Write-Host "WARNING: Upstream requirements.txt has changed!" -ForegroundColor Cyan
+    Write-Host "You should run '.\tools\install-requirements.ps1' to update your environment." -ForegroundColor Yellow
+}
 
 @"
 upstream_url=$UpstreamUrl

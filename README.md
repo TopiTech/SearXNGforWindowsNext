@@ -1,104 +1,89 @@
-﻿# SearXNG for Windows Next
+<p align="center">
+  <img src="searxng_windows_logo_1777545866773.png" width="200" alt="SearXNG for Windows Next Logo">
+</p>
 
-このリポジトリは、Windows 環境で SearXNG を動作させつつ、LLM APIや CLI ワークフローから使いやすい JSON 検索結果取得を実現することを目的としています。
+# SearXNG for Windows Next 🚀
 
-## 目的
+**GenAIフレンドリーな検索体験を、Windowsネイティブ環境で。**
 
-- Windows で SearXNG をネイティブに動かす
-- ブラウザ UI に依存せず、`/search?q=...&format=json` で JSON レスポンスを取得できるようにする
-- `searxng/searxng` の upstream 変更を反映し、Windows 互換パッチを維持する
+このプロジェクトは、Windows環境でSearXNGを最適に動作させつつ、LLM（大規模言語モデル）やAPIワークフローから利用しやすい**軽量・高速な検索結果取得**を実現することを目的としたフォークリポジトリです。
 
-## 構成
+---
 
-- `SearXNG for Windows.bat`: Windows 上で組み込み Python を使い、SearXNG を起動するバッチ
-- `python/`: 埋め込み Python 環境と依存パッケージ
-- `config/settings.yml`: Windows 向け設定と JSON 出力有効化
-- `.github/workflows/upstream-sync.yml`: upstream 同期を自動化するワークフロー
-- `tools/`: upstream 同期・パッチ適用・動作確認用スクリプト
-- `UPSTREAM_VERSION.txt`: upstream 同期の metadata
+## ✨ 主な特徴
 
-## 使い方
+- **🪟 Windows Native**: 組み込みPython環境により、DockerなしでWindows上で直接動作。
+- **🤖 GenAI Optimized**: LLMのトークン消費を抑える専用の `json_lite` フォーマットを搭載。
+- **🔍 High-Quality Engines**: Brave, DuckDuckGo, Mojeekなどの信頼性の高いエンジンを標準で最適化。
+- **🔄 Auto-Sync Architecture**: `searxng/searxng` 本家の最新コードを追従しつつ、Windows固有のパッチを自動適用。
+- **🛡️ Secure & Local**: ローカルホストでの動作に特化したセキュアなデフォルト設定。
 
-1. リポジトリを展開する
-2. `SearXNG for Windows.bat` を実行する
-3. ブラウザから以下にアクセスする（起動確認）
+---
 
-```http
-http://127.0.0.1:8888
-```
+## 🛠️ クイックスタート
 
-### 初回セットアップ（必須）
-
-リポジトリには最小限のファイルのみを同梱しています。起動前に埋め込み Python 環境へ必要なパッケージをインストールしてください。
-
-PowerShell での実行例:
+### 1. セットアップ
+リポジトリをダウンロード後、まずは依存パッケージをインストールします。
 
 ```powershell
+# PowerShellで実行
 .\tools\install-requirements.ps1
 ```
 
-またはバッチ:
+### 2. 起動
+`SearXNG for Windows.bat` を実行します。起動後、ブラウザで [http://127.0.0.1:8888](http://127.0.0.1:8888) にアクセスできれば成功です。
 
-```bat
-.\tools\install-requirements.bat
+---
+
+## 💡 GenAI / LLM での活用
+
+このプロジェクトの最大の特徴は、AIエージェント向けの**超軽量JSONレスポンス**です。
+
+### `json_lite` フォーマット
+通常のJSONレスポンスに含まれる膨大なメタデータを削ぎ落とし、AIが必要とする情報（タイトル・URL・内容）のみを返します。
+
+**リクエスト例:**
+```http
+GET http://127.0.0.1:8888/search?q=SearXNG&format=json_lite
 ```
 
-これにより `config/requirements.txt`（および存在する場合 `config/requirements-server.upstream.txt`）がインストールされます。
-
-### CLI / JSON API の利用例
-
-ブラウザではなくコマンドや生成AIから直接使う場合:
-
-```powershell
-curl "http://127.0.0.1:8888/search?q=example&format=json"
+**レスポンス例:**
+```json
+{
+  "query": "SearXNG",
+  "results": [
+    {
+      "title": "SearXNG Documentation",
+      "url": "https://docs.searxng.org/",
+      "content": "SearXNG is a free internet metasearch engine..."
+    }
+  ]
+}
 ```
 
-または PowerShell の場合:
+---
 
-```powershell
-Invoke-WebRequest -Uri "http://127.0.0.1:8888/search?q=example&format=json" | Select-Object -ExpandProperty Content
-```
+## ⚙️ 構成ファイル
 
-このプロジェクトは、Web UI からの検索は想定していません。JSON API を第一に使うことを想定しています。
+- **`SearXNG for Windows.bat`**: メインの起動スクリプト。
+- **`config/settings.yml`**: ユーザー設定（エンジン、ポート、フォーマットなど）。
+- **`tools/sync-upstream.ps1`**: 本家リポジトリとの同期およびパッチ適用。
+- **`python/`**: ポータブルな組み込みPython環境。
 
-## Windows での起動
+---
 
-`SearXNG for Windows.bat` は次のように動作します:
+## 🔄 メンテナンスと同期
 
-- `python\python.exe` を使って起動
-- `SEARXNG_SETTINGS_PATH` で `config/settings.yml` を指定
-- Windows ネイティブで `python\Lib\site-packages\searx\webapp.py` を実行
+GitHub Actions（`.github/workflows/upstream-sync.yml`）により、本家のアップデートが週次で自動チェックされます。同期プロセスでは以下の処理が行われます：
 
-## 設定
+1. `searxng/searxng` の最新ソースを取得。
+2. Windows互換性およびGenAI向け機能のパッチを再適用。
+3. `requirements.txt` の変更を検知し、ユーザーに通知。
+4. **ユーザーの `settings.yml` は上書きされません。**
 
-`config/settings.yml` はデフォルトで JSON 出力を許可し、Windows 向けに調整されています。
+---
 
-- `search.formats`: `html` と `json`
-- `server.bind_address`: `127.0.0.1`
-- `server.port`: `8888`
-- `outgoing.request_timeout`: `3.0`
-- `outgoing.pool_maxsize`: `20`
+## 📜 ライセンス
 
-必要に応じて `config/settings.yml` を編集してください。
-
-## upstream 同期
-
-このリポジトリには、`searxng/searxng` からの同期を想定した次の仕組みがあります:
-
-- `.github/workflows/upstream-sync.yml`: GitHub Actions で upstream を定期的／手動で同期
-- `tools/sync-upstream.ps1`: upstream ソースの取得と Windows パッチ適用
-- `UPSTREAM_VERSION.txt`: 同期済み upstream commit を記録
-
-これにより、Windows 固有の改修を維持しつつ 最新のupstream 変更を取り込むことができます。
-
-## 推奨環境
-
-- Windows 10 / 11
-- 32bit/64bit 共に動作可能な埋め込み Python 環境
-- ローカルのみで動作させることを前提とした設定
-
-## ライセンス
-
-このプロジェクトはルートの `LICENSE` に従い、GNU Affero General Public License v3（AGPL-3.0）で配布されます。
-
-`UPSTREAM_VERSION.txt` に記載された upstream 情報を併せて管理してください。
+このプロジェクトは **GNU Affero General Public License v3 (AGPL-3.0)** の下で公開されています。
+詳細は [LICENSE](LICENSE) ファイルを参照してください。

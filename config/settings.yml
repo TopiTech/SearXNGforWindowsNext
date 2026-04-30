@@ -78,6 +78,7 @@ search:
   formats:
     - html
     - json
+    - json_lite
 
 server:
   # Is overwritten by ${SEARXNG_PORT} and ${SEARXNG_BIND_ADDRESS}
@@ -840,7 +841,7 @@ engines:
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
-    disabled: true
+    disabled: false
 
   - name: duckduckgo images
     engine: duckduckgo_extra
@@ -1418,7 +1419,7 @@ engines:
     engine: mwmbl
     # api_url: https://api.mwmbl.org
     shortcut: mwm
-    disabled: true
+    disabled: false
 
   - name: niconico
     engine: niconico
@@ -2362,7 +2363,7 @@ engines:
     shortcut: mjk
     engine: mojeek
     categories: [general, web]
-    disabled: true
+    disabled: false
 
   - name: mojeek images
     shortcut: mjkimg
@@ -2558,7 +2559,7 @@ engines:
   - name: brave
     engine: brave
     shortcut: br
-    disabled: true
+    disabled: false
     time_range_support: true
     paging: true
     categories: [general, web]
