@@ -32,6 +32,19 @@
 ### 2. 起動
 `SearXNG for Windows.bat` を実行します。起動後、ブラウザで [http://127.0.0.1:8888](http://127.0.0.1:8888) にアクセスできれば成功です。
 
+### 3. 動作確認 (Testing)
+以下のコマンドを実行して、特に `json_lite` 形式のレスポンスが正しく返ってくるか確認できます。
+
+**PowerShell:**
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8888/search?q=SearXNG&format=json_lite" | ConvertTo-Json -Depth 5
+```
+
+**curl:**
+```bash
+curl -G "http://127.0.0.1:8888/search" --data-urlencode "q=SearXNG" --data-urlencode "format=json_lite"
+```
+
 ---
 
 ##  GenAI / LLM での活用
