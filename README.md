@@ -73,6 +73,42 @@ GET http://127.0.0.1:8888/search?q=SearXNG&format=json_lite
 }
 ```
 
+### Open WebUI での活用 (Tool として登録)
+
+Open WebUI を使用している場合、この SearXNG フォークの `json_lite` を「ツール（Tool）」として登録することで、AI が必要に応じて自動で Web 検索を行うようになります。（なお当プロジェクト開発者のPC環境にはOpen WebUIを用いたローカルLLM環境が構築されていないため、この使い方は検証できていません。）
+
+#### 1. ツールの作成
+Open WebUI のメニューから **「Workspace」→「Tools」→「Create Tool」** を開き、以下の内容を入力します。
+
+- **Name**: `SearXNG Search`
+- **Description**: `Search the web for the latest information using SearXNG (json_lite).`
+- **Python Code**:
+
+```python
+import requests
+
+class Tools:
+    def __init__(self):
+        pass
+
+    def search_web(self, query: str) -> str:
+        """
+        指定されたキーワードでウェブ検索を行い、最新の情報を取得します。
+        :param query: 検索キーワード
+        """
+        # このフォーク専用の json_lite フォーマットを指定
+        url = f"http://localhost:8888/search?q={query}&format=json_lite"
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            return response.text
+        except Exception as e:
+            return f"SearXNG への接続エラー: {str(e)}"
+```
+
+#### 2. モデルへの適用
+作成したツールを保存した後、チャット画面のモデル設定（または「Workspace」→「Models」）から、このツールを有効にします。これで、AI が「検索が必要だ」と判断した際に、トークン効率の極めて高い `json_lite` 形式で情報を取得できるようになります。
+
 ---
 
 ##  構成ファイル
