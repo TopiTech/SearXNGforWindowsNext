@@ -31,13 +31,21 @@ function Update-Patch {
 # --- 1. valkeydb.py (Windows compatibility) ---
 Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\valkeydb.py") -Description "valkeydb.py (pwd removal)" -PatchLogic {
     param($c)
-    if ($c -match 'def _windows_safe_current_user\(') { return "ALREADY_APPLIED" }
-    
-    # Replace "import pwd" with try/except block
-    $c = $c -replace '(?<=^|\r?\n)import pwd(?=\r?\n|$)', "try:`n    import pwd  # Unix only`nexcept ImportError:`n    pwd = None"
-    
-    $helper = @"
+    $pyCode = @"
+import sys, re
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as f: content = f.read()
 
+if 'def _windows_safe_current_user():' in content and '_user_name, _user_uid = _windows_safe_current_user()' in content:
+    if '_pw = pwd.getpwuid(os.getuid())' in content.split('def _windows_safe_current_user():')[1].split('return')[0]:
+        print("ALREADY_APPLIED")
+        sys.exit(0)
+
+# 1. Replace import pwd
+content = re.sub(r'^import pwd$', "try:\n    import pwd  # Unix only\nexcept ImportError:\n    pwd = None", content, flags=re.M)
+
+# 2. Add or fix helper function after logger definition
+helper = """
 def _windows_safe_current_user():
     if pwd is not None and hasattr(os, "getuid"):
         try:
@@ -53,12 +61,49 @@ def _windows_safe_current_user():
         or "windows"
     )
     return username, -1
+"""
 
+if 'def _windows_safe_current_user():' in content:
+    # Overwrite existing helper to ensure it's not recursive
+    content = re.sub(r'def _windows_safe_current_user\(\):.*?return username, -1', helper.strip(), content, flags=re.S)
+else:
+    content = re.sub(r'(logger = logging\.getLogger\(__name__\))', r'\1' + helper, content)
+
+# 3. Replace the actual call OUTSIDE the helper function
+# Original: _pw = pwd.getpwuid(os.getuid())
+# We want to replace it only if it's not inside the _windows_safe_current_user definition.
+
+def replace_call(match):
+    indent = match.group(1)
+    # If it's preceded by more than 4 spaces (inside helper), don't touch it
+    if indent.count(' ') > 4:
+        return match.group(0)
+    return indent + '_user_name, _user_uid = _windows_safe_current_user()'
+
+content = re.sub(r'^(\s+)_pw = pwd\.getpwuid\(os\.getuid\(\)\)', replace_call, content, flags=re.M)
+
+# Replace usage only in the same scope (non-indented or standard indentation in initialize())
+def replace_usage(match):
+    indent = match.group(1)
+    if indent.count(' ') > 4:
+        return match.group(0)
+    return indent + 'logger.exception("[%s (%s)] can\'t connect valkey DB ...", _user_name, _user_uid)'
+
+content = re.sub(r'^(\s+)logger\.exception\("\[%s \(%s\)\] can\'t connect valkey DB \.\.\.", _pw\.pw_name, _pw\.pw_uid\)', replace_usage, content, flags=re.M)
+
+with open(path, 'w', encoding='utf-8', newline='\n') as f: f.write(content)
+print("PATCHED")
 "@
-    $c = $c -replace '(logger = logging\.getLogger\(__name__\))', "`$1$helper"
-    $c = $c -replace '_pw = pwd\.getpwuid\(os\.getuid\(\)\)', '_user_name, _user_uid = _windows_safe_current_user()'
-    $c = $c -replace '_pw\.pw_name, _pw\.pw_uid', '_user_name, _user_uid'
-    return $c
+    $tmpPy = Join-Path $env:TEMP "patch_valkeydb.py"
+    $pyCode | Out-File -FilePath $tmpPy -Encoding utf8
+    $output = & ".\python\python.exe" $tmpPy (Join-Path $repoRoot "python\Lib\site-packages\searx\valkeydb.py")
+    Remove-Item $tmpPy
+
+    if ($output -contains "ALREADY_APPLIED") {
+        return "ALREADY_APPLIED"
+    } else {
+        return (Get-Content -Path (Join-Path $repoRoot "python\Lib\site-packages\searx\valkeydb.py") -Raw)
+    }
 }
 
 # --- 2. settings_defaults.py (Add json_lite format) ---
