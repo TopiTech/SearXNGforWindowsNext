@@ -2,4 +2,4 @@ upstream_url=https://github.com/searxng/searxng.git
 ref_requested=master
 resolved_commit=cba0cffa8fd56bd691e319e3069fb02b4212a4df
 resolved_commit_date=2026-04-29T07:32:28+02:00
-synced_at=2026-04-30T11:34:01.5310886+00:00
+synced_at=2026-05-01T09:12:41.5137924+00:00
