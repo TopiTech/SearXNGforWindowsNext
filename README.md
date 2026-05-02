@@ -47,7 +47,7 @@ curl -G "http://127.0.0.1:8888/search" --data-urlencode "q=SearXNG" --data-urlen
 
 ---
 
-##  GenAI / LLM での活用
+##  GenAI / LLM での活用例
 
 このプロジェクトの最大の特徴は、AIエージェント向けの**超軽量JSONレスポンス**です。
 
