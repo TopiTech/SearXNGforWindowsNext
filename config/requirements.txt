@@ -3,3 +3,4 @@
 # Windows-specific additions if needed
 typing-extensions>=4.0.0
 tzdata; platform_system == "Windows"
+trafilatura>=1.12.0

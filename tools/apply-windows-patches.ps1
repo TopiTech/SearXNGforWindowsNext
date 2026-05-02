@@ -75,8 +75,8 @@ else:
 
 def replace_call(match):
     indent = match.group(1)
-    # If it's preceded by more than 4 spaces (inside helper), don't touch it
-    if indent.count(' ') > 4:
+    # If it's preceded by more than 8 spaces (inside helper), don't touch it
+    if indent.count(' ') > 8:
         return match.group(0)
     return indent + '_user_name, _user_uid = _windows_safe_current_user()'
 
@@ -85,7 +85,7 @@ content = re.sub(r'^(\s+)_pw = pwd\.getpwuid\(os\.getuid\(\)\)', replace_call, c
 # Replace usage only in the same scope (non-indented or standard indentation in initialize())
 def replace_usage(match):
     indent = match.group(1)
-    if indent.count(' ') > 4:
+    if indent.count(' ') > 8:
         return match.group(0)
     return indent + 'logger.exception("[%s (%s)] can\'t connect valkey DB ...", _user_name, _user_uid)'
 
@@ -117,12 +117,12 @@ Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\sett
 # --- 3. webutils.py (Add get_json_lite_response) ---
 Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\webutils.py") -Description "webutils.py (get_json_lite_response)" -PatchLogic {
     param($c)
-    if ($c -match "def get_json_lite_response") { return "ALREADY_APPLIED" }
+    if ($c -match "def get_json_lite_response" -and $c -notmatch "scrape_url") { return "ALREADY_APPLIED" }
     
     $liteFunc = @"
 
 def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
-    """Returns a simplified JSON string (GenAI friendly)"""
+    \"\"\"Returns a simplified JSON string (GenAI friendly)\"\"\"
     data = {
         'query': sq.query,
         'results': [
@@ -147,8 +147,13 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
     return json.dumps(data, cls=JSONEncoder)
 
 "@
-    # Insert before get_themes
-    $c = $c -replace '(def get_themes)', "$liteFunc`$1"
+    if ($c -match "def get_json_lite_response") {
+        # Replace existing one
+        $c = $c -replace '(?s)def get_json_lite_response.*?return json\.dumps\(data, cls=JSONEncoder\)\s+', "$liteFunc"
+    } else {
+        # Insert before get_themes
+        $c = $c -replace '(def get_themes)', "$liteFunc`$1"
+    }
     return $c
 }
 
@@ -198,6 +203,76 @@ print("PATCHED")
     if ($output -contains "ERROR: index_error replacement failed" -or $output -contains "ERROR: formats without template replacement failed") {
         throw "webapp.py patch failed: Upstream code changed and injection point was not found."
     } elseif ($output -contains "ALREADY_APPLIED") {
+        return "ALREADY_APPLIED"
+    } else {
+        return (Get-Content -Path (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py") -Raw)
+    }
+}
+
+# --- 5. webapp.py (Add /scrape route) ---
+Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py") -Description "webapp.py (scrape route)" -PatchLogic {
+    param($c)
+    if ($c -match "trafilatura.fetch_url") { return "ALREADY_APPLIED" }
+
+    $pyCode = @"
+import sys, re
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as f: content = f.read()
+
+# 1. Add import trafilatura
+if 'import trafilatura' not in content:
+    content = re.sub(r'(import flask)', r'import trafilatura\n\1', content)
+
+# 2. Add /scrape route
+scrape_route = """
+
+@app.route('/scrape', methods=['GET', 'POST'])
+def scrape():
+    url = sxng_request.form.get('url')
+    if not url:
+        return jsonify({'error': 'No URL provided'}), 400
+    
+    try:
+        # Use trafilatura's built-in fetcher for better compatibility (handles UA, etc.)
+        downloaded = trafilatura.fetch_url(url)
+        
+        if not downloaded:
+            # Fallback to httpx if trafilatura fails
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+            with httpx.Client(timeout=10.0, follow_redirects=True, verify=False, headers=headers) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                downloaded = resp.text
+
+        content = trafilatura.extract(downloaded, include_comments=False, include_tables=True)
+        
+        if not content:
+            return jsonify({'error': 'Could not extract content'}), 422
+            
+        return jsonify({
+            'url': url,
+            'content': content
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+"""
+
+# Clean up any existing duplicate scrape routes first to be safe
+content = re.sub(r'(?s)\n\n@app\.route\(\'/scrape\'.*?def scrape\(.*?\):.*?return jsonify\(.*?\)\n', '', content)
+
+# Insert before /search
+content = re.sub(r'(@app\.route\(\'/search\')', scrape_route + r'\1', content)
+
+with open(path, 'w', encoding='utf-8', newline='\n') as f: f.write(content)
+print("PATCHED")
+"@
+    $tmpPy = Join-Path $env:TEMP "patch_webapp_scrape.py"
+    $pyCode | Out-File -FilePath $tmpPy -Encoding utf8
+    $output = & ".\python\python.exe" $tmpPy (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py")
+    Remove-Item $tmpPy
+    
+    if ($output -contains "ALREADY_APPLIED") {
         return "ALREADY_APPLIED"
     } else {
         return (Get-Content -Path (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py") -Raw)

@@ -73,15 +73,33 @@ GET http://127.0.0.1:8888/search?q=SearXNG&format=json_lite
 }
 ```
 
+### `scrape` エンドポイント (本文抽出)
+検索結果のスニペットだけでは情報が不足する場合、AIが特定のURLを指定してそのページの**本文のみ**を抽出して取得できます。精度向上のため `trafilatura` ライブラリを使用しています。
+
+**リクエスト例:**
+```http
+GET http://127.0.0.1:8888/scrape?url=https://example.com/article
+```
+
+**レスポンス例:**
+```json
+{
+  "url": "https://example.com/article",
+  "content": "ここに抽出された本文が表示されます...",
+}
+```
+
+
+
 ### Open WebUI での活用 (Tool として登録)
 
-Open WebUI を使用している場合、この SearXNG フォークの `json_lite` を「ツール（Tool）」として登録することで、AI が必要に応じて自動で Web 検索を行うようになります。（なお当プロジェクト開発者のPC環境にはOpen WebUIを用いたローカルLLM環境が構築されていないため、この使い方は検証できていません。）
+Open WebUI を使用している場合、この SearXNG フォークの「検索（json_lite）」および「スクレイピング（scrape）」機能をツールとして登録することで、AI が必要に応じて Web 検索と本文抽出を組み合わせて実行できるようになります。
 
 #### 1. ツールの作成
 Open WebUI のメニューから **「Workspace」→「Tools」→「Create Tool」** を開き、以下の内容を入力します。
 
-- **Name**: `SearXNG Search`
-- **Description**: `Search the web for the latest information using SearXNG (json_lite).`
+- **Name**: `SearXNG Toolkit`
+- **Description**: `Search the web and extract website content using SearXNG.`
 - **Python Code**:
 
 ```python
@@ -104,6 +122,22 @@ class Tools:
             return response.text
         except Exception as e:
             return f"SearXNG への接続エラー: {str(e)}"
+
+    def get_website_content(self, url: str) -> str:
+        """
+        指定されたURLのウェブページから本文を抽出して取得します。
+        検索結果のスニペットだけでは情報が不足している場合や、詳細が必要な場合に使用してください。
+        :param url: 取得したいウェブページのURL
+        """
+        # 今回実装した scrape エンドポイントを使用
+        scrape_api_url = f"http://localhost:8888/scrape?url={url}"
+        try:
+            response = requests.get(scrape_api_url, timeout=15)
+            response.raise_for_status()
+            # 抽出された本文のみを返す
+            return response.json().get("content", "本文の抽出に失敗しました。")
+        except Exception as e:
+            return f"スクレイピングエラー: {str(e)}"
 ```
 
 #### 2. モデルへの適用
