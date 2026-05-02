@@ -1,32 +1,42 @@
 @echo off
-title SearXNG for Windows
-echo Starting SearXNG for Windows...
+title SearXNG for Windows Server
 
-:: Check embedded python
+REM === Pre-flight checks ===
+echo Checking prerequisites...
 if not exist ".\python\python.exe" (
-  echo Error: python.exe not found in the current directory.
+  echo [ERROR] Embedded Python not found: .\python\python.exe
+  echo.
+  echo Make sure you have the complete SearXNG for Windows directory structure.
   pause
-  exit /b
+  exit /b 1
 )
 
-:: Check webapp
 if not exist ".\python\Lib\site-packages\searx\webapp.py" (
-  echo Error: webapp.py not found in the specified path.
+  echo [ERROR] SearXNG webapp not found: .\python\Lib\site-packages\searx\webapp.py
+  echo.
+  echo Run: .\tools\install-requirements.ps1
   pause
-  exit /b
+  exit /b 1
 )
 
-:: Check custom config
 if not exist ".\config\settings.yml" (
-  echo Error: .\config\settings.yml not found.
+  echo [ERROR] Configuration missing: .\config\settings.yml
+  echo.
+  echo Copy config\settings.yml.bak to config\settings.yml and customize as needed.
   pause
-  exit /b
+  exit /b 1
 )
 
-:: IMPORTANT: tell SearXNG which settings.yml to use
+REM === Configure environment ===
 set "SEARXNG_SETTINGS_PATH=%CD%\config\settings.yml"
 
-:: Start SearXNG with embedded python
+REM === Start server ===
+echo.
+echo [INFO] Starting SearXNG for Windows...
+echo [INFO] Settings: %SEARXNG_SETTINGS_PATH%
+echo [INFO] Web server: http://127.0.0.1:8888
+echo.
+
 .\python\python.exe .\python\Lib\site-packages\searx\webapp.py
 
 pause

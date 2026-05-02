@@ -9,26 +9,20 @@ $ErrorActionPreference = "Stop"
 
 function Assert-Command {
     param([string]$Name)
-
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
-        throw "Required command not found: $Name"
+        throw "Required command not found: $Name. Please install or add to PATH."
     }
 }
 
 function Initialize-Directory {
     param([string]$Path)
-
     if (-not (Test-Path $Path)) {
         New-Item -ItemType Directory -Path $Path | Out-Null
     }
 }
 
 function Sync-MirrorItem {
-    param(
-        [string]$Src,
-        [string]$Dst
-    )
-
+    param([string]$Src, [string]$Dst)
     Initialize-Directory (Split-Path -Parent $Dst)
     if (Test-Path $Dst) {
         Remove-Item -LiteralPath $Dst -Recurse -Force
@@ -37,18 +31,13 @@ function Sync-MirrorItem {
 }
 
 function Invoke-GitAction {
-    param(
-        [string[]]$GitArgs,
-        [string]$WorkingDirectory
-    )
-
-    Write-Host ("git " + ($GitArgs -join " ")) -ForegroundColor Cyan
-
+    param([string[]]$GitArgs, [string]$WorkingDirectory)
+    Write-Host ("→ git " + ($GitArgs -join " ")) -ForegroundColor Cyan
     Push-Location $WorkingDirectory
     try {
         & git @GitArgs
         if ($LASTEXITCODE -ne 0) {
-            throw "git command failed with exit code $LASTEXITCODE"
+            throw "git failed with exit code $LASTEXITCODE"
         }
     }
     finally {
@@ -56,93 +45,106 @@ function Invoke-GitAction {
     }
 }
 
-Assert-Command "git"
+# === PRE-FLIGHT CHECKS ===
+Write-Host "Performing pre-flight checks..." -ForegroundColor Cyan
+@("git") | ForEach-Object { Assert-Command $_ }
+Write-Host "✓ All required commands found" -ForegroundColor Green
+Write-Host ""
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $tempRoot = Join-Path $repoRoot $TempDir
 
-Write-Host "Repo root: $repoRoot" -ForegroundColor Green
-Write-Host "Temp root: $tempRoot" -ForegroundColor Green
+try {
+    Write-Host "Workspace configuration:" -ForegroundColor Cyan
+    Write-Host "  Repo root:     $repoRoot"
+    Write-Host "  Temp staging:  $tempRoot"
+    Write-Host "  Upstream ref:  $Ref"
+    Write-Host "  Upstream URL:  $UpstreamUrl"
+    Write-Host ""
 
-if (Test-Path $tempRoot) {
-    Remove-Item -LiteralPath $tempRoot -Recurse -Force
-}
-New-Item -ItemType Directory -Path $tempRoot | Out-Null
+    # Clean temp directory
+    if (Test-Path $tempRoot) {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force
+    }
+    Initialize-Directory $tempRoot
 
-# temp repo
-Invoke-GitAction -GitArgs @("init") -WorkingDirectory $tempRoot
-Invoke-GitAction -GitArgs @("remote", "add", "upstream", $UpstreamUrl) -WorkingDirectory $tempRoot
+    Write-Host "Cloning sparse checkout from upstream..." -ForegroundColor Green
+    Invoke-GitAction -GitArgs @("init") -WorkingDirectory $tempRoot
+    Invoke-GitAction -GitArgs @("remote", "add", "upstream", $UpstreamUrl) -WorkingDirectory $tempRoot
+    Invoke-GitAction -GitArgs @("config", "--local", "core.protectNTFS", "false") -WorkingDirectory $tempRoot
+    Invoke-GitAction -GitArgs @("sparse-checkout", "init", "--no-cone") -WorkingDirectory $tempRoot
 
-# Windows invalid path 回避
-Invoke-GitAction -GitArgs @("config", "--local", "core.protectNTFS", "false") -WorkingDirectory $tempRoot
-Invoke-GitAction -GitArgs @("sparse-checkout", "init", "--no-cone") -WorkingDirectory $tempRoot
+    # Define sparse checkout patterns (safe, minimal sync)
+    $sparsePatterns = @(
+        "/searx/",
+        "/searxng_extra/",
+        "/requirements.txt",
+        "/requirements-server.txt",
+        "/setup.py",
+        "/README.rst",
+        "/LICENSE"
+    )
 
-# Windows fork に必要な安全なパスだけ取り込む
-$sparsePatterns = @(
-    "/searx/",
-    "/searxng_extra/",
-    "/requirements.txt",
-    "/requirements-server.txt",
-    "/setup.py",
-    "/README.rst",
-    "/LICENSE"
-)
+    $scFile = Join-Path $tempRoot ".git\info\sparse-checkout"
+    [System.IO.File]::WriteAllLines($scFile, $sparsePatterns, (New-Object System.Text.UTF8Encoding($false)))
 
-$scFile = Join-Path $tempRoot ".git\info\sparse-checkout"
-[System.IO.File]::WriteAllLines(
-    $scFile,
-    $sparsePatterns,
-    (New-Object System.Text.UTF8Encoding($false))
-)
+    Invoke-GitAction -GitArgs @("fetch", "--depth", "1", "upstream", $Ref) -WorkingDirectory $tempRoot
+    Invoke-GitAction -GitArgs @("checkout", "FETCH_HEAD") -WorkingDirectory $tempRoot
 
-Invoke-GitAction -GitArgs @("fetch", "--depth", "1", "upstream", $Ref) -WorkingDirectory $tempRoot
-Invoke-GitAction -GitArgs @("checkout", "FETCH_HEAD") -WorkingDirectory $tempRoot
+    $commitSha = (git -C $tempRoot rev-parse HEAD).Trim()
+    $commitDate = (git -C $tempRoot show -s --format=%cI HEAD).Trim()
 
-$commitSha = (git -C $tempRoot rev-parse HEAD).Trim()
-$commitDate = (git -C $tempRoot show -s --format=%cI HEAD).Trim()
+    Write-Host "✓ Upstream checkout successful" -ForegroundColor Green
+    Write-Host "  Commit:  $commitSha"
+    Write-Host "  Date:    $commitDate"
+    Write-Host ""
 
-Write-Host "Checked out upstream ref: $Ref" -ForegroundColor Yellow
-Write-Host "Resolved commit: $commitSha ($commitDate)" -ForegroundColor Yellow
+    # Sync core packages
+    $sitePackages = Join-Path $repoRoot "python\Lib\site-packages"
+    Write-Host "Syncing packages..." -ForegroundColor Green
 
-$sitePackages = Join-Path $repoRoot "python\Lib\site-packages"
-$dstSearx = Join-Path $sitePackages "searx"
-$dstExtra = Join-Path $sitePackages "searxng_extra"
+    $srcSearx = Join-Path $tempRoot "searx"
+    if (-not (Test-Path $srcSearx)) {
+        throw "ERROR: Upstream searx/ directory not found. Upstream structure may have changed."
+    }
+    Sync-MirrorItem -Src $srcSearx -Dst (Join-Path $sitePackages "searx")
+    Write-Host "  ✓ searx/"
 
-$srcSearx = Join-Path $tempRoot "searx"
-$srcExtra = Join-Path $tempRoot "searxng_extra"
+    $srcExtra = Join-Path $tempRoot "searxng_extra"
+    if (Test-Path $srcExtra) {
+        Sync-MirrorItem -Src $srcExtra -Dst (Join-Path $sitePackages "searxng_extra")
+        Write-Host "  ✓ searxng_extra/"
+    }
 
-if (-not (Test-Path $srcSearx)) {
-    throw "Upstream checkout does not contain searx directory."
-}
+    # Track requirements changes for user notification
+    $oldReqPath = Join-Path $repoRoot "config\requirements.upstream.txt"
+    $oldReqHash = ""
+    if (Test-Path $oldReqPath) {
+        $oldReqHash = (Get-FileHash $oldReqPath).Hash
+    }
 
-Write-Host "Syncing searx package..." -ForegroundColor Green
-Sync-MirrorItem -Src $srcSearx -Dst $dstSearx
+    # Copy requirements and other metadata
+    Write-Host "Syncing configuration files..." -ForegroundColor Green
+    Copy-Item (Join-Path $tempRoot "requirements.txt") $oldReqPath -Force
+    Write-Host "  ✓ requirements.txt"
 
-if (Test-Path $srcExtra) {
-    Write-Host "Syncing searxng_extra package..." -ForegroundColor Green
-    Sync-MirrorItem -Src $srcExtra -Dst $dstExtra
-}
+    if (Test-Path (Join-Path $tempRoot "requirements-server.txt")) {
+        Copy-Item (Join-Path $tempRoot "requirements-server.txt") `
+            (Join-Path $repoRoot "config\requirements-server.upstream.txt") -Force
+    }
+    Copy-Item (Join-Path $tempRoot "setup.py") (Join-Path $repoRoot "config\setup.upstream.py") -Force
+    Copy-Item (Join-Path $tempRoot "README.rst") (Join-Path $repoRoot "config\README.upstream.rst") -Force
 
-Copy-Item (Join-Path $tempRoot "requirements.txt") (Join-Path $repoRoot "config\requirements.upstream.txt") -Force
-if (Test-Path (Join-Path $tempRoot "requirements-server.txt")) {
-    Copy-Item (Join-Path $tempRoot "requirements-server.txt") (Join-Path $repoRoot "config\requirements-server.upstream.txt") -Force
-}
-Copy-Item (Join-Path $tempRoot "setup.py") (Join-Path $repoRoot "config\setup.upstream.py") -Force
-Copy-Item (Join-Path $tempRoot "README.rst") (Join-Path $repoRoot "config\README.upstream.rst") -Force
+    # Alert user if requirements changed
+    $newReqHash = (Get-FileHash $oldReqPath).Hash
+    if ($oldReqHash -ne "" -and ($oldReqHash -ne $newReqHash)) {
+        Write-Host ""
+        Write-Host "⚠  NOTICE: Upstream requirements.txt has changed!" -ForegroundColor Yellow
+        Write-Host "   Run: .\tools\install-requirements.ps1" -ForegroundColor Yellow
+    }
 
-# Detect if requirements changed
-$oldReqHash = ""
-if (Test-Path (Join-Path $repoRoot "config\requirements.upstream.txt")) {
-    $oldReqHash = (Get-FileHash (Join-Path $repoRoot "config\requirements.upstream.txt")).Hash
-}
-$newReqHash = (Get-FileHash (Join-Path $tempRoot "requirements.txt")).Hash
-
-if ($oldReqHash -and ($oldReqHash -ne $newReqHash)) {
-    Write-Host "WARNING: Upstream requirements.txt has changed!" -ForegroundColor Cyan
-    Write-Host "You should run '.\tools\install-requirements.ps1' to update your environment." -ForegroundColor Yellow
-}
-
-@"
+    Write-Host "Updating UPSTREAM_VERSION.txt..." -ForegroundColor Green
+    @"
 upstream_url=$UpstreamUrl
 ref_requested=$Ref
 resolved_commit=$commitSha
@@ -150,12 +152,21 @@ resolved_commit_date=$commitDate
 synced_at=$(Get-Date -Format o)
 "@ | Set-Content (Join-Path $repoRoot "UPSTREAM_VERSION.txt") -Encoding utf8
 
-Write-Host "Applying Windows patches..." -ForegroundColor Green
-& (Join-Path $repoRoot "tools\apply-windows-patches.ps1")
+    Write-Host ""
+    Write-Host "Applying Windows-specific patches..." -ForegroundColor Green
+    & (Join-Path $repoRoot "tools\apply-windows-patches.ps1")
 
-Write-Host "Done." -ForegroundColor Green
-
-if ($CleanTemp) {
-    Remove-Item -LiteralPath $tempRoot -Recurse -Force
-    Write-Host "Temp directory removed." -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "✓ Upstream synchronization complete!" -ForegroundColor Green
+}
+finally {
+    if ($CleanTemp -and (Test-Path $tempRoot)) {
+        Write-Host "Cleaning temporary directory..." -ForegroundColor Gray
+        try {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force
+        }
+        catch {
+            Write-Host "⚠  Warning: Could not remove temp directory: $_" -ForegroundColor Yellow
+        }
+    }
 }
