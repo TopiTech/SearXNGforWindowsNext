@@ -1,5 +1,9 @@
 <p align="center">
+  <img src="images/logo.png" alt="SearXNG Next Logo" width="300">
 </p>
+
+# SearXNG Next
+
 
 # SearXNG for Windows Next 🚀
 
