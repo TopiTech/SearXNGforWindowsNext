@@ -122,7 +122,7 @@ Update-Patch -FilePath (Join-Path $repoRoot "python\Lib\site-packages\searx\webu
     $liteFunc = @"
 
 def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
-    \"\"\"Returns a simplified JSON string (GenAI friendly)\"\"\"
+    """Returns a simplified JSON string (GenAI friendly)"""
     data = {
         'query': sq.query,
         'results': [
