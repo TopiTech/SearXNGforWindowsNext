@@ -1,5 +1,3 @@
  M UPSTREAM_VERSION.txt
- M python/Lib/site-packages/searx/settings_defaults.py
  M python/Lib/site-packages/searx/valkeydb.py
  M python/Lib/site-packages/searx/webapp.py
- M python/Lib/site-packages/searx/webutils.py
