@@ -1,3 +1,10 @@
  M UPSTREAM_VERSION.txt
+ M python/Lib/site-packages/searx/engines/mwmbl.py
+ M python/Lib/site-packages/searx/engines/wikidata.py
+ M python/Lib/site-packages/searx/engines/yep.py
+ M python/Lib/site-packages/searx/settings.yml
+ M python/Lib/site-packages/searx/templates/simple/macros.html
+ M python/Lib/site-packages/searx/templates/simple/result_templates/default.html
+ M python/Lib/site-packages/searx/templates/simple/result_templates/videos.html
  M python/Lib/site-packages/searx/valkeydb.py
  M python/Lib/site-packages/searx/webapp.py
