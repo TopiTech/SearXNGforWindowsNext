@@ -1,10 +1,19 @@
  M UPSTREAM_VERSION.txt
- M python/Lib/site-packages/searx/engines/mwmbl.py
+ M config/requirements.upstream.txt
+ M python/Lib/site-packages/searx/engines/360search.py
+ M python/Lib/site-packages/searx/engines/startpage.py
  M python/Lib/site-packages/searx/engines/wikidata.py
- M python/Lib/site-packages/searx/engines/yep.py
  M python/Lib/site-packages/searx/settings.yml
- M python/Lib/site-packages/searx/templates/simple/macros.html
- M python/Lib/site-packages/searx/templates/simple/result_templates/default.html
- M python/Lib/site-packages/searx/templates/simple/result_templates/videos.html
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/CQ8vfMdp.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/Cx4rGXMm.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/DGJ63wI6.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/DwAGgYJF.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/DyePpW7L.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/aUw47Wy0.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/sxng-core.min.js.map
+ M python/Lib/site-packages/searx/translations/eu/LC_MESSAGES/messages.mo
+ M python/Lib/site-packages/searx/translations/eu/LC_MESSAGES/messages.po
+ M python/Lib/site-packages/searx/translations/ga/LC_MESSAGES/messages.mo
+ M python/Lib/site-packages/searx/translations/ga/LC_MESSAGES/messages.po
  M python/Lib/site-packages/searx/valkeydb.py
  M python/Lib/site-packages/searx/webapp.py
