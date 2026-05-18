@@ -39,12 +39,14 @@ function Invoke-PythonPatch {
     )
     $tmpPy = Join-Path $env:TEMP $TempName
     try {
-        $PythonCode | Out-File -FilePath $tmpPy -Encoding utf8
+        # Use explicit .NET API to write BOM-less UTF-8 to avoid encoding mismatches in Python
+        [System.IO.File]::WriteAllText($tmpPy, $PythonCode, (New-Object System.Text.UTF8Encoding($false)))
         $output = & ".\python\python.exe" $tmpPy $TargetFile 2>&1
         $result = $output -join "`n"
         
-        if ($result -match "^ERROR:") {
-            throw "Python patch script failed: $result"
+        # Monitor both non-zero exit codes and script-emitted ERROR messages
+        if ($LASTEXITCODE -ne 0 -or $result -match "^ERROR:") {
+            throw "Python patch script failed (Exit Code: $LASTEXITCODE): $result"
         }
         return $result
     }
