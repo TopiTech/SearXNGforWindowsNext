@@ -1,19 +1,27 @@
  M UPSTREAM_VERSION.txt
- M config/requirements.upstream.txt
- M python/Lib/site-packages/searx/engines/360search.py
- M python/Lib/site-packages/searx/engines/startpage.py
+ M python/Lib/site-packages/searx/cache.py
+ M python/Lib/site-packages/searx/data/engine_traits.json
+ M python/Lib/site-packages/searx/enginelib/__init__.py
+ D python/Lib/site-packages/searx/engines/ask.py
+ M python/Lib/site-packages/searx/engines/google.py
+ M python/Lib/site-packages/searx/engines/google_news.py
  M python/Lib/site-packages/searx/engines/wikidata.py
+ M python/Lib/site-packages/searx/engines/yandex.py
+ M python/Lib/site-packages/searx/engines/yep.py
+ M python/Lib/site-packages/searx/external_urls.py
  M python/Lib/site-packages/searx/settings.yml
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/BnP4vIuG.min.js.map
  M python/Lib/site-packages/searx/static/themes/simple/chunk/CQ8vfMdp.min.js.map
  M python/Lib/site-packages/searx/static/themes/simple/chunk/Cx4rGXMm.min.js.map
  M python/Lib/site-packages/searx/static/themes/simple/chunk/DGJ63wI6.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/DH1EQbEY.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/DZidprJh.min.js.map
  M python/Lib/site-packages/searx/static/themes/simple/chunk/DwAGgYJF.min.js.map
  M python/Lib/site-packages/searx/static/themes/simple/chunk/DyePpW7L.min.js.map
  M python/Lib/site-packages/searx/static/themes/simple/chunk/aUw47Wy0.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/chlzpS6K.min.js.map
  M python/Lib/site-packages/searx/static/themes/simple/sxng-core.min.js.map
- M python/Lib/site-packages/searx/translations/eu/LC_MESSAGES/messages.mo
- M python/Lib/site-packages/searx/translations/eu/LC_MESSAGES/messages.po
- M python/Lib/site-packages/searx/translations/ga/LC_MESSAGES/messages.mo
- M python/Lib/site-packages/searx/translations/ga/LC_MESSAGES/messages.po
  M python/Lib/site-packages/searx/valkeydb.py
  M python/Lib/site-packages/searx/webapp.py
+ M python/Lib/site-packages/searxng_extra/update/update_engine_traits.py
+?? python/Lib/site-packages/searx/engines/cara.py
