@@ -520,6 +520,7 @@ engines:
     engine: ask
     shortcut: ask
     disabled: true
+    inactive: true
 
   # tmp suspended:  dh key too small
   # - name: base
