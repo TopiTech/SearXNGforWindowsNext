@@ -110,6 +110,36 @@ try {
     Sync-MirrorItem -Src $srcSearx -Dst (Join-Path $sitePackages "searx")
     Write-Host "  ✓ searx/"
 
+    # Validate engines referenced in config\settings.yml: if an upstream sync removed
+    # an engine module, mark the corresponding engine entry as disabled to avoid
+    # runtime module-not-found errors.
+    Write-Host "Validating engine modules referenced in config\settings.yml..." -ForegroundColor Green
+    $settingsPath = Join-Path $repoRoot "config\settings.yml"
+    $enginesDir = Join-Path $sitePackages "searx\engines"
+    if (Test-Path $settingsPath) {
+        try {
+            $content = Get-Content $settingsPath -Raw -ErrorAction Stop
+            $engineMatches = [regex]::Matches($content, "engine:\s*([^\r\n]+)")
+            foreach ($m in $engineMatches) {
+                $mod = $m.Groups[1].Value.Trim()
+                # skip complex engine entries (e.g., templated values)
+                if ($mod -match '[a-z0-9_\-]+') {
+                    $modFile = Join-Path $enginesDir ($mod + ".py")
+                    if (-not (Test-Path $modFile)) {
+                        Write-Host "  Engine module missing: $mod — marking disabled in settings.yml" -ForegroundColor Yellow
+                        if ($content -notmatch ("engine:\s*" + [regex]::Escape($mod) + "\s*[\r\n]+\s*disabled:")) {
+                            $content = $content -replace ("(engine:\s*" + [regex]::Escape($mod) + ")"), "`$1`n    disabled: true"
+                        }
+                    }
+                }
+            }
+            Set-Content -Path $settingsPath -Value $content -Encoding utf8
+        }
+        catch {
+            Write-Host "⚠  Warning: Could not validate settings.yml: $_" -ForegroundColor Yellow
+        }
+    }
+
     $srcExtra = Join-Path $tempRoot "searxng_extra"
     if (Test-Path $srcExtra) {
         Sync-MirrorItem -Src $srcExtra -Dst (Join-Path $sitePackages "searxng_extra")

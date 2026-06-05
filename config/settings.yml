@@ -1652,6 +1652,7 @@ engines:
 
   - name: podcastindex
     engine: podcastindex
+    disabled: true
     shortcut: podcast
     disabled: true
 
@@ -2516,6 +2517,7 @@ engines:
 
   - name: svgrepo
     engine: svgrepo
+    disabled: true
     shortcut: svg
     timeout: 10.0
     disabled: true
