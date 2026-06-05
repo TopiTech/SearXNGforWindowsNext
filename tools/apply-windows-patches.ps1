@@ -394,4 +394,61 @@ print("PATCHED")
     return $output.Contains("PATCHED")
 }
 
+
+# --- 6. engines/__init__.py (check disabled flag BEFORE loading module) ---
+Update-Patch `
+    -FilePath    (Join-Path $repoRoot "python\Lib\site-packages\searx\engines\__init__.py") `
+    -Description "engines/__init__.py (check disabled before module load)" `
+    -PatchLogic  {
+    param($c)
+    if ($c -match "if engine_data\.get\('disabled'\)") { 
+        return "ALREADY_APPLIED" 
+    }
+
+    $pyCode = @'
+import sys, re
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+# Check if patch already applied (idempotency)
+if "if engine_data.get('disabled')" in content:
+    print("ALREADY_APPLIED")
+    sys.exit(0)
+
+# Find the load_engine function and add disabled check BEFORE module load
+# Anchor: the line 'if engine_name.lower() != engine_name:' (common code)
+# Inject after lowercase conversion block, before module_name extraction
+
+inject_code = """
+
+    # Early return if engine is disabled in config (prevents FileNotFoundError on missing modules)
+    if engine_data.get('disabled'):
+        logger.debug('Engine "%s" is disabled in config, skipping load', engine_name)
+        return None
+"""
+
+# Insert after the engine name checks (after lowercase conversion)
+subs = re.subn(
+    r"(if engine_name\.lower\(\) != engine_name:.*?engine_data\['name'\] = engine_name\n)",
+    r"\1" + inject_code,
+    content, flags=re.S
+)
+
+if subs[1] == 0:
+    print("ERROR: Could not find anchor for disabled check (engine name section)")
+    sys.exit(1)
+content = subs[0]
+
+with open(path, 'w', encoding='utf-8', newline='\n') as f:
+    f.write(content)
+print("PATCHED")
+'@
+    $output = Invoke-PythonPatch -PythonCode $pyCode -TempName "patch_engines_init_disabled.py" `
+        -TargetFile (Join-Path $repoRoot "python\Lib\site-packages\searx\engines\__init__.py")
+
+    if ($output -match "ALREADY_APPLIED") { return "ALREADY_APPLIED" }
+    return $output.Contains("PATCHED")
+}
+
 Write-Host "✓ All Windows patches applied successfully." -ForegroundColor Green
