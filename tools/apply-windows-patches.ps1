@@ -274,9 +274,48 @@ if "output_format == 'json_lite'" not in content:
         sys.exit(1)
     content = subs[0]
 
-with open(path, 'w', encoding='utf-8', newline='\n') as f:
-    f.write(content)
-print("PATCHED")
+    # 2. Avoid error logs for engines that are intentionally disabled or inactive.
+    old_block = '''
+        for engine_data in engine_list:
+            if engine_data.get("inactive") is True:
+                continue
+            engine = load_engine(engine_data)
+            if engine:
+                register_engine(engine)
+            else:
+                # if an engine can't be loaded (if for example the engine is missing
+                # tor or some other requirements) its set to inactive!
+                logger.error("loading engine %s failed: set engine to inactive!", engine_data.get("name", "???"))
+                engine_data["inactive"] = True
+    '''
+
+    new_block = '''
+        for engine_data in engine_list:
+            if engine_data.get("inactive") is True or engine_data.get("disabled") is True:
+                logger.debug(
+                    "loading engine %s skipped: inactive or disabled in config!",
+                    engine_data.get("name", "???"),
+                )
+                continue
+            engine = load_engine(engine_data)
+            if engine:
+                register_engine(engine)
+            else:
+                # if an engine can't be loaded (if for example the engine is missing
+                # tor or some other requirements) its set to inactive!
+                logger.error("loading engine %s failed: set engine to inactive!", engine_data.get("name", "???"))
+                engine_data["inactive"] = True
+    '''
+
+    if old_block in content:
+        content = content.replace(old_block, new_block)
+    else:
+        print("ERROR: load_engines patch failed (anchor not found)")
+        sys.exit(1)
+
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(content)
+    print("PATCHED")
 '@
     $output = Invoke-PythonPatch -PythonCode $pyCode -TempName "patch_webapp_json.py" `
         -TargetFile (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py")
@@ -409,7 +448,7 @@ Update-Patch `
     -Description "engines/__init__.py (check disabled before module load)" `
     -PatchLogic  {
     param($c)
-    if ($c -match "if engine_data\.get\('disabled'\)") { 
+    if ($c -match "loading engine %s skipped: inactive or disabled in config!") { 
         return "ALREADY_APPLIED" 
     }
 
@@ -420,18 +459,25 @@ with open(path, 'r', encoding='utf-8') as f:
     content = f.read()
 
 # Check if patch already applied (idempotency)
-if "if engine_data.get('disabled')" in content:
+if (
+    "Engine \"%s\" is inactive in config, skipping load" in content
+    and "Engine \"%s\" is disabled in config, skipping load" in content
+    and "loading engine %s skipped: inactive or disabled in config!" in content
+):
     print("ALREADY_APPLIED")
     sys.exit(0)
 
-# Find the load_engine function and add disabled check BEFORE module load
+# Find the load_engine function and add inactive/disabled checks BEFORE module load
 # Anchor: the line 'if engine_name.lower() != engine_name:' (common code)
 # Inject after lowercase conversion block, before module_name extraction
 
 inject_code = """
 
-    # Early return if engine is disabled in config (prevents FileNotFoundError on missing modules)
-    if engine_data.get('disabled'):
+    # Early return for engines that are intentionally disabled or inactive in config.
+    if engine_data.get('inactive') is True:
+        logger.debug('Engine "%s" is inactive in config, skipping load', engine_name)
+        return None
+    if engine_data.get('disabled') is True:
         logger.debug('Engine "%s" is disabled in config, skipping load', engine_name)
         return None
 """
@@ -448,12 +494,118 @@ if subs[1] == 0:
     sys.exit(1)
 content = subs[0]
 
+# Avoid error logs for engines that are intentionally disabled or inactive.
+old_block = '''
+    for engine_data in engine_list:
+        if engine_data.get("inactive") is True:
+            continue
+        engine = load_engine(engine_data)
+        if engine:
+            register_engine(engine)
+        else:
+            # if an engine can't be loaded (if for example the engine is missing
+            # tor or some other requirements) its set to inactive!
+            logger.error("loading engine %s failed: set engine to inactive!", engine_data.get("name", "???"))
+            engine_data["inactive"] = True
+'''
+
+new_block = '''
+    for engine_data in engine_list:
+        if engine_data.get("inactive") is True or engine_data.get("disabled") is True:
+            logger.debug(
+                "loading engine %s skipped: inactive or disabled in config!",
+                engine_data.get("name", "???"),
+            )
+            continue
+        engine = load_engine(engine_data)
+        if engine:
+            register_engine(engine)
+        else:
+            # if an engine can't be loaded (if for example the engine is missing
+            # tor or some other requirements) its set to inactive!
+            logger.error("loading engine %s failed: set engine to inactive!", engine_data.get("name", "???"))
+            engine_data["inactive"] = True
+'''
+
+if old_block in content:
+    content = content.replace(old_block, new_block)
+else:
+    print("ERROR: load_engines patch failed (anchor not found)")
+    sys.exit(1)
+
 with open(path, 'w', encoding='utf-8', newline='\n') as f:
     f.write(content)
 print("PATCHED")
 '@
     $output = Invoke-PythonPatch -PythonCode $pyCode -TempName "patch_engines_init_disabled.py" `
         -TargetFile (Join-Path $repoRoot "python\Lib\site-packages\searx\engines\__init__.py")
+
+    if ($output -match "ALREADY_APPLIED") { return "ALREADY_APPLIED" }
+    return $output.Contains("PATCHED")
+}
+
+
+# --- 7. search/processors/__init__.py (skip intentionally disabled engines) ---
+Update-Patch `
+    -FilePath    (Join-Path $repoRoot "python\Lib\site-packages\searx\search\processors\__init__.py") `
+    -Description "search/processors/__init__.py (skip disabled engines)" `
+    -PatchLogic  {
+    param($c)
+    if ($c -match "skipping processor init") {
+        return "ALREADY_APPLIED"
+    }
+
+    $pyCode = @'
+import sys
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+if "skipping processor init" in content:
+    print("ALREADY_APPLIED")
+    sys.exit(0)
+
+old_block = '''
+        for eng_settings in engine_list:
+            eng_name: str = eng_settings["name"]
+
+            if eng_settings.get("inactive", False) is True:
+                continue
+
+            eng_obj = engines.engines.get(eng_name)
+            if eng_obj is None:
+                logger.warning("Engine of name '%s' does not exists.", eng_name)
+                continue
+'''
+
+new_block = '''
+        for eng_settings in engine_list:
+            eng_name: str = eng_settings["name"]
+
+            if eng_settings.get("inactive", False) is True:
+                continue
+            if eng_settings.get("disabled", False) is True:
+                logger.debug("Engine '%s' is disabled in config, skipping processor init.", eng_name)
+                continue
+
+            eng_obj = engines.engines.get(eng_name)
+            if eng_obj is None:
+                logger.warning("Engine of name '%s' does not exists.", eng_name)
+                continue
+'''
+
+if old_block in content:
+    content = content.replace(old_block, new_block)
+else:
+    print("ERROR: processor init patch failed (anchor not found)")
+    sys.exit(1)
+
+with open(path, 'w', encoding='utf-8', newline='\n') as f:
+    f.write(content)
+print("PATCHED")
+'@
+    $output = Invoke-PythonPatch -PythonCode $pyCode -TempName "patch_processors_init_disabled.ps1" `
+        -TargetFile (Join-Path $repoRoot "python\Lib\site-packages\searx\search\processors\__init__.py")
 
     if ($output -match "ALREADY_APPLIED") { return "ALREADY_APPLIED" }
     return $output.Contains("PATCHED")
