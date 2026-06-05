@@ -37,7 +37,7 @@ workspace/
    - Sets `SEARXNG_SETTINGS_PATH` environment variable
    - Launches `python\Lib\site-packages\searx\webapp.py`
 
-2. **webb.py** → Flask server
+2. **webapp.py** → Flask server
    - Binds to `http://127.0.0.1:8888` (localhost only)
    - Handles `/search`, `/scrape` (custom), and standard SearXNG routes
    - Applies search engine filtering + output formatting

@@ -147,8 +147,13 @@ Update-Patch `
     -PatchLogic  {
     param($c)
     if ($c -match "'json_lite'") { return "ALREADY_APPLIED" }
-    # (?s) lets .* span newlines for multi-line list definitions
-    $c = $c -replace "(?s)(OUTPUT_FORMATS\s*=\s*\[)(.*?)(\])", "`$1`$2, 'json_lite'`$3"
+    
+    # Robust: Insert before closing bracket of OUTPUT_FORMATS list, regardless of formatting
+    # Handles single-line: OUTPUT_FORMATS = [..., 'json']
+    # Also handles multi-line: OUTPUT_FORMATS = [
+    #                             'json',
+    #                          ]
+    $c = $c -replace "(?m)(OUTPUT_FORMATS\s*=\s*\[[^\]]*)'json'(\s*)\]", "`$1'json'`$2, 'json_lite'`$2]"
     return $c
 }
 
@@ -323,8 +328,8 @@ def scrape():
     SECURITY: Blocks loopback (127.x), private/reserved IP ranges, link-local, 
     and file:// scheme to prevent SSRF attacks and internal resource exposure.
     
-    NOTE: verify=False in SSL context is safe only because this server is 
-    bound to localhost (127.0.0.1) and not accessible from internet.
+    NOTE: SSL verification is disabled by default (safe for localhost-only deployment).
+    Set SEARXNG_SCRAPE_VERIFY_SSL=true for internet-facing deployments.
     """
     url = sxng_request.values.get('url')
     if not url and sxng_request.is_json and sxng_request.json:
@@ -350,15 +355,18 @@ def scrape():
         pass  # hostname, not IP literal
 
     try:
+        # Determine SSL verification (default: disabled for localhost, enable for production)
+        verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'false').lower() in ('true', '1', 'yes')
+        
         # Fetch using trafilatura (optimized for content extraction)
         downloaded = trafilatura.fetch_url(url)
         if not downloaded:
             # Fallback: use httpx with realistic UA (many sites block headless requests)
-            # NOTE: UA spoofing for legitimate UX enhancement, not malware evasion
+            # UA for legitimate UX enhancement: many servers require standard browser headers
             ua = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                   'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
             with httpx.Client(timeout=10.0, follow_redirects=True,
-                              verify=False, headers={'User-Agent': ua}) as client:
+                              verify=verify_ssl, headers={'User-Agent': ua}) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 downloaded = resp.text

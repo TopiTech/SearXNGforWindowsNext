@@ -61,36 +61,52 @@ jobs:
         shell: pwsh
         run: |
           .\tools\sync-upstream.ps1 -Ref "${{ steps.ref.outputs.requested_ref }}" -CleanTemp
+       continue-on-error: true
+       id: sync
+
+      - name: Handle sync failure
+       if: steps.sync.outcome == 'failure'
+       uses: actions/github-script@v7
+       with:
+         script: |
+           github.rest.issues.createComment({
+             issue_number: context.issue.number,
+             owner: context.repo.owner,
+             repo: context.repo.repo,
+             body: '❌ **Upstream sync failed** (Workflow: ${{ github.run_id }})\n\nPlease check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.'
+           })
 
       - name: Read upstream version metadata
-        id: meta
-        shell: pwsh
-        run: |
-          if (-not (Test-Path .\UPSTREAM_VERSION.txt)) {
-            throw "UPSTREAM_VERSION.txt not found after sync."
-          }
+       if: steps.sync.outcome == 'success'
+       id: meta
+       shell: pwsh
+       run: |
+         if (-not (Test-Path .\UPSTREAM_VERSION.txt)) {
+           throw "UPSTREAM_VERSION.txt not found after sync."
+         }
 
-          $map = @{}
-          Get-Content .\UPSTREAM_VERSION.txt | ForEach-Object {
-            if ($_ -match '^\s*([^=]+)=(.*)$') {
-              $map[$matches[1].Trim()] = $matches[2].Trim()
-            }
-          }
+         $map = @{}
+         Get-Content .\UPSTREAM_VERSION.txt | ForEach-Object {
+           if ($_ -match '^\s*([^=]+)=(.*)$') {
+             $map[$matches[1].Trim()] = $matches[2].Trim()
+           }
+         }
 
-          $resolved = $map["resolved_commit"]
-          $requested = $map["ref_requested"]
-          $date = $map["resolved_commit_date"]
+         $resolved = $map["resolved_commit"]
+         $requested = $map["ref_requested"]
+         $date = $map["resolved_commit_date"]
 
-          if ([string]::IsNullOrWhiteSpace($resolved)) {
-            throw "resolved_commit not found in UPSTREAM_VERSION.txt"
-          }
+         if ([string]::IsNullOrWhiteSpace($resolved)) {
+           throw "resolved_commit not found in UPSTREAM_VERSION.txt"
+         }
 
-          "resolved_commit=$resolved" >> $env:GITHUB_OUTPUT
-          "requested_ref=$requested" >> $env:GITHUB_OUTPUT
-          "resolved_commit_date=$date" >> $env:GITHUB_OUTPUT
+         "resolved_commit=$resolved" >> $env:GITHUB_OUTPUT
+         "requested_ref=$requested" >> $env:GITHUB_OUTPUT
+         "resolved_commit_date=$date" >> $env:GITHUB_OUTPUT
 
       - name: Detect repository changes
-        id: changes
+       if: steps.sync.outcome == 'success'
+       id: changes
         shell: pwsh
         run: |
           $status = git status --porcelain
@@ -102,20 +118,20 @@ jobs:
           }
 
       - name: Show changed files
-        if: steps.changes.outputs.has_changes == 'true'
+       if: steps.sync.outcome == 'success' && steps.changes.outputs.has_changes == 'true'
         shell: pwsh
         run: |
           Get-Content .\changed_files.txt
 
       - name: Optional sanity checks
-        if: steps.changes.outputs.has_changes == 'true'
+       if: steps.sync.outcome == 'success' && steps.changes.outputs.has_changes == 'true'
         shell: pwsh
         run: |
           python -m py_compile .\python\Lib\site-packages\searx\valkeydb.py
           python -m py_compile .\python\Lib\site-packages\searx\webapp.py
 
       - name: Create or update PR
-        if: steps.changes.outputs.has_changes == 'true' || github.event.inputs.force_pr == 'true'
+       if: (steps.sync.outcome == 'success') && (steps.changes.outputs.has_changes == 'true' || github.event.inputs.force_pr == 'true')
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

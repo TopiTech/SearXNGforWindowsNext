@@ -122,9 +122,16 @@ class Tools:
         try:
             response = requests.get(url, timeout=10)
             response.raise_for_status()
+            response.json()  # Validate JSON format
             return response.text
+        except requests.exceptions.Timeout:
+            return "SearXNG への接続タイムアウト: リクエストが10秒以内に完了しませんでした"
+        except requests.exceptions.HTTPError as e:
+            return f"SearXNG HTTP エラー: {e.response.status_code}"
+        except requests.exceptions.JSONDecodeError:
+            return "SearXNG レスポンス形式エラー: 無効なJSON形式です"
         except Exception as e:
-            return f"SearXNG への接続エラー: {str(e)}"
+            return f"SearXNG への接続エラー: {str(e)[:100]}"
 
     def get_website_content(self, url: str) -> str:
         """
@@ -137,10 +144,24 @@ class Tools:
         try:
             response = requests.get(scrape_api_url, timeout=15)
             response.raise_for_status()
-            # 抽出された本文のみを返す
-            return response.json().get("content", "本文の抽出に失敗しました。")
+            data = response.json()
+            content = data.get("content", "本文の抽出に失敗しました。")
+            if not content:
+                return "抽出可能な本文が見つかりませんでした。"
+            return content
+        except requests.exceptions.Timeout:
+            return f"スクレイピングタイムアウト: {url} からのレスポンスが15秒以内に得られませんでした"
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                return f"ブロック済み: プライベートIP、ループバック、またはファイルスキームです"
+            elif e.response.status_code == 422:
+                return f"本文抽出失敗: {url} から抽出可能な内容がありません"
+            else:
+                return f"スクレイピング HTTP エラー: {e.response.status_code}"
+        except requests.exceptions.JSONDecodeError:
+            return "スクレイピングレスポンス形式エラー: 無効なJSON形式です"
         except Exception as e:
-            return f"スクレイピングエラー: {str(e)}"
+            return f"スクレイピングエラー: {str(e)[:100]}"
 ```
 
 #### 2. モデルへの適用
