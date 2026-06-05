@@ -1,6 +1,7 @@
 @echo off
+setlocal
+cd /d "%~dp0"
 title SearXNG for Windows Server
-
 REM === Pre-flight checks ===
 echo Checking prerequisites...
 if not exist ".\python\python.exe" (

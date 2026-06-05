@@ -41,7 +41,8 @@ function Invoke-PythonPatch {
     try {
         # Use explicit .NET API to write BOM-less UTF-8 to avoid encoding mismatches in Python
         [System.IO.File]::WriteAllText($tmpPy, $PythonCode, (New-Object System.Text.UTF8Encoding($false)))
-        $output = & ".\python\python.exe" $tmpPy $TargetFile 2>&1
+        $pythonExe = Join-Path $repoRoot "python\python.exe"
+        $output = & $pythonExe $tmpPy $TargetFile 2>&1
         $result = $output -join "`n"
 
         # Monitor both non-zero exit codes and script-emitted ERROR messages
@@ -565,7 +566,7 @@ with open(path, 'w', encoding='utf-8', newline='\n') as f:
     f.write(content)
 print("PATCHED")
 '@
-    $output = Invoke-PythonPatch -PythonCode $pyCode -TempName "patch_processors_init_disabled.ps1" `
+    $output = Invoke-PythonPatch -PythonCode $pyCode -TempName "patch_processors_init_disabled.py" `
         -TargetFile (Join-Path $repoRoot "python\Lib\site-packages\searx\search\processors\__init__.py")
 
     if ($output -match "ALREADY_APPLIED") { return "ALREADY_APPLIED" }
