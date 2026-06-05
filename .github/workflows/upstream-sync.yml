@@ -58,29 +58,35 @@ jobs:
           "requested_ref=$ref" >> $env:GITHUB_OUTPUT
 
       - name: Run upstream sync
+        id: sync
+        continue-on-error: true
         shell: pwsh
         run: |
-          .\tools\sync-upstream.ps1 -Ref "${{ steps.ref.outputs.requested_ref }}" -CleanTemp
-       continue-on-error: true
-       id: sync
+         .\tools\sync-upstream.ps1 -Ref "${{ steps.ref.outputs.requested_ref }}" -CleanTemp
 
       - name: Handle sync failure
-       if: steps.sync.outcome == 'failure'
-       uses: actions/github-script@v7
-       with:
+        if: steps.sync.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
          script: |
-           github.rest.issues.createComment({
-             issue_number: context.issue.number,
-             owner: context.repo.owner,
-             repo: context.repo.repo,
-             body: '❌ **Upstream sync failed** (Workflow: ${{ github.run_id }})\n\nPlease check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.'
-           })
+           const issueNumber = context.issue && context.issue.number;
+           if (issueNumber) {
+             await github.rest.issues.createComment({
+               issue_number: issueNumber,
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               body: '❌ **Upstream sync failed** (Workflow: ${{ github.run_id }})\n\nPlease check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.'
+             });
+           } else {
+             core.warning('Upstream sync failed, but there is no issue or PR context to comment on.');
+           }
+           core.setFailed('Upstream sync failed.');
 
       - name: Read upstream version metadata
-       if: steps.sync.outcome == 'success'
-       id: meta
-       shell: pwsh
-       run: |
+        if: steps.sync.outcome == 'success'
+        id: meta
+        shell: pwsh
+        run: |
          if (-not (Test-Path .\UPSTREAM_VERSION.txt)) {
            throw "UPSTREAM_VERSION.txt not found after sync."
          }
@@ -105,33 +111,33 @@ jobs:
          "resolved_commit_date=$date" >> $env:GITHUB_OUTPUT
 
       - name: Detect repository changes
-       if: steps.sync.outcome == 'success'
-       id: changes
+        if: steps.sync.outcome == 'success'
+        id: changes
         shell: pwsh
         run: |
-          $status = git status --porcelain
-          if ([string]::IsNullOrWhiteSpace($status)) {
-            "has_changes=false" >> $env:GITHUB_OUTPUT
-          } else {
-            "has_changes=true" >> $env:GITHUB_OUTPUT
-            $status | Out-File -FilePath changed_files.txt -Encoding utf8
-          }
+         $status = git status --porcelain
+         if ([string]::IsNullOrWhiteSpace($status)) {
+           "has_changes=false" >> $env:GITHUB_OUTPUT
+         } else {
+           "has_changes=true" >> $env:GITHUB_OUTPUT
+           $status | Out-File -FilePath changed_files.txt -Encoding utf8
+         }
 
       - name: Show changed files
-       if: steps.sync.outcome == 'success' && steps.changes.outputs.has_changes == 'true'
+        if: steps.sync.outcome == 'success' && steps.changes.outputs.has_changes == 'true'
         shell: pwsh
         run: |
-          Get-Content .\changed_files.txt
+         Get-Content .\changed_files.txt
 
       - name: Optional sanity checks
-       if: steps.sync.outcome == 'success' && steps.changes.outputs.has_changes == 'true'
+        if: steps.sync.outcome == 'success' && steps.changes.outputs.has_changes == 'true'
         shell: pwsh
         run: |
-          python -m py_compile .\python\Lib\site-packages\searx\valkeydb.py
-          python -m py_compile .\python\Lib\site-packages\searx\webapp.py
+         python -m py_compile .\python\Lib\site-packages\searx\valkeydb.py
+         python -m py_compile .\python\Lib\site-packages\searx\webapp.py
 
       - name: Create or update PR
-       if: (steps.sync.outcome == 'success') && (steps.changes.outputs.has_changes == 'true' || github.event.inputs.force_pr == 'true')
+        if: (steps.sync.outcome == 'success') && (steps.changes.outputs.has_changes == 'true' || github.event.inputs.force_pr == 'true')
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -140,22 +146,22 @@ jobs:
           delete-branch: true
           title: "sync: upstream searxng ${{ steps.meta.outputs.resolved_commit }}"
           body: |
-            This automated PR syncs the Windows fork with upstream **searxng/searxng**.
+           This automated PR syncs the Windows fork with upstream **searxng/searxng**.
 
-            ## Sync metadata
-            - Requested ref: `${{ steps.meta.outputs.requested_ref }}`
-            - Resolved commit: `${{ steps.meta.outputs.resolved_commit }}`
-            - Resolved commit date: `${{ steps.meta.outputs.resolved_commit_date }}`
+           ## Sync metadata
+           - Requested ref: `${{ steps.meta.outputs.requested_ref }}`
+           - Resolved commit: `${{ steps.meta.outputs.resolved_commit }}`
+           - Resolved commit date: `${{ steps.meta.outputs.resolved_commit_date }}`
 
-            ## Notes
-            - Source of truth is **searxng/searxng**
-            - Windows compatibility patches are re-applied after sync
-            - This PR was generated automatically by GitHub Actions
+           ## Notes
+           - Source of truth is **searxng/searxng**
+           - Windows compatibility patches are re-applied after sync
+           - This PR was generated automatically by GitHub Actions
 
-            ## Suggested checks
-            - Start with `SearXNG for Windows.bat`
-            - Verify `http://127.0.0.1:8888`
-            - Verify `/search?q=test&format=json` if JSON API is enabled
+           ## Suggested checks
+           - Start with `SearXNG for Windows.bat`
+           - Verify `http://127.0.0.1:8888`
+           - Verify `/search?q=test&format=json` if JSON API is enabled
           branch-suffix: timestamp
 
       - name: No changes summary
