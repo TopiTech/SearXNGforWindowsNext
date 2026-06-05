@@ -43,7 +43,7 @@ function Invoke-PythonPatch {
         [System.IO.File]::WriteAllText($tmpPy, $PythonCode, (New-Object System.Text.UTF8Encoding($false)))
         $output = & ".\python\python.exe" $tmpPy $TargetFile 2>&1
         $result = $output -join "`n"
-        
+
         # Monitor both non-zero exit codes and script-emitted ERROR messages
         if ($LASTEXITCODE -ne 0 -or $result -match "^ERROR:") {
             throw "Python patch script failed (Exit Code: $LASTEXITCODE): $result"
@@ -147,7 +147,7 @@ Update-Patch `
     -PatchLogic  {
     param($c)
     if ($c -match "'json_lite'") { return "ALREADY_APPLIED" }
-    
+
     # Robust: Insert before closing bracket of OUTPUT_FORMATS list, regardless of formatting
     # Handles single-line: OUTPUT_FORMATS = [..., 'json']
     # Also handles multi-line: OUTPUT_FORMATS = [
@@ -243,12 +243,12 @@ if "output_format in ('json', 'json_lite')" not in content:
 # 2. Add top-level `import ipaddress` (remove any indented duplicates first)
 if not re.search(r'^import ipaddress', content, re.M):
     content = re.sub(r'^\s+import ipaddress\n', '', content, flags=re.M)
-    
+
     # Try to anchor after warnings
     subs = re.subn(r'(import warnings\n)', r'\1import ipaddress\n', content)
     if subs[1] == 0:
         subs = re.subn(r'(import httpx\n)', r'import ipaddress\n\1', content)
-    
+
     if subs[1] == 0:
         print("ERROR: ipaddress import patch failed (no anchor points)")
         sys.exit(1)
@@ -268,7 +268,7 @@ if "output_format == 'json_lite'" not in content:
     )
     if subs[1] == 0:
         subs = re.subn(r"(# 3\. formats without a template\r?\n)", r"\1" + handler, content)
-    
+
     if subs[1] == 0:
         print("ERROR: json_lite handler patch failed (inject point not found)")
         sys.exit(1)
@@ -331,8 +331,8 @@ Update-Patch `
     -Description "webapp.py (/scrape endpoint, SSRF-protected)" `
     -PatchLogic  {
     param($c)
-    if ($c -match "def scrape\(\)" -and $c -match "import trafilatura") { 
-        return "ALREADY_APPLIED" 
+    if ($c -match "def scrape\(\)" -and $c -match "import trafilatura") {
+        return "ALREADY_APPLIED"
     }
 
     $pyCode = @'
@@ -363,10 +363,10 @@ scrape_route = '''
 @app.route('/scrape', methods=['GET', 'POST'])
 def scrape():
     """Extract main text content from URL (GenAI friendly, SSRF-protected).
-    
-    SECURITY: Blocks loopback (127.x), private/reserved IP ranges, link-local, 
+
+    SECURITY: Blocks loopback (127.x), private/reserved IP ranges, link-local,
     and file:// scheme to prevent SSRF attacks and internal resource exposure.
-    
+
     NOTE: SSL verification is disabled by default (safe for localhost-only deployment).
     Set SEARXNG_SCRAPE_VERIFY_SSL=true for internet-facing deployments.
     """
@@ -396,7 +396,7 @@ def scrape():
     try:
         # Determine SSL verification (default: disabled for localhost, enable for production)
         verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'false').lower() in ('true', '1', 'yes')
-        
+
         # Fetch using trafilatura (optimized for content extraction)
         downloaded = trafilatura.fetch_url(url)
         if not downloaded:
@@ -448,8 +448,8 @@ Update-Patch `
     -Description "engines/__init__.py (check disabled before module load)" `
     -PatchLogic  {
     param($c)
-    if ($c -match "loading engine %s skipped: inactive or disabled in config!") { 
-        return "ALREADY_APPLIED" 
+    if ($c -match "loading engine %s skipped: inactive or disabled in config!") {
+        return "ALREADY_APPLIED"
     }
 
     $pyCode = @'
