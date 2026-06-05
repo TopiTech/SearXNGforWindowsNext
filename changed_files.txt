@@ -1,15 +1,8 @@
  M UPSTREAM_VERSION.txt
- M config/requirements.upstream.txt
  M config/settings.yml
- M python/Lib/site-packages/searx/engines/bilibili.py
- M python/Lib/site-packages/searx/engines/duckduckgo_extra.py
- M python/Lib/site-packages/searx/engines/gmx.py
- M python/Lib/site-packages/searx/engines/json_engine.py
- M python/Lib/site-packages/searx/engines/public_domain_image_archive.py
- M python/Lib/site-packages/searx/engines/xpath.py
- M python/Lib/site-packages/searx/search/processors/online.py
- M python/Lib/site-packages/searx/settings.yml
- M python/Lib/site-packages/searx/translations/ko/LC_MESSAGES/messages.mo
- M python/Lib/site-packages/searx/translations/ko/LC_MESSAGES/messages.po
+ M python/Lib/site-packages/searx/engines/__init__.py
+ M python/Lib/site-packages/searx/search/processors/__init__.py
+ M python/Lib/site-packages/searx/settings_defaults.py
  M python/Lib/site-packages/searx/valkeydb.py
  M python/Lib/site-packages/searx/webapp.py
+ M python/Lib/site-packages/searx/webutils.py
