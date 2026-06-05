@@ -518,6 +518,7 @@ engines:
 
   - name: ask
     engine: ask
+    disabled: true
     shortcut: ask
     disabled: true
     inactive: true
@@ -1417,6 +1418,7 @@ engines:
       - https://translate.bus-hit.me
       - https://nyc1.mz.ggtyler.dev
     # mozhi_engine: google - see https://mozhi.aryak.me for supported engines
+    disabled: true
     timeout: 4.0
     shortcut: mz
     disabled: true
@@ -1853,6 +1855,7 @@ engines:
   #   shortcut : rds
   #   disabled: true
   #   engine: redis_server
+    disabled: true
   #   exact_match_only: false
   #   host: '127.0.0.1'
   #   port: 6379
@@ -2758,3 +2761,4 @@ doi_resolvers:
   sci-hub.ru: 'https://sci-hub.ru/'
 
 default_doi_resolver: 'oadoi.org'
+
