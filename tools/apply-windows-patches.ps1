@@ -153,7 +153,7 @@ Update-Patch `
     # Also handles multi-line: OUTPUT_FORMATS = [
     #                             'json',
     #                          ]
-    $c = $c -replace "(?m)(OUTPUT_FORMATS\s*=\s*\[[^\]]*)'json'(\s*)\]", "`$1'json'`$2, 'json_lite'`$2]"
+    $c = $c -replace "(?m)(OUTPUT_FORMATS\s*=\s*\[[^\]]*'json')([^\]]*\])", "`$1, 'json_lite'`$2"
     return $c
 }
 
@@ -274,48 +274,9 @@ if "output_format == 'json_lite'" not in content:
         sys.exit(1)
     content = subs[0]
 
-    # 2. Avoid error logs for engines that are intentionally disabled or inactive.
-    old_block = '''
-        for engine_data in engine_list:
-            if engine_data.get("inactive") is True:
-                continue
-            engine = load_engine(engine_data)
-            if engine:
-                register_engine(engine)
-            else:
-                # if an engine can't be loaded (if for example the engine is missing
-                # tor or some other requirements) its set to inactive!
-                logger.error("loading engine %s failed: set engine to inactive!", engine_data.get("name", "???"))
-                engine_data["inactive"] = True
-    '''
-
-    new_block = '''
-        for engine_data in engine_list:
-            if engine_data.get("inactive") is True or engine_data.get("disabled") is True:
-                logger.debug(
-                    "loading engine %s skipped: inactive or disabled in config!",
-                    engine_data.get("name", "???"),
-                )
-                continue
-            engine = load_engine(engine_data)
-            if engine:
-                register_engine(engine)
-            else:
-                # if an engine can't be loaded (if for example the engine is missing
-                # tor or some other requirements) its set to inactive!
-                logger.error("loading engine %s failed: set engine to inactive!", engine_data.get("name", "???"))
-                engine_data["inactive"] = True
-    '''
-
-    if old_block in content:
-        content = content.replace(old_block, new_block)
-    else:
-        print("ERROR: load_engines patch failed (anchor not found)")
-        sys.exit(1)
-
-    with open(path, 'w', encoding='utf-8', newline='\n') as f:
-        f.write(content)
-    print("PATCHED")
+with open(path, 'w', encoding='utf-8', newline='\n') as f:
+    f.write(content)
+print("PATCHED")
 '@
     $output = Invoke-PythonPatch -PythonCode $pyCode -TempName "patch_webapp_json.py" `
         -TargetFile (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py")
