@@ -16,15 +16,21 @@ function Assert-Command {
 
 function Initialize-Directory {
     param([string]$Path)
-    if (-not (Test-Path $Path)) {
+    if (-not (Test-Path -LiteralPath $Path)) {
         New-Item -ItemType Directory -Path $Path | Out-Null
     }
+}
+
+function Write-Section {
+    param([string]$Message)
+    Write-Host ""
+    Write-Host $Message -ForegroundColor Cyan
 }
 
 function Sync-MirrorItem {
     param([string]$Src, [string]$Dst)
     Initialize-Directory (Split-Path -Parent $Dst)
-    if (Test-Path $Dst) {
+    if (Test-Path -LiteralPath $Dst) {
         Remove-Item -LiteralPath $Dst -Recurse -Force
     }
     Copy-Item -LiteralPath $Src -Destination $Dst -Recurse -Force
@@ -63,7 +69,7 @@ try {
     Write-Host ""
 
     # Clean temp directory
-    if (Test-Path $tempRoot) {
+    if (Test-Path -LiteralPath $tempRoot) {
         Remove-Item -LiteralPath $tempRoot -Recurse -Force
     }
     Initialize-Directory $tempRoot
@@ -123,17 +129,19 @@ try {
             foreach ($m in $engineMatches) {
                 $mod = $m.Groups[1].Value.Trim()
                 # skip complex engine entries (e.g., templated values)
-                if ($mod -match '[a-z0-9_\-]+') {
+                if ($mod -match '^[a-z0-9_-]+$') {
                     $modFile = Join-Path $enginesDir ($mod + ".py")
-                    if (-not (Test-Path $modFile)) {
+                    if (-not (Test-Path -LiteralPath $modFile)) {
                         Write-Host "  Engine module missing: $mod — marking disabled in settings.yml" -ForegroundColor Yellow
-                        if ($content -notmatch ("engine:\s*" + [regex]::Escape($mod) + "\s*[\r\n]+\s*disabled:")) {
-                            $content = $content -replace ("(engine:\s*" + [regex]::Escape($mod) + ")"), "`$1`n    disabled: true"
+                        $engineLinePattern = "(?m)^(\\s*engine:\\s*" + [regex]::Escape($mod) + "\\s*)$"
+                        $hasDisabledLine = $content -match ("(?m)^\\s*engine:\\s*" + [regex]::Escape($mod) + "\\s*\\r?\\n\\s*disabled:")
+                        if (-not $hasDisabledLine) {
+                            $content = $content -replace $engineLinePattern, "`$1`n    disabled: true"
                         }
                     }
                 }
             }
-            Set-Content -Path $settingsPath -Value $content -Encoding utf8
+            Set-Content -LiteralPath $settingsPath -Value $content -Encoding utf8
         }
         catch {
             Write-Host "⚠  Warning: Could not validate settings.yml: $_" -ForegroundColor Yellow
@@ -155,15 +163,15 @@ try {
 
     # Copy requirements and other metadata
     Write-Host "Syncing configuration files..." -ForegroundColor Green
-    Copy-Item (Join-Path $tempRoot "requirements.txt") $oldReqPath -Force
+    Copy-Item -LiteralPath (Join-Path $tempRoot "requirements.txt") $oldReqPath -Force
     Write-Host "  ✓ requirements.txt"
 
-    if (Test-Path (Join-Path $tempRoot "requirements-server.txt")) {
-        Copy-Item (Join-Path $tempRoot "requirements-server.txt") `
+    if (Test-Path -LiteralPath (Join-Path $tempRoot "requirements-server.txt")) {
+        Copy-Item -LiteralPath (Join-Path $tempRoot "requirements-server.txt") `
             (Join-Path $repoRoot "config\requirements-server.upstream.txt") -Force
     }
-    Copy-Item (Join-Path $tempRoot "setup.py") (Join-Path $repoRoot "config\setup.upstream.py") -Force
-    Copy-Item (Join-Path $tempRoot "README.rst") (Join-Path $repoRoot "config\README.upstream.rst") -Force
+    Copy-Item -LiteralPath (Join-Path $tempRoot "setup.py") (Join-Path $repoRoot "config\setup.upstream.py") -Force
+    Copy-Item -LiteralPath (Join-Path $tempRoot "README.rst") (Join-Path $repoRoot "config\README.upstream.rst") -Force
 
     # Alert user if requirements changed
     $newReqHash = (Get-FileHash $oldReqPath).Hash
@@ -190,7 +198,7 @@ synced_at=$(Get-Date -Format o)
     Write-Host "✓ Upstream synchronization complete!" -ForegroundColor Green
 }
 finally {
-    if ($CleanTemp -and (Test-Path $tempRoot)) {
+    if ($CleanTemp -and (Test-Path -LiteralPath $tempRoot)) {
         Write-Host "Cleaning temporary directory..." -ForegroundColor Gray
         try {
             Remove-Item -LiteralPath $tempRoot -Recurse -Force

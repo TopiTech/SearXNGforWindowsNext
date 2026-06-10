@@ -38,6 +38,6 @@ echo [INFO] Settings: %SEARXNG_SETTINGS_PATH%
 echo [INFO] Web server: http://127.0.0.1:8888
 echo.
 
-.\python\python.exe .\python\Lib\site-packages\searx\webapp.py
+".\python\python.exe" ".\python\Lib\site-packages\searx\webapp.py"
 
 pause

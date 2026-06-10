@@ -2,31 +2,68 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
+function Write-PatchSection {
+    param([string]$Message)
+    Write-Host ""
+    Write-Host $Message -ForegroundColor Cyan
+}
+
+function Assert-RequiredFile {
+    param(
+        [string]$FilePath,
+        [string]$Description
+    )
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        throw "Required file not found for ${Description}: ${FilePath}"
+    }
+}
+
 # --- Helper: Apply a patch with robust error handling and status reporting ---
 function Update-Patch {
     param(
         [string]$FilePath,
         [string]$Description,
-        [scriptblock]$PatchLogic
+        [scriptblock]$PatchLogic,
+        [switch]$Required,
+        [switch]$InPlace
     )
 
-    if (-not (Test-Path $FilePath)) {
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        if ($Required) {
+            throw "Required file not found for ${Description}: ${FilePath}"
+        }
         Write-Host "⚠  File not found, skipping ${Description}: ${FilePath}" -ForegroundColor Yellow
         return
     }
 
-    $content = Get-Content $FilePath -Raw -Encoding UTF8
-    $newContent = &$PatchLogic $content
+    $content = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8
+    $patchResult = &$PatchLogic $content
+
+    if ($InPlace) {
+        if ($patchResult -eq "ALREADY_APPLIED") {
+            Write-Host "✓ Already applied: ${Description}" -ForegroundColor Gray
+            return "ALREADY_APPLIED"
+        }
+        if ($patchResult -eq "PATCHED") {
+            Write-Host "✓ Patched: ${Description}" -ForegroundColor Green
+            return "PATCHED"
+        }
+        throw "Patch returned unexpected result for ${Description}: ${patchResult}"
+    }
+
+    $newContent = $patchResult
 
     if ($newContent -eq "ALREADY_APPLIED") {
         Write-Host "✓ Already applied: ${Description}" -ForegroundColor Gray
+        return "ALREADY_APPLIED"
     }
     elseif ($content -eq $newContent) {
         throw "✗ Patch failed for ${Description}: Upstream code may have changed, could not find injection point (check UPSTREAM_VERSION.txt)."
     }
     else {
-        Set-Content $FilePath -Value $newContent -Encoding UTF8
+        Set-Content -LiteralPath $FilePath -Value $newContent -Encoding UTF8
         Write-Host "✓ Patched: ${Description}" -ForegroundColor Green
+        return "PATCHED"
     }
 }
 
@@ -37,22 +74,26 @@ function Invoke-PythonPatch {
         [string]$TempName,
         [string]$TargetFile
     )
-    $tmpPy = Join-Path $env:TEMP $TempName
+    $tmpPy = Join-Path ([System.IO.Path]::GetTempPath()) $TempName
     try {
-        # Use explicit .NET API to write BOM-less UTF-8 to avoid encoding mismatches in Python
+        # Use explicit .NET API to write BOM-less UTF-8 to avoid encoding mismatches in Python.
         [System.IO.File]::WriteAllText($tmpPy, $PythonCode, (New-Object System.Text.UTF8Encoding($false)))
         $pythonExe = Join-Path $repoRoot "python\python.exe"
-        $output = & $pythonExe $tmpPy $TargetFile 2>&1
-        $result = $output -join "`n"
+        if (-not (Test-Path -LiteralPath $pythonExe)) {
+            throw "Embedded Python not found at: $pythonExe"
+        }
 
-        # Monitor both non-zero exit codes and script-emitted ERROR messages
-        if ($LASTEXITCODE -ne 0 -or $result -match "^ERROR:") {
+        $output = & $pythonExe $tmpPy $TargetFile 2>&1
+        $result = ($output | Out-String).Trim()
+
+        # Monitor both non-zero exit codes and script-emitted ERROR messages.
+        if ($LASTEXITCODE -ne 0 -or $result -match "(?m)^ERROR:") {
             throw "Python patch script failed (Exit Code: $LASTEXITCODE): $result"
         }
         return $result
     }
     finally {
-        if (Test-Path $tmpPy) { Remove-Item $tmpPy -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $tmpPy) { Remove-Item -LiteralPath $tmpPy -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -61,6 +102,8 @@ function Invoke-PythonPatch {
 Update-Patch `
     -FilePath    (Join-Path $repoRoot "python\Lib\site-packages\searx\valkeydb.py") `
     -Description "valkeydb.py (Windows pwd compatibility)" `
+    -Required `
+    -InPlace `
     -PatchLogic  {
     param($c)
     $pyCode = @'
@@ -137,7 +180,7 @@ print("PATCHED")
         -TargetFile (Join-Path $repoRoot "python\Lib\site-packages\searx\valkeydb.py")
 
     if ($output -match "ALREADY_APPLIED") { return "ALREADY_APPLIED" }
-    return $output.Contains("PATCHED")
+    return "PATCHED"
 }
 
 
@@ -145,17 +188,48 @@ print("PATCHED")
 Update-Patch `
     -FilePath    (Join-Path $repoRoot "python\Lib\site-packages\searx\settings_defaults.py") `
     -Description "settings_defaults.py (json_lite format)" `
+    -Required `
+    -InPlace `
     -PatchLogic  {
     param($c)
-    if ($c -match "'json_lite'") { return "ALREADY_APPLIED" }
+    $pyCode = @'
+import sys, re
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as f:
+    content = f.read()
 
-    # Robust: Insert before closing bracket of OUTPUT_FORMATS list, regardless of formatting
-    # Handles single-line: OUTPUT_FORMATS = [..., 'json']
-    # Also handles multi-line: OUTPUT_FORMATS = [
-    #                             'json',
-    #                          ]
-    $c = $c -replace "(?m)(OUTPUT_FORMATS\s*=\s*\[[^\]]*'json')([^\]]*\])", "`$1, 'json_lite'`$2"
-    return $c
+if "'json_lite'" in content:
+    print("ALREADY_APPLIED")
+    sys.exit(0)
+
+match = re.search(r"(?ms)(OUTPUT_FORMATS\s*=\s*\[)(.*?)(\])", content)
+if not match:
+    print("ERROR: OUTPUT_FORMATS patch failed (anchor not found)")
+    sys.exit(1)
+
+body = match.group(2)
+if re.search(r"(?m)^\s*['\"]json_lite['\"]\s*,?\s*$", body):
+    print("ALREADY_APPLIED")
+    sys.exit(0)
+
+if re.search(r"(?m)^\s*['\"]json['\"]\s*,?\s*$", body):
+    body = body.rstrip()
+    if not body.endswith(","):
+        body += ","
+    body += "\n    'json_lite'"
+else:
+    body = body.rstrip() + ", 'json_lite'"
+
+content = content[:match.start()] + match.group(1) + body + match.group(3) + content[match.end():]
+with open(path, 'w', encoding='utf-8', newline='\n') as f:
+    f.write(content)
+print("PATCHED")
+'@
+    $output = Invoke-PythonPatch -PythonCode $pyCode -TempName "patch_settings_defaults_json_lite.py" `
+        -TargetFile (Join-Path $repoRoot "python\Lib\site-packages\searx\settings_defaults.py")
+
+    if ($output -match "ALREADY_APPLIED") { return "ALREADY_APPLIED" }
+    return "PATCHED"
 }
 
 
@@ -201,8 +275,8 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
 
 
 '@
-    # Insert before get_themes (preserves the 2 blank lines already present before it)
-    $c = $c -replace '(def get_themes\b)', "$liteFunc`$1"
+    # Insert before get_themes while preserving a single blank-line boundary.
+    $c = $c -replace '(\n)(def get_themes\b)', "$liteFunc`$1`$2"
     return $c
 }
 
@@ -211,6 +285,8 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
 Update-Patch `
     -FilePath    (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py") `
     -Description "webapp.py (json_lite handler + ipaddress import)" `
+    -Required `
+    -InPlace `
     -PatchLogic  {
     param($c)
     $pyCode = @'
@@ -283,7 +359,7 @@ print("PATCHED")
         -TargetFile (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py")
 
     if ($output -match "ALREADY_APPLIED") { return "ALREADY_APPLIED" }
-    return $output.Contains("PATCHED")
+    return "PATCHED"
 }
 
 
@@ -291,9 +367,11 @@ print("PATCHED")
 Update-Patch `
     -FilePath    (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py") `
     -Description "webapp.py (/scrape endpoint, SSRF-protected)" `
+    -Required `
+    -InPlace `
     -PatchLogic  {
     param($c)
-    if ($c -match "def scrape\(\)" -and $c -match "import trafilatura") {
+    if ($c -match "def scrape\(\)" -and $c -match "socket\.getaddrinfo" -and $c -match "_is_blocked_scrape_host") {
         return "ALREADY_APPLIED"
     }
 
@@ -311,23 +389,23 @@ if 'import trafilatura' not in content:
         sys.exit(1)
     content = subs[0]
 
-# 2. Clean stale /scrape route (idempotency)
+# 2. Clean stale /scrape route (idempotency).
+#    The lookahead handles both old compact routes and the current blank-line style.
 content = re.sub(
-    r'\n\n@app\.route\(\'/scrape\'[^\n]*\)\ndef scrape\(\):.*?(?=\n\n@app\.route)',
-    '', content, flags=re.S
+    r'\n@app\.route\(\'/scrape\'[^\n]*\)\ndef scrape\(\):.*?(?=\n\n@app\.route|\n@app\.route|\Z)',
+    '\n', content, flags=re.S
 )
 
 # 3. Insert /scrape route before /search (most stable anchor point)
-#    SECURITY: SSRF protection via ipaddress library (loopback, private, link-local blocks)
-#    NOTE: verify=False is acceptable for localhost-only deployment, not for internet-facing
+#    SECURITY: SSRF protection via ipaddress library and redirect validation.
 scrape_route = '''
 
 @app.route('/scrape', methods=['GET', 'POST'])
 def scrape():
     """Extract main text content from URL (GenAI friendly, SSRF-protected).
 
-    SECURITY: Blocks loopback (127.x), private/reserved IP ranges, link-local,
-    and file:// scheme to prevent SSRF attacks and internal resource exposure.
+    SECURITY: Blocks loopback, private/reserved IP ranges, link-local, and
+    file:// scheme to prevent SSRF attacks and internal resource exposure.
 
     NOTE: SSL verification is disabled by default (safe for localhost-only deployment).
     Set SEARXNG_SCRAPE_VERIFY_SSL=true for internet-facing deployments.
@@ -338,41 +416,61 @@ def scrape():
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
 
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in ('http', 'https'):
-        return jsonify({'error': 'Invalid scheme'}), 400
+    def _is_blocked_scrape_host(host):
+        import socket
+        host = (host or '').strip().rstrip('.').lower()
+        if not host or host == 'localhost' or host.endswith('.localhost'):
+            return True
+        if '%' in host:
+            host = host.split('%', 1)[0]
+        try:
+            ip = ipaddress.ip_address(host)
+            if not ip.is_global:
+                return True
+        except ValueError:
+            pass
 
-    host = parsed.hostname or ''
-    host = host.lower()
-    if not host or host == 'localhost':
-        return jsonify({'error': 'Blocked: loopback/local'}), 400
+        try:
+            for res in socket.getaddrinfo(host, None):
+                if not ipaddress.ip_address(res[4][0]).is_global:
+                    return True
+        except socket.gaierror:
+            pass
+        return False
 
-    # SSRF protection: block loopback, private ranges, link-local
-    try:
-        ip = ipaddress.ip_address(host)
-        if ip.is_loopback or ip.is_private or ip.is_link_local:
-            return jsonify({'error': 'Blocked: private/reserved IP'}), 400
-    except ValueError:
-        pass  # hostname, not IP literal
-
-    try:
-        # Determine SSL verification (default: disabled for localhost, enable for production)
+    def _fetch_scrape_url(request_url):
         verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'false').lower() in ('true', '1', 'yes')
+        ua = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+              'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
-        # Fetch using trafilatura (optimized for content extraction)
-        downloaded = trafilatura.fetch_url(url)
-        if not downloaded:
-            # Fallback: use httpx with realistic UA (many sites block headless requests)
-            # UA for legitimate UX enhancement: many servers require standard browser headers
-            ua = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                  'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-            with httpx.Client(timeout=10.0, follow_redirects=True,
-                              verify=verify_ssl, headers={'User-Agent': ua}) as client:
-                resp = client.get(url)
-                resp.raise_for_status()
-                downloaded = resp.text
+        with httpx.Client(timeout=10.0, follow_redirects=False,
+                          verify=verify_ssl, headers={'User-Agent': ua}) as client:
+            response = client.get(request_url)
+            for _ in range(5):
+                if response.status_code not in (301, 302, 303, 307, 308):
+                    break
+                location = response.headers.get('location')
+                if not location:
+                    break
+                redirected_url = urllib.parse.urljoin(request_url, location)
+                redirected_host = urllib.parse.urlparse(redirected_url).hostname
+                if _is_blocked_scrape_host(redirected_host):
+                    raise RuntimeError('Blocked redirect to private/reserved host')
+                response = client.get(redirected_url)
+            else:
+                raise RuntimeError('Too many redirects')
 
-        # Extract content with sanitization (no scripts/comments)
+            response.raise_for_status()
+            return response.text
+
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ('http', 'https') or _is_blocked_scrape_host(parsed.hostname):
+        return jsonify({'error': 'Invalid or blocked URL'}), 400
+
+    try:
+        downloaded = _fetch_scrape_url(url)
+
+        # Extract content with sanitization (no scripts/comments).
         content_text = trafilatura.extract(
             downloaded, include_comments=False, include_tables=True
         )
@@ -380,8 +478,11 @@ def scrape():
             return jsonify({'error': 'Could not extract content'}), 422
 
         return jsonify({'url': url, 'content': content_text})
+    except httpx.HTTPError as e:
+        # Truncate error message (prevent info leakage).
+        return jsonify({'error': f'Fetch failed: {str(e)[:100]}'}), 502
     except Exception as e:
-        # Truncate error message (prevent info leakage)
+        # Truncate error message (prevent info leakage).
         return jsonify({'error': f'Fetch failed: {str(e)[:100]}'}), 500
 
 '''
@@ -400,7 +501,7 @@ print("PATCHED")
         -TargetFile (Join-Path $repoRoot "python\Lib\site-packages\searx\webapp.py")
 
     if ($output -match "ALREADY_APPLIED") { return "ALREADY_APPLIED" }
-    return $output.Contains("PATCHED")
+    return "PATCHED"
 }
 
 
@@ -408,6 +509,8 @@ print("PATCHED")
 Update-Patch `
     -FilePath    (Join-Path $repoRoot "python\Lib\site-packages\searx\engines\__init__.py") `
     -Description "engines/__init__.py (check disabled before module load)" `
+    -Required `
+    -InPlace `
     -PatchLogic  {
     param($c)
     if ($c -match "loading engine %s skipped: inactive or disabled in config!") {
@@ -503,7 +606,7 @@ print("PATCHED")
         -TargetFile (Join-Path $repoRoot "python\Lib\site-packages\searx\engines\__init__.py")
 
     if ($output -match "ALREADY_APPLIED") { return "ALREADY_APPLIED" }
-    return $output.Contains("PATCHED")
+    return "PATCHED"
 }
 
 
@@ -511,6 +614,8 @@ print("PATCHED")
 Update-Patch `
     -FilePath    (Join-Path $repoRoot "python\Lib\site-packages\searx\search\processors\__init__.py") `
     -Description "search/processors/__init__.py (skip disabled engines)" `
+    -Required `
+    -InPlace `
     -PatchLogic  {
     param($c)
     if ($c -match "skipping processor init") {
@@ -570,7 +675,7 @@ print("PATCHED")
         -TargetFile (Join-Path $repoRoot "python\Lib\site-packages\searx\search\processors\__init__.py")
 
     if ($output -match "ALREADY_APPLIED") { return "ALREADY_APPLIED" }
-    return $output.Contains("PATCHED")
+    return "PATCHED"
 }
 
 Write-Host "✓ All Windows patches applied successfully." -ForegroundColor Green
