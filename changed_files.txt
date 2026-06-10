@@ -1,16 +1,11 @@
  M UPSTREAM_VERSION.txt
  M config/settings.yml
- M python/Lib/site-packages/searx/data/engine_traits.json
  M python/Lib/site-packages/searx/engines/__init__.py
- M python/Lib/site-packages/searx/engines/aol.py
- M python/Lib/site-packages/searx/engines/flaticon.py
- D python/Lib/site-packages/searx/engines/karmasearch.py
+ M python/Lib/site-packages/searx/engines/yep.py
  M python/Lib/site-packages/searx/search/processors/__init__.py
- M python/Lib/site-packages/searx/search/processors/online.py
  M python/Lib/site-packages/searx/settings.yml
+ M python/Lib/site-packages/searx/settings_defaults.py
  M python/Lib/site-packages/searx/valkeydb.py
  M python/Lib/site-packages/searx/webapp.py
-?? python/Lib/site-packages/searx/engines/heexy.py
-?? python/Lib/site-packages/searx/engines/seekninja.py
-?? python/Lib/site-packages/searx/engines/swisscows.py
-?? python/Lib/site-packages/searx/engines/swisscows_news.py
+ M python/Lib/site-packages/searx/webutils.py
+?? python/Lib/site-packages/searx/engines/tiger.py
