@@ -252,9 +252,9 @@ Update-Patch `
     -Description "webutils.py (get_json_lite_response)" `
     -PatchLogic  {
     param($c)
-    if ($c -match "def get_json_lite_response") { return "ALREADY_APPLIED" }
+    # Check for presence and latest version (including score field in _r)
+    if ($c -match "def get_json_lite_response" -and $c -match "'score': d\.get\('score', 0\)") { return "ALREADY_APPLIED" }
 
-    # Optimised: as_dict() called once per result via inner helper _r()
     $liteFunc = @'
 
 
@@ -267,10 +267,16 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
             'url': d.get('url', ''),
             'content': d.get('content', ''),
             'source': d.get('engine', ''),
+            'score': d.get('score', 0),
+            'published_date': d.get('pubdate') or d.get('publishedDate'),
+            'author': d.get('author', ''),
+            'category': d.get('category', ''),
         }
     data = {
         'query': sq.query,
         'results': [_r(r) for r in rc.get_ordered_results()[:20]],
+        'suggestions': list(rc.suggestions),
+        'corrections': list(rc.corrections),
     }
     if rc.answers:
         data['answers'] = [a.as_dict().get('answer') for a in rc.answers]
@@ -288,6 +294,11 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
 
 
 '@
+    # If old version exists, remove it first
+    if ($c -match "def get_json_lite_response") {
+        $c = $c -replace '(?s)\n+def get_json_lite_response.*?return json\.dumps\(data, cls=JSONEncoder\)\n+', "`n"
+    }
+
     # Insert before get_themes while preserving a single blank-line boundary.
     $c = $c -replace '(\n)(def get_themes\b)', "$liteFunc`$1`$2"
     return $c
@@ -384,7 +395,7 @@ Update-Patch `
     -InPlace `
     -PatchLogic  {
     param($c)
-    if ($c -match "def scrape\(\)" -and $c -match "socket\.getaddrinfo" -and $c -match "_is_blocked_scrape_host") {
+    if ($c -match "def scrape\(\)" -and $c -match "request_url = redirected_url" -and $c -match "_is_blocked_scrape_host") {
         return "ALREADY_APPLIED"
     }
 
@@ -466,6 +477,7 @@ def scrape():
                 if not location:
                     break
                 redirected_url = urllib.parse.urljoin(request_url, location)
+                request_url = redirected_url
                 redirected_host = urllib.parse.urlparse(redirected_url).hostname
                 if _is_blocked_scrape_host(redirected_host):
                     raise RuntimeError('Blocked redirect to private/reserved host')
