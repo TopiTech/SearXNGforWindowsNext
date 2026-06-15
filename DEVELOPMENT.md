@@ -59,6 +59,8 @@ This project **stays synchronized with upstream SearXNG** while maintaining Wind
 | 3 | `webutils.py` | `get_json_lite_response()` function | Lightweight GenAI-friendly responses |
 | 4 | `webapp.py` (pt 1) | `json_lite` handler + `ipaddress` import | Route handler + SSRF libs |
 | 5 | `webapp.py` (pt 2) | `/scrape` endpoint (SSRF-protected) | Content extraction API |
+| 6 | `engines/__init__.py` | Early return for disabled engines | Performance + skip noise |
+| 7 | `search/processors/__init__.py` | Skip disabled engines in init | Performance + skip noise |
 
 ### Patch Execution Flow
 
@@ -69,26 +71,29 @@ sync-upstream.ps1
   ├─ Sync searx/ and searxng_extra/ packages
   ├─ Copy requirements.txt, setup.py, LICENSE
   ├─ Update UPSTREAM_VERSION.txt (metadata)
-  └─ apply-windows-patches.ps1 (5 patches, idempotent)
+  └─ apply-windows-patches.ps1 (7 patches, idempotent)
        ├─ Patch 1: valkeydb.py ✓
        ├─ Patch 2: settings_defaults.py ✓
        ├─ Patch 3: webutils.py ✓
        ├─ Patch 4a: webapp.py (json_lite handler) ✓
-       └─ Patch 4b: webapp.py (/scrape route) ✓
+       ├─ Patch 4b: webapp.py (/scrape route) ✓
+       ├─ Patch 6: engines/__init__.py ✓
+       └─ Patch 7: search/processors/__init__.py ✓
 ```
 
 ### Idempotency Strategy
 
 Each patch:
-1. **Checks if already applied** → returns `ALREADY_APPLIED` (no-op)
-2. **Validates anchors/injection points** → regex-based, upstream-aware
-3. **Reports errors explicitly** → all Python patches output `ERROR: {reason}` on failure
-4. **Cleans stale code** → removes old duplicate patches before re-inserting
+1. **Checks if already applied** → returns `ALREADY_APPLIED` (no-op). Checks are robust, looking for specific markers via regex or substring.
+2. **Validates anchors/injection points** → regex-based, upstream-aware. Uses multiple fallback patterns if function signatures change slightly.
+3. **Reports errors explicitly** → all Python patches output `ERROR: {reason}` on failure.
+4. **Cleans stale code** → removes old duplicate patches before re-inserting (where applicable).
+5. **Pre-flight Check** (New) → Supports `Assert-Anchor` to verify injection points before modification.
 
-Example (valkeydb.py):
+Example (engines/__init__.py):
 ```python
-if ('def _windows_safe_current_user():' in content
-        and '_user_name, _user_uid = _windows_safe_current_user()' in content):
+# Idempotency check: look for our debug message
+if "skipping load" in content or "inactive or disabled in config!" in content:
     print("ALREADY_APPLIED")
     sys.exit(0)
 ```

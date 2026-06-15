@@ -67,6 +67,19 @@ function Update-Patch {
     }
 }
 
+# --- Helper: Assert that a pattern exists in a file (pre-flight check) ---
+function Assert-Anchor {
+    param(
+        [string]$FilePath,
+        [string]$Pattern,
+        [string]$Description
+    )
+    $content = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8
+    if ($content -notmatch $Pattern) {
+        throw "✗ Anchor not found for ${Description} in ${FilePath}. Upstream code may have changed."
+    }
+}
+
 # --- Helper: Execute Python patch script with error detection and cleanup ---
 function Invoke-PythonPatch {
     param(
@@ -513,7 +526,8 @@ Update-Patch `
     -InPlace `
     -PatchLogic  {
     param($c)
-    if ($c -match "loading engine %s skipped: inactive or disabled in config!") {
+    # Idempotency check: look for our debug message
+    if ($c -match "skipping load'|inactive or disabled in config!") {
         return "ALREADY_APPLIED"
     }
 
@@ -523,21 +537,10 @@ path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f:
     content = f.read()
 
-# Check if patch already applied (idempotency)
-if (
-    "Engine \"%s\" is inactive in config, skipping load" in content
-    and "Engine \"%s\" is disabled in config, skipping load" in content
-    and "loading engine %s skipped: inactive or disabled in config!" in content
-):
-    print("ALREADY_APPLIED")
-    sys.exit(0)
-
-# Find the load_engine function and add inactive/disabled checks BEFORE module load
-# Anchor: the line 'if engine_name.lower() != engine_name:' (common code)
-# Inject after lowercase conversion block, before module_name extraction
-
-inject_code = """
-
+# 1. Patch load_engine (singular) - add early return for disabled/inactive
+# Check if already patched
+if "is disabled in config, skipping load" not in content:
+    inject_code = """
     # Early return for engines that are intentionally disabled or inactive in config.
     if engine_data.get('inactive') is True:
         logger.debug('Engine "%s" is inactive in config, skipping load', engine_name)
@@ -546,57 +549,36 @@ inject_code = """
         logger.debug('Engine "%s" is disabled in config, skipping load', engine_name)
         return None
 """
+    # Anchor: after the engine name lowercase conversion
+    pattern = r"(if engine_name\.lower\(\) != engine_name:.*?engine_data\['name'\] = engine_name\n)"
+    content, count = re.subn(pattern, r"\1" + inject_code, content, flags=re.S)
+    if count == 0:
+        print("ERROR: Could not find anchor in load_engine (singular)")
+        sys.exit(1)
 
-# Insert after the engine name checks (after lowercase conversion)
-subs = re.subn(
-    r"(if engine_name\.lower\(\) != engine_name:.*?engine_data\['name'\] = engine_name\n)",
-    r"\1" + inject_code,
-    content, flags=re.S
-)
-
-if subs[1] == 0:
-    print("ERROR: Could not find anchor for disabled check (engine name section)")
-    sys.exit(1)
-content = subs[0]
-
-# Avoid error logs for engines that are intentionally disabled or inactive.
-old_block = '''
-    for engine_data in engine_list:
-        if engine_data.get("inactive") is True:
-            continue
-        engine = load_engine(engine_data)
-        if engine:
-            register_engine(engine)
-        else:
-            # if an engine can't be loaded (if for example the engine is missing
-            # tor or some other requirements) its set to inactive!
-            logger.error("loading engine %s failed: set engine to inactive!", engine_data.get("name", "???"))
-            engine_data["inactive"] = True
-'''
-
-new_block = '''
-    for engine_data in engine_list:
+# 2. Patch load_engines (plural) - skip loading disabled engines to avoid noise
+# Check if already patched
+if "inactive or disabled in config!" not in content:
+    inject_loop = """
         if engine_data.get("inactive") is True or engine_data.get("disabled") is True:
             logger.debug(
                 "loading engine %s skipped: inactive or disabled in config!",
                 engine_data.get("name", "???"),
             )
-            continue
-        engine = load_engine(engine_data)
-        if engine:
-            register_engine(engine)
-        else:
-            # if an engine can't be loaded (if for example the engine is missing
-            # tor or some other requirements) its set to inactive!
-            logger.error("loading engine %s failed: set engine to inactive!", engine_data.get("name", "???"))
-            engine_data["inactive"] = True
-'''
+            continue"""
 
-if old_block in content:
-    content = content.replace(old_block, new_block)
-else:
-    print("ERROR: load_engines patch failed (anchor not found)")
-    sys.exit(1)
+    # Anchor: find the start of the loop in load_engines
+    # We look for 'for engine_data in engine_list:' and the next few lines to ensure we are in load_engines
+    pattern = r"(def load_engines\(engine_list:.*?for engine_data in engine_list:)"
+    content, count = re.subn(pattern, r"\1" + inject_loop, content, flags=re.S)
+    if count == 0:
+        # Fallback: just look for the loop if the function definition changed slightly
+        pattern = r"(for engine_data in engine_list:)"
+        content, count = re.subn(pattern, r"\1" + inject_loop, content, count=1)
+
+    if count == 0:
+        print("ERROR: Could not find anchor in load_engines (plural)")
+        sys.exit(1)
 
 with open(path, 'w', encoding='utf-8', newline='\n') as f:
     f.write(content)
@@ -623,7 +605,7 @@ Update-Patch `
     }
 
     $pyCode = @'
-import sys
+import sys, re
 path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f:
     content = f.read()
@@ -632,38 +614,17 @@ if "skipping processor init" in content:
     print("ALREADY_APPLIED")
     sys.exit(0)
 
-old_block = '''
-        for eng_settings in engine_list:
-            eng_name: str = eng_settings["name"]
-
-            if eng_settings.get("inactive", False) is True:
-                continue
-
-            eng_obj = engines.engines.get(eng_name)
-            if eng_obj is None:
-                logger.warning("Engine of name '%s' does not exists.", eng_name)
-                continue
-'''
-
-new_block = '''
-        for eng_settings in engine_list:
-            eng_name: str = eng_settings["name"]
-
-            if eng_settings.get("inactive", False) is True:
-                continue
+# Anchor: the start of the loop in ProcessorMap.init
+# We look for the inactive check and inject the disabled check after it
+pattern = r"(if eng_settings\.get\(\"inactive\", False\) is True:\s+continue)"
+inject_code = """
             if eng_settings.get("disabled", False) is True:
                 logger.debug("Engine '%s' is disabled in config, skipping processor init.", eng_name)
-                continue
+                continue"""
 
-            eng_obj = engines.engines.get(eng_name)
-            if eng_obj is None:
-                logger.warning("Engine of name '%s' does not exists.", eng_name)
-                continue
-'''
+content, count = re.subn(pattern, r"\1" + inject_code, content)
 
-if old_block in content:
-    content = content.replace(old_block, new_block)
-else:
+if count == 0:
     print("ERROR: processor init patch failed (anchor not found)")
     sys.exit(1)
 
