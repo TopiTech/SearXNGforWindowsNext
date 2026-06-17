@@ -1,6 +1,5 @@
  M UPSTREAM_VERSION.txt
  M config/settings.yml
- M python/Lib/site-packages/searx/enginelib/__init__.py
  M python/Lib/site-packages/searx/engines/__init__.py
  M python/Lib/site-packages/searx/search/processors/__init__.py
  M python/Lib/site-packages/searx/settings_defaults.py
