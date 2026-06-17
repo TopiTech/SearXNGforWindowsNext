@@ -97,7 +97,7 @@ server:
   # If your instance owns a /etc/searxng/settings.yml file, then set the following
   # values there.
 
-  secret_key: "SearXNG for Windows-mbaozi"  # Is overwritten by ${SEARXNG_SECRET}
+  secret_key: "654eba279ae3354410f8c36f11535af7b1d6f893482cccad86268bdd50a047c1"  # Is overwritten by ${SEARXNG_SECRET}
   # Proxy image results through SearXNG. Is overwritten by ${SEARXNG_IMAGE_PROXY}
   image_proxy: false
   # 1.0 and 1.1 are supported
