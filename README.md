@@ -88,7 +88,7 @@ GET http://127.0.0.1:8888/scrape?url=https://example.com/article
 ```json
 {
   "url": "https://example.com/article",
-  "content": "ここに抽出された本文が表示されます...",
+  "content": "ここに抽出された本文が表示されます..."
 }
 ```
 

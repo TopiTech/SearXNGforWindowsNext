@@ -395,7 +395,7 @@ Update-Patch `
     -InPlace `
     -PatchLogic  {
     param($c)
-    if ($c -match "def scrape\(\)" -and $c -match "request_url = redirected_url" -and $c -match "_is_blocked_scrape_host" -and $c -match "v4-sni-fix") {
+    if ($c -match "def scrape\(\)" -and $c -match "_is_blocked_scrape_host" -and $c -match "_get_safe_ip_url" -and $c -match "v4-sni-fix" -and $c -match "Redirect without Location header") {
         return "ALREADY_APPLIED"
     }
 
@@ -405,11 +405,19 @@ path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f:
     content = f.read()
 
-# 1. Add `import trafilatura` module-level (before flask)
+# 1. Add `import trafilatura` and `import socket` module-level (before flask)
 if 'import trafilatura' not in content:
-    subs = re.subn(r'(import flask\b)', r'import trafilatura\n\1', content)
+    subs = re.subn(r'(import flask\b)', r'import trafilatura\nimport socket\n\1', content)
     if subs[1] == 0:
         print("ERROR: trafilatura import patch failed (flask anchor not found)")
+        sys.exit(1)
+    content = subs[0]
+elif 'import socket' not in content:
+    subs = re.subn(r'(import trafilatura\n)', r'\1import socket\n', content)
+    if subs[1] == 0:
+        subs = re.subn(r'(import flask\b)', r'import socket\n\1', content)
+    if subs[1] == 0:
+        print("ERROR: socket import patch failed (no anchor points)")
         sys.exit(1)
     content = subs[0]
 
@@ -442,7 +450,6 @@ def scrape():
         return jsonify({'error': 'No URL provided'}), 400
 
     def _is_blocked_scrape_host(host):
-        import socket
         host = (host or '').strip().rstrip('.').lower()
         if not host or host == 'localhost' or host.endswith('.localhost'):
             return True
@@ -466,7 +473,7 @@ def scrape():
     def _fetch_scrape_url(request_url):
         verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'false').lower() in ('true', '1', 'yes')
         ua = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-              'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+              'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36')
 
         def _get_safe_ip_url(url_to_resolve):
             parsed = urllib.parse.urlparse(url_to_resolve)
@@ -475,7 +482,6 @@ def scrape():
                 raise RuntimeError(f'Blocked: {host} is a private/reserved host')
 
             # Resolve to IP to prevent DNS Rebinding (TOCTOU)
-            import socket
             try:
                 # We take the first global IP found
                 addr_info = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == 'https' else 80))
@@ -513,13 +519,10 @@ def scrape():
 
                 location = response.headers.get('location')
                 if not location:
-                    break
+                    raise RuntimeError(f'Redirect without Location header (status {response.status_code})')
                 current_url = urllib.parse.urljoin(current_url, location)
             else:
                 raise RuntimeError('Too many redirects')
-
-            response.raise_for_status()
-            return response.text
 
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ('http', 'https') or _is_blocked_scrape_host(parsed.hostname):

@@ -518,7 +518,6 @@ engines:
 
   - name: ask
     engine: ask
-    disabled: true
     shortcut: ask
     disabled: true
     inactive: true
@@ -1418,7 +1417,6 @@ engines:
       - https://translate.bus-hit.me
       - https://nyc1.mz.ggtyler.dev
     # mozhi_engine: google - see https://mozhi.aryak.me for supported engines
-    disabled: true
     timeout: 4.0
     shortcut: mz
     disabled: true
@@ -1654,7 +1652,6 @@ engines:
 
   - name: podcastindex
     engine: podcastindex
-    disabled: true
     shortcut: podcast
     disabled: true
 
@@ -2520,7 +2517,6 @@ engines:
 
   - name: svgrepo
     engine: svgrepo
-    disabled: true
     shortcut: svg
     timeout: 10.0
     disabled: true
