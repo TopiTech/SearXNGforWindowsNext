@@ -1,25 +1,50 @@
  M UPSTREAM_VERSION.txt
+ M config/requirements-server.upstream.txt
+ M config/requirements.upstream.txt
  M config/settings.yml
- M python/Lib/site-packages/searx/data/ahmia_blacklist.txt
- M python/Lib/site-packages/searx/data/currencies.json
- M python/Lib/site-packages/searx/data/engine_descriptions.json
- M python/Lib/site-packages/searx/data/gsa_useragents.txt
- M python/Lib/site-packages/searx/data/useragents.json
- M python/Lib/site-packages/searx/data/wikidata_units.json
+ M python/Lib/site-packages/searx/data/__init__.py
+ M python/Lib/site-packages/searx/data/engine_traits.json
+ D python/Lib/site-packages/searx/data/gsa_useragents.txt
  M python/Lib/site-packages/searx/enginelib/__init__.py
  M python/Lib/site-packages/searx/engines/__init__.py
- M python/Lib/site-packages/searx/engines/chinaso.py
- M python/Lib/site-packages/searx/engines/resulthunter.py
- M python/Lib/site-packages/searx/engines/tiger.py
+ M python/Lib/site-packages/searx/engines/baidu.py
+ M python/Lib/site-packages/searx/engines/bilibili.py
+ M python/Lib/site-packages/searx/engines/google.py
+ M python/Lib/site-packages/searx/engines/heexy.py
+ M python/Lib/site-packages/searx/engines/naver.py
+ M python/Lib/site-packages/searx/engines/qwant.py
  M python/Lib/site-packages/searx/search/processors/__init__.py
+ M python/Lib/site-packages/searx/search/processors/abstract.py
  M python/Lib/site-packages/searx/settings.yml
  M python/Lib/site-packages/searx/settings_defaults.py
- M python/Lib/site-packages/searx/translations/ru/LC_MESSAGES/messages.mo
- M python/Lib/site-packages/searx/translations/ru/LC_MESSAGES/messages.po
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/5Ako-qGW.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/B8prKeWj.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/C93hSkpT.min.js.map
+ D python/Lib/site-packages/searx/static/themes/simple/chunk/CTP0QVHn.min.js
+ D python/Lib/site-packages/searx/static/themes/simple/chunk/CTP0QVHn.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/DpvWr1cn.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/DvCYLbJr.min.js.map
+ D python/Lib/site-packages/searx/static/themes/simple/chunk/U6YV4Y8e.min.js
+ D python/Lib/site-packages/searx/static/themes/simple/chunk/U6YV4Y8e.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/chunk/e2-9fzwE.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/manifest.json
+ M python/Lib/site-packages/searx/static/themes/simple/sxng-core.min.js
+ M python/Lib/site-packages/searx/static/themes/simple/sxng-core.min.js.map
+ M python/Lib/site-packages/searx/sxng_locales.py
+ M python/Lib/site-packages/searx/translations/ar/LC_MESSAGES/messages.mo
+ M python/Lib/site-packages/searx/translations/ar/LC_MESSAGES/messages.po
+ M python/Lib/site-packages/searx/translations/vi/LC_MESSAGES/messages.mo
+ M python/Lib/site-packages/searx/translations/vi/LC_MESSAGES/messages.po
+ M python/Lib/site-packages/searx/utils.py
  M python/Lib/site-packages/searx/valkeydb.py
  M python/Lib/site-packages/searx/webapp.py
- M python/Lib/site-packages/searxng_extra/update/update_engine_descriptions.py
-?? python/Lib/site-packages/searx/engines/magnific.py
-?? python/Lib/site-packages/searx/engines/picjumbo.py
-?? python/Lib/site-packages/searx/engines/shopify_stock.py
-?? python/Lib/site-packages/searx/engines/stocksnap.py
+ M python/Lib/site-packages/searxng_extra/update/update_engine_traits.py
+ D python/Lib/site-packages/searxng_extra/update/update_gsa_useragents.py
+?? python/Lib/site-packages/searx/engines/google_cse.py
+?? python/Lib/site-packages/searx/engines/neocities.py
+?? python/Lib/site-packages/searx/engines/neosearch.py
+?? python/Lib/site-packages/searx/engines/searchzee.py
+?? python/Lib/site-packages/searx/static/themes/simple/chunk/BnnvKC7b.min.js
+?? python/Lib/site-packages/searx/static/themes/simple/chunk/BnnvKC7b.min.js.map
+?? python/Lib/site-packages/searx/static/themes/simple/chunk/C8c7HJzp.min.js
+?? python/Lib/site-packages/searx/static/themes/simple/chunk/C8c7HJzp.min.js.map
