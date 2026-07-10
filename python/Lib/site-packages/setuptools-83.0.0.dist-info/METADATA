@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: setuptools
-Version: 82.0.1
+Version: 83.0.0
 Summary: Most extensible Python build backend with support for C/C++ extension modules
 Author-email: Python Packaging Authority <distutils-sig@python.org>
 License-Expression: MIT
@@ -16,7 +16,7 @@ Classifier: Topic :: Software Development :: Libraries :: Python Modules
 Classifier: Topic :: System :: Archiving :: Packaging
 Classifier: Topic :: System :: Systems Administration
 Classifier: Topic :: Utilities
-Requires-Python: >=3.9
+Requires-Python: >=3.10
 Description-Content-Type: text/x-rst
 License-File: LICENSE
 Provides-Extra: test
@@ -66,15 +66,15 @@ Requires-Dist: wheel>=0.43.0; extra == "core"
 Requires-Dist: jaraco.functools>=4; extra == "core"
 Requires-Dist: more_itertools; extra == "core"
 Provides-Extra: check
-Requires-Dist: pytest-checkdocs>=2.4; extra == "check"
+Requires-Dist: pytest-checkdocs>=2.14; extra == "check"
 Requires-Dist: pytest-ruff>=0.2.1; sys_platform != "cygwin" and extra == "check"
 Requires-Dist: ruff>=0.13.0; sys_platform != "cygwin" and extra == "check"
 Provides-Extra: cover
 Requires-Dist: pytest-cov; extra == "cover"
 Provides-Extra: enabler
-Requires-Dist: pytest-enabler>=2.2; extra == "enabler"
+Requires-Dist: pytest-enabler>=3.4; extra == "enabler"
 Provides-Extra: type
-Requires-Dist: pytest-mypy; extra == "type"
+Requires-Dist: pytest-mypy>=1.0.1; platform_python_implementation != "PyPy" and extra == "type"
 Requires-Dist: mypy==1.18.*; extra == "type"
 Requires-Dist: importlib_metadata>=7.0.2; python_version < "3.10" and extra == "type"
 Requires-Dist: jaraco.develop>=7.21; sys_platform != "cygwin" and extra == "type"
@@ -96,7 +96,7 @@ Dynamic: license-file
 .. |docs-badge| image:: https://img.shields.io/readthedocs/setuptools/latest.svg
    :target: https://setuptools.pypa.io
 
-.. |skeleton-badge| image:: https://img.shields.io/badge/skeleton-2025-informational
+.. |skeleton-badge| image:: https://img.shields.io/badge/skeleton-2026-informational
    :target: https://blog.jaraco.com/skeleton
 
 .. |codecov-badge| image:: https://img.shields.io/codecov/c/github/pypa/setuptools/master.svg?logo=codecov&logoColor=white

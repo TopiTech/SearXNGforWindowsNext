@@ -1,0 +1,104 @@
+import sys
+import os
+import yaml
+import re
+
+def disable_engine_in_text(yaml_content, engine_name):
+    # Match the block starting with "- name: engine_name" up to the next list item or outdent
+    # Matches:
+    #   - name: google
+    #     engine: google
+    #     ...
+    pattern = rf"(?m)^([ \t]*-\s*name:\s*[\"']?{re.escape(engine_name)}[\"']?\s*\r?\n(?:[ \t]+[^\r\n]*\r?\n)*)"
+    match = re.search(pattern, yaml_content)
+    if not match:
+        return yaml_content
+
+    block = match.group(1)
+    # Check if disabled is already defined in this block
+    if re.search(r'(?m)^[ \t]+disabled:', block):
+        return yaml_content
+
+    # Determine child indentation from the second line of the block
+    lines = block.splitlines()
+    child_indent = "    "
+    for line in lines[1:]:
+        if line.strip():
+            child_indent = line[:len(line) - len(line.lstrip())]
+            break
+
+    # Insert disabled: true at the end of the block before any trailing empty lines
+    last_valid_idx = len(lines) - 1
+    while last_valid_idx >= 0 and not lines[last_valid_idx].strip():
+        last_valid_idx -= 1
+
+    if last_valid_idx >= 0:
+        lines.insert(last_valid_idx + 1, f"{child_indent}disabled: true")
+    
+    new_block = "\n".join(lines) + "\n"
+    # Replace the exact block in the content
+    return yaml_content.replace(block, new_block)
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: disable-missing-engines.py <settings_path> <engines_dir>")
+        sys.exit(1)
+
+    settings_path = os.path.abspath(sys.argv[1])
+    engines_dir = os.path.abspath(sys.argv[2])
+
+    if not os.path.exists(settings_path):
+        print(f"settings.yml not found at: {settings_path}")
+        sys.exit(0)
+
+    if not os.path.exists(engines_dir):
+        print(f"engines directory not found at: {engines_dir}")
+        sys.exit(1)
+
+    with open(settings_path, 'r', encoding='utf-8') as f:
+        yaml_content = f.read()
+
+    try:
+        config = yaml.safe_load(yaml_content)
+    except Exception as e:
+        print(f"Error parsing YAML: {e}")
+        sys.exit(1)
+
+    if not config or 'engines' not in config:
+        print("No engines defined in settings.yml.")
+        sys.exit(0)
+
+    missing_engines = []
+    for engine_entry in config.get('engines', []):
+        name = engine_entry.get('name')
+        if not name:
+            continue
+        engine_mod = engine_entry.get('engine', name)
+        
+        # Skip template or complex dynamic engines
+        if engine_mod and re.match(r'^[a-z0-9_-]+$', engine_mod):
+            mod_file = os.path.join(engines_dir, f"{engine_mod}.py")
+            if not os.path.exists(mod_file):
+                # If module is missing and not already disabled
+                if not engine_entry.get('disabled'):
+                    missing_engines.append((name, engine_mod))
+
+    if not missing_engines:
+        print("No missing engines detected.")
+        sys.exit(0)
+
+    modified_content = yaml_content
+    for name, engine_mod in missing_engines:
+        print(f"Engine module missing: {engine_mod} (name: {name}) - marking disabled in settings.yml")
+        modified_content = disable_engine_in_text(modified_content, name)
+
+    if modified_content != yaml_content:
+        # Write back updated content while preserving all formatting and comments
+        with open(settings_path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(modified_content)
+        print("settings.yml updated successfully (comments preserved).")
+    else:
+        print("No changes made to settings.yml.")
+
+if __name__ == "__main__":
+    main()

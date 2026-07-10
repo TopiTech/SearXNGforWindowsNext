@@ -20,13 +20,14 @@ def main():
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    if f'secret_key: "{DEFAULT_KEY}"' not in content:
+    default_pattern = rf'secret_key:\s*["\']?{re.escape(DEFAULT_KEY)}["\']?'
+    if not re.search(default_pattern, content):
         return
 
     print("[INFO] Default secret_key detected. Generating a secure random key...")
     new_key = secrets.token_hex(32)
     content = re.sub(
-        r'secret_key: ".*?"',
+        default_pattern,
         f'secret_key: "{new_key}"',
         content,
         count=1,

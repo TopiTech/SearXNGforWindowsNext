@@ -23,8 +23,9 @@ from distutils import log
 from distutils.dir_util import mkpath, remove_tree
 
 if TYPE_CHECKING:
+    from typing import TypeAlias
+
     from _typeshed import GenericPath
-    from typing_extensions import TypeAlias
 
 # Same as zipfile._ZipFileMode from typeshed
 _ZipFileMode: TypeAlias = Literal["r", "w", "x", "a"]

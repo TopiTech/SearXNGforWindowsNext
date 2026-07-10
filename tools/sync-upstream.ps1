@@ -122,26 +122,15 @@ try {
     Write-Host "Validating engine modules referenced in config\settings.yml..." -ForegroundColor Green
     $settingsPath = Join-Path $repoRoot "config\settings.yml"
     $enginesDir = Join-Path $sitePackages "searx\engines"
+    $pythonExe = Join-Path $repoRoot "python\python.exe"
+    $disableScript = Join-Path $repoRoot "tools\disable-missing-engines.py"
     if (Test-Path $settingsPath) {
         try {
-            $content = Get-Content $settingsPath -Raw -ErrorAction Stop
-            $engineMatches = [regex]::Matches($content, "engine:\s*([^\r\n]+)")
-            foreach ($m in $engineMatches) {
-                $mod = $m.Groups[1].Value.Trim()
-                # skip complex engine entries (e.g., templated values)
-                if ($mod -match '^[a-z0-9_-]+$') {
-                    $modFile = Join-Path $enginesDir ($mod + ".py")
-                    if (-not (Test-Path -LiteralPath $modFile)) {
-                        Write-Host "  Engine module missing: $mod — marking disabled in settings.yml" -ForegroundColor Yellow
-                        $engineLinePattern = "(?m)^(\\s*engine:\\s*" + [regex]::Escape($mod) + "\\s*)$"
-                        $hasDisabledLine = $content -match ("(?m)^\\s*engine:\\s*" + [regex]::Escape($mod) + "\\s*\\r?\\n\\s*disabled:")
-                        if (-not $hasDisabledLine) {
-                            $content = $content -replace $engineLinePattern, "`$1`n    disabled: true"
-                        }
-                    }
-                }
+            if (Test-Path $pythonExe) {
+                & $pythonExe $disableScript $settingsPath $enginesDir
+            } else {
+                throw "Embedded Python not found at: $pythonExe"
             }
-            Set-Content -LiteralPath $settingsPath -Value $content -Encoding utf8
         }
         catch {
             Write-Host "⚠  Warning: Could not validate settings.yml: $_" -ForegroundColor Yellow
