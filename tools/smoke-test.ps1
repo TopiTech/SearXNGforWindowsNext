@@ -16,12 +16,13 @@ function Assert-HttpStatusCode {
         [string]$Label
     )
 
+    $statusCode = 0
     try {
         $response = Invoke-WebRequest -Uri $Uri -UseBasicParsing -ErrorAction Stop
         $statusCode = [int]$response.StatusCode
     }
-    catch [System.Net.WebException] {
-        if ($_.Exception.Response) {
+    catch {
+        if ($_.Exception -and $_.Exception.Response) {
             $statusCode = [int]$_.Exception.Response.StatusCode
         }
         else {
