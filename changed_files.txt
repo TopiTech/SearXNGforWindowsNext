@@ -1,18 +1,14 @@
  M UPSTREAM_VERSION.txt
- M python/Lib/site-packages/searx/autocomplete.py
+ M config/requirements-server.upstream.txt
  M python/Lib/site-packages/searx/engines/__init__.py
- M python/Lib/site-packages/searx/engines/braveapi.py
- M python/Lib/site-packages/searx/engines/heexy.py
- M python/Lib/site-packages/searx/engines/kagi.py
  M python/Lib/site-packages/searx/search/processors/__init__.py
- M python/Lib/site-packages/searx/settings.yml
  M python/Lib/site-packages/searx/settings_defaults.py
- D python/Lib/site-packages/searx/static/themes/simple/chunk/B8prKeWj.min.js
- D python/Lib/site-packages/searx/static/themes/simple/chunk/B8prKeWj.min.js.map
- M python/Lib/site-packages/searx/static/themes/simple/manifest.json
  M python/Lib/site-packages/searx/static/themes/simple/sxng-core.min.js
+ M python/Lib/site-packages/searx/static/themes/simple/sxng-core.min.js.map
+ M python/Lib/site-packages/searx/translations/fil/LC_MESSAGES/messages.mo
+ M python/Lib/site-packages/searx/translations/fil/LC_MESSAGES/messages.po
+ M python/Lib/site-packages/searx/translations/sk/LC_MESSAGES/messages.mo
+ M python/Lib/site-packages/searx/translations/sk/LC_MESSAGES/messages.po
  M python/Lib/site-packages/searx/valkeydb.py
  M python/Lib/site-packages/searx/webapp.py
  M python/Lib/site-packages/searx/webutils.py
-?? python/Lib/site-packages/searx/static/themes/simple/chunk/od7pNHfk.min.js
-?? python/Lib/site-packages/searx/static/themes/simple/chunk/od7pNHfk.min.js.map
