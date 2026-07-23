@@ -92,14 +92,16 @@ try {
     Write-Host "  ✓ Content extracted: $($scrapeJson.content.Length) chars" -ForegroundColor Green
     Write-Host ""
 
-    # Test 6-11: SSRF Protection
-    Write-Host "Test 6-11: SSRF Protection" -ForegroundColor Cyan
+    # Test 6-13: SSRF Protection
+    Write-Host "Test 6-13: SSRF Protection" -ForegroundColor Cyan
     Assert-Blocked -Uri "$base/scrape?url=http://127.0.0.1/" -Label "loopback IP (127.0.0.1)"
     Assert-Blocked -Uri "$base/scrape?url=http://192.168.1.1/" -Label "private range (192.168.x.x)"
     Assert-Blocked -Uri "$base/scrape?url=http://127.0.0.1.nip.io/" -Label "hostname to localhost (nip.io)"
     Assert-Blocked -Uri "$base/scrape?url=http://[::1]/" -Label "IPv6 loopback (::1)"
     Assert-Blocked -Uri "$base/scrape?url=http://[fe80::1]/" -Label "IPv6 link-local"
     Assert-Blocked -Uri "$base/scrape?url=file:///etc/passwd" -Label "file:// scheme"
+    Assert-Blocked -Uri "$base/scrape?url=gopher://127.0.0.1:6379/" -Label "gopher:// scheme"
+    Assert-Blocked -Uri "$base/scrape?url=ftp://example.com/test" -Label "ftp:// scheme"
     Write-Host ""
 
     Write-Host "=====================================" -ForegroundColor Green

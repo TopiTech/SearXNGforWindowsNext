@@ -215,27 +215,29 @@ def patch_webapp_json_handler(content, path):
 
     return content
 
-# --- Patch 5: webapp.py (/scrape route + trafilatura & socket & contextlib imports + pinned_dns + reusable httpx client) ---
+# --- Patch 5: webapp.py (/scrape route + trafilatura & socket & contextlib & threading imports + thread-safe pinned_dns + reusable httpx client) ---
 def patch_webapp_scrape_route(content, path):
     required_anchors = [
         "def scrape()",
         "_is_blocked_scrape_host",
         "pinned_dns",
         "_scrape_client",
+        "_thread_local_dns",
+        "Blocked invalid scheme",
         "Redirect without Location header",
         "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')" # default should be true
     ]
     if all(anchor in content for anchor in required_anchors):
         return "ALREADY_APPLIED"
 
-    # 1. Add `import trafilatura`, `import socket`, `import contextlib` at module level
+    # 1. Add `import trafilatura`, `import socket`, `import contextlib`, `import threading` at module level
     if 'import trafilatura' not in content:
-        content, count = re.subn(r'(import flask\b)', r'import trafilatura\nimport socket\nimport contextlib\n\1', content)
+        content, count = re.subn(r'(import flask\b)', r'import trafilatura\nimport socket\nimport contextlib\nimport threading\n\1', content)
         if count == 0:
             return content
     else:
-        # ensure socket and contextlib exist
-        for mod in ('socket', 'contextlib'):
+        # ensure socket, contextlib, and threading exist
+        for mod in ('socket', 'contextlib', 'threading'):
             if f'import {mod}' not in content:
                 content, count = re.subn(r'(import trafilatura\n)', f'\\1import {mod}\n', content)
                 if count == 0:
@@ -255,29 +257,35 @@ def patch_webapp_scrape_route(content, path):
 
 # --- GenAI Scrape Helpers ---
 _scrape_client = None
+_thread_local_dns = threading.local()
+_original_getaddrinfo = socket.getaddrinfo
+
+def _safe_getaddrinfo(h, p, *args, **kwargs):
+    pin = getattr(_thread_local_dns, 'pin', None)
+    if pin and h == pin.get('host') and (p == pin.get('port') or p is None):
+        try:
+            ip_obj = ipaddress.ip_address(pin['ip'])
+            family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
+            sockaddr = (pin['ip'], pin['port'], 0, 0) if ip_obj.version == 6 else (pin['ip'], pin['port'])
+            return [(family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', sockaddr)]
+        except ValueError:
+            pass
+    return _original_getaddrinfo(h, p, *args, **kwargs)
+
+socket.getaddrinfo = _safe_getaddrinfo
+
 
 @contextlib.contextmanager
 def pinned_dns(host, ip, port):
-    """Pin DNS resolution for a specific host/port to a target IP.
-    This bypasses standard DNS resolution for this host during the block,
-    ensuring TLS verification succeeds because URL host remains unchanged.
+    """Thread-safe DNS pinning using threading.local().
+    Bypasses standard DNS resolution for a specific host/port to a target IP
+    within the current thread execution context.
     """
-    original_getaddrinfo = socket.getaddrinfo
-    def patched_getaddrinfo(h, p, *args, **kwargs):
-        if h == host and (p == port or p is None):
-            try:
-                ip_obj = ipaddress.ip_address(ip)
-                family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
-                sockaddr = (ip, port, 0, 0) if ip_obj.version == 6 else (ip, port)
-                return [(family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', sockaddr)]
-            except ValueError:
-                pass
-        return original_getaddrinfo(h, p, *args, **kwargs)
-    socket.getaddrinfo = patched_getaddrinfo
+    _thread_local_dns.pin = {'host': host, 'ip': ip, 'port': port}
     try:
         yield
     finally:
-        socket.getaddrinfo = original_getaddrinfo
+        _thread_local_dns.pin = None
 
 
 @app.route('/scrape', methods=['GET', 'POST'])
@@ -287,7 +295,7 @@ def scrape():
 
     SECURITY: Blocks loopback, private/reserved IP ranges, link-local, and
     file:// scheme to prevent SSRF attacks and internal resource exposure.
-    DNS Rebinding is mitigated via DNS pinning, allowing SSL verification to remain enabled.
+    DNS Rebinding is mitigated via thread-safe DNS pinning, allowing SSL verification to remain enabled.
 
     NOTE: SSL verification is enabled by default.
     Set SEARXNG_SCRAPE_VERIFY_SSL=false to disable validation if needed.
@@ -331,6 +339,9 @@ def scrape():
 
         def _get_safe_ip_url(url_to_resolve):
             parsed = urllib.parse.urlparse(url_to_resolve)
+            if parsed.scheme not in ('http', 'https'):
+                raise RuntimeError(f'Blocked invalid scheme: {parsed.scheme}')
+
             host = parsed.hostname
             if _is_blocked_scrape_host(host):
                 raise RuntimeError(f'Blocked: {host} is a private/reserved host')
@@ -349,10 +360,14 @@ def scrape():
 
         current_url = request_url
         for _ in range(5):
+            cur_parsed = urllib.parse.urlparse(current_url)
+            if cur_parsed.scheme not in ('http', 'https'):
+                raise RuntimeError(f'Blocked invalid scheme during redirect: {cur_parsed.scheme}')
+
             safe_ip, original_host, port = _get_safe_ip_url(current_url)
             headers = {'User-Agent': ua}
 
-            # Use DNS Pinning context manager
+            # Use thread-safe DNS Pinning context manager
             with pinned_dns(original_host, safe_ip, port):
                 # The host in current_url remains example.com, so TLS verify works,
                 # but the socket connects directly to safe_ip.
@@ -394,6 +409,7 @@ def scrape():
         return content
 
     return content
+
 
 # --- Patch 6: engines/__init__.py (check disabled flag BEFORE loading module) ---
 def patch_engines_init(content, path):
