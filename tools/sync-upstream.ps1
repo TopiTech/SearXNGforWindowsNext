@@ -28,12 +28,38 @@ function Write-Section {
 }
 
 function Sync-MirrorItem {
-    param([string]$Src, [string]$Dst)
+    param([string]$Src, [string]$Dst, [int]$MaxRetries = 5)
     Initialize-Directory (Split-Path -Parent $Dst)
+
     if (Test-Path -LiteralPath $Dst) {
-        Remove-Item -LiteralPath $Dst -Recurse -Force
+        for ($retry = 1; $retry -le $MaxRetries; $retry++) {
+            try {
+                Remove-Item -LiteralPath $Dst -Recurse -Force -ErrorAction Stop
+                break
+            }
+            catch {
+                if ($retry -eq $MaxRetries) {
+                    throw "Failed to remove $Dst after $MaxRetries attempts: $_"
+                }
+                Write-Host "  ⚠ File locked while removing $Dst. Retrying ($retry/$MaxRetries)..." -ForegroundColor Yellow
+                Start-Sleep -Milliseconds (500 * $retry)
+            }
+        }
     }
-    Copy-Item -LiteralPath $Src -Destination $Dst -Recurse -Force
+
+    for ($retry = 1; $retry -le $MaxRetries; $retry++) {
+        try {
+            Copy-Item -LiteralPath $Src -Destination $Dst -Recurse -Force -ErrorAction Stop
+            break
+        }
+        catch {
+            if ($retry -eq $MaxRetries) {
+                throw "Failed to copy $Src to $Dst after $MaxRetries attempts: $_"
+            }
+            Write-Host "  ⚠ File locked while copying to $Dst. Retrying ($retry/$MaxRetries)..." -ForegroundColor Yellow
+            Start-Sleep -Milliseconds (500 * $retry)
+        }
+    }
 }
 
 function Invoke-GitAction {

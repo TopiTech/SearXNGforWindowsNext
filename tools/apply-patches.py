@@ -179,22 +179,23 @@ def patch_webapp_json_handler(content, path):
     # 1. Widen index_error() to handle json_lite (include in json error path)
     if "output_format in ('json', 'json_lite')" not in content:
         content, n = re.subn(
-            r"(def index_error\b.*?\n\s+)if output_format == 'json':",
+            r"(def index_error\b.*?\n\s*)if\s+output_format\s*==\s*['\"]json['\"]:",
             r"\1if output_format in ('json', 'json_lite'):",
             content, flags=re.S
         )
-        if n == 0:
-            return content
+        if n == 0 and "output_format in ('json', 'json_lite')" not in content:
+            logger.warning("Could not patch index_error for json_lite, anchor not found.")
 
     # 2. Add top-level `import ipaddress` (remove any indented duplicates first)
     if not re.search(r'^import ipaddress', content, re.M):
         content = re.sub(r'^\s+import ipaddress\n', '', content, flags=re.M)
-        # Try to anchor after warnings
         content, count = re.subn(r'(import warnings\n)', r'\1import ipaddress\n', content)
         if count == 0:
             content, count = re.subn(r'(import httpx\n)', r'import ipaddress\n\1', content)
         if count == 0:
-            return content
+            content, count = re.subn(r'(from flask import\b)', r'import ipaddress\n\1', content)
+        if count == 0:
+            raise RuntimeError(f"Patch failed for {path}: Could not find insertion point for 'import ipaddress'.")
 
     # 3. Inject json_lite handler before json handler (stable anchor point)
     if "output_format == 'json_lite'" not in content:
@@ -204,14 +205,14 @@ def patch_webapp_json_handler(content, path):
             "        return Response(response, mimetype='application/json')\n\n"
         )
         content, count = re.subn(
-            r"(?m)^(    if output_format == 'json':\n\n        response = webutils\.get_json_response)",
-            handler + r"    if output_format == 'json':\n\n        response = webutils.get_json_response",
+            r"(?m)^(\s*if\s+output_format\s*==\s*['\"]json['\"]:\s*\n\s*response\s*=\s*webutils\.get_json_response)",
+            handler + r"\1",
             content
         )
         if count == 0:
             content, count = re.subn(r"(# 3\. formats without a template\r?\n)", r"\1" + handler, content)
         if count == 0:
-            return content
+            raise RuntimeError(f"Patch failed for {path}: Could not find json format handler anchor to inject json_lite handler.")
 
     return content
 
@@ -225,31 +226,37 @@ def patch_webapp_scrape_route(content, path):
         "_thread_local_dns",
         "Blocked invalid scheme",
         "Redirect without Location header",
-        "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')" # default should be true
+        "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')", # default should be true
+        "max_keepalive_connections=20",
+        "_searxng_original_getaddrinfo",
+        "v9-bulletproof-cleanup-fix"
     ]
     if all(anchor in content for anchor in required_anchors):
         return "ALREADY_APPLIED"
 
     # 1. Add `import trafilatura`, `import socket`, `import contextlib`, `import threading` at module level
     if 'import trafilatura' not in content:
-        content, count = re.subn(r'(import flask\b)', r'import trafilatura\nimport socket\nimport contextlib\nimport threading\n\1', content)
+        content, count = re.subn(r'(import flask\b|from flask import\b)', r'import trafilatura\nimport socket\nimport contextlib\nimport threading\n\1', content, count=1)
         if count == 0:
-            return content
+            content, count = re.subn(r'(import httpx\n)', r'\1import trafilatura\nimport socket\nimport contextlib\nimport threading\n', content, count=1)
+        if count == 0:
+            raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for trafilatura.")
     else:
         # ensure socket, contextlib, and threading exist
         for mod in ('socket', 'contextlib', 'threading'):
             if f'import {mod}' not in content:
                 content, count = re.subn(r'(import trafilatura\n)', f'\\1import {mod}\n', content)
                 if count == 0:
-                    content, count = re.subn(r'(import flask\b)', f'import {mod}\n\\1', content)
+                    content, count = re.subn(r'(import flask\b|from flask import\b)', f'import {mod}\n\\1', content, count=1)
                 if count == 0:
-                    return content
+                    raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for {mod}.")
 
-    # 2. Clean stale /scrape route (idempotency)
-    content = re.sub(
-        r'\n@app\.route\(\'/scrape\'[^\n]*\)\ndef scrape\(\):.*?(?=\n\n@app\.route|\n@app\.route|\Z)',
-        '\n', content, flags=re.S
-    )
+    # 2. Clean ALL previous helper blocks and scrape routes completely (idempotency & duplicate removal)
+    while '# --- GenAI Scrape Helpers ---' in content:
+        content = re.sub(r'(?s)\n# --- GenAI Scrape Helpers ---.*?(?=\n@app\.route|\n# --- GenAI Scrape Helpers ---|\Z)', '', content, count=1)
+    
+    while "@app.route('/scrape'" in content or '@app.route("/scrape"' in content:
+        content = re.sub(r'(?s)\n@app\.route\(\s*[\'"]/scrape[\'"].*?(?=\n@app\.route|\Z)', '', content, count=1)
 
     # 3. Inject global client holder and pinned_dns context manager before scrape route
     # Also define the new route
@@ -258,7 +265,9 @@ def patch_webapp_scrape_route(content, path):
 # --- GenAI Scrape Helpers ---
 _scrape_client = None
 _thread_local_dns = threading.local()
-_original_getaddrinfo = socket.getaddrinfo
+if not hasattr(socket, '_searxng_original_getaddrinfo'):
+    socket._searxng_original_getaddrinfo = socket.getaddrinfo
+_original_getaddrinfo = socket._searxng_original_getaddrinfo
 
 def _safe_getaddrinfo(h, p, *args, **kwargs):
     pin = getattr(_thread_local_dns, 'pin', None)
@@ -291,7 +300,7 @@ def pinned_dns(host, ip, port):
 @app.route('/scrape', methods=['GET', 'POST'])
 def scrape():
     """Extract main text content from URL (GenAI friendly, SSRF-protected).
-    # v4-sni-fix
+    # v9-bulletproof-cleanup-fix
 
     SECURITY: Blocks loopback, private/reserved IP ranges, link-local, and
     file:// scheme to prevent SSRF attacks and internal resource exposure.
@@ -334,8 +343,9 @@ def scrape():
               'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36')
 
         if _scrape_client is None:
-            # Reusable HTTP client with connection pooling
-            _scrape_client = httpx.Client(timeout=10.0, follow_redirects=False, verify=verify_ssl)
+            # Reusable HTTP client with connection pooling and explicit limits
+            scrape_limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
+            _scrape_client = httpx.Client(timeout=10.0, follow_redirects=False, verify=verify_ssl, limits=scrape_limits)
 
         def _get_safe_ip_url(url_to_resolve):
             parsed = urllib.parse.urlparse(url_to_resolve)
@@ -394,6 +404,15 @@ def scrape():
             downloaded, include_comments=False, include_tables=True
         )
         if not content_text:
+            # Fallback to basic HTML text extraction if trafilatura returns None/empty
+            raw_text = re.sub(r'(?s)<script.*?>.*?</script>', ' ', downloaded)
+            raw_text = re.sub(r'(?s)<style.*?>.*?</style>', ' ', raw_text)
+            raw_text = re.sub(r'<[^>]+>', ' ', raw_text)
+            raw_text = re.sub(r'\s+', ' ', raw_text).strip()
+            if raw_text:
+                content_text = raw_text[:5000]
+
+        if not content_text:
             return jsonify({'error': 'Could not extract content'}), 422
 
         return jsonify({'url': url, 'content': content_text})
@@ -404,11 +423,12 @@ def scrape():
 
 '''
 
-    content, count = re.subn(r"(@app\.route\('/search')", scrape_route_code + r'\1', content)
+    content, count = re.subn(r"(?m)^(\s*@app\.route\(\s*['\"]/search['\"])", lambda m: scrape_route_code + m.group(1), content)
     if count == 0:
-        return content
+        raise RuntimeError(f"Patch failed for {path}: Could not find @app.route('/search') anchor to inject /scrape route.")
 
     return content
+
 
 
 # --- Patch 6: engines/__init__.py (check disabled flag BEFORE loading module) ---
