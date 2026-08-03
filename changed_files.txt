@@ -1,7 +1,49 @@
  M UPSTREAM_VERSION.txt
+ M config/requirements.upstream.txt
+ M python/Lib/site-packages/searx/answerers/random.py
+ M python/Lib/site-packages/searx/autocomplete.py
+ M python/Lib/site-packages/searx/botdetection/link_token.py
+ M python/Lib/site-packages/searx/data/ahmia_blacklist.txt
+ M python/Lib/site-packages/searx/data/currencies.json
+ M python/Lib/site-packages/searx/data/engine_traits.json
+ M python/Lib/site-packages/searx/data/useragents.json
+ M python/Lib/site-packages/searx/engines/500px.py
  M python/Lib/site-packages/searx/engines/__init__.py
+ M python/Lib/site-packages/searx/engines/bilibili.py
+ D python/Lib/site-packages/searx/engines/presearch.py
+ D python/Lib/site-packages/searx/engines/reddit.py
+ M python/Lib/site-packages/searx/engines/swisscows.py
+ M python/Lib/site-packages/searx/favicons/favicons.toml
+ M python/Lib/site-packages/searx/favicons/resolvers.py
  M python/Lib/site-packages/searx/search/processors/__init__.py
+ M python/Lib/site-packages/searx/settings.yml
  M python/Lib/site-packages/searx/settings_defaults.py
+ D python/Lib/site-packages/searx/static/themes/simple/chunk/BnnvKC7b.min.js
+ D python/Lib/site-packages/searx/static/themes/simple/chunk/BnnvKC7b.min.js.map
+ D python/Lib/site-packages/searx/static/themes/simple/chunk/C8c7HJzp.min.js
+ D python/Lib/site-packages/searx/static/themes/simple/chunk/C8c7HJzp.min.js.map
+ D python/Lib/site-packages/searx/static/themes/simple/chunk/DpvWr1cn.min.js
+ D python/Lib/site-packages/searx/static/themes/simple/chunk/DpvWr1cn.min.js.map
+ M python/Lib/site-packages/searx/static/themes/simple/manifest.json
+ M python/Lib/site-packages/searx/static/themes/simple/sxng-core.min.js
+ M python/Lib/site-packages/searx/static/themes/simple/sxng-core.min.js.map
+ M python/Lib/site-packages/searx/sxng_locales.py
+ M python/Lib/site-packages/searx/translations/es/LC_MESSAGES/messages.mo
+ M python/Lib/site-packages/searx/translations/es/LC_MESSAGES/messages.po
+ M python/Lib/site-packages/searx/translations/eu/LC_MESSAGES/messages.mo
+ M python/Lib/site-packages/searx/translations/eu/LC_MESSAGES/messages.po
+ M python/Lib/site-packages/searx/translations/lv/LC_MESSAGES/messages.mo
+ M python/Lib/site-packages/searx/translations/lv/LC_MESSAGES/messages.po
  M python/Lib/site-packages/searx/valkeydb.py
  M python/Lib/site-packages/searx/webapp.py
  M python/Lib/site-packages/searx/webutils.py
+?? python/Lib/site-packages/searx/engines/exaapi.py
+?? python/Lib/site-packages/searx/engines/keenable.py
+?? python/Lib/site-packages/searx/static/themes/simple/chunk/Bc8fcwWx.min.js
+?? python/Lib/site-packages/searx/static/themes/simple/chunk/Bc8fcwWx.min.js.map
+?? python/Lib/site-packages/searx/static/themes/simple/chunk/BfLIj3Of.min.js
+?? python/Lib/site-packages/searx/static/themes/simple/chunk/BfLIj3Of.min.js.map
+?? python/Lib/site-packages/searx/static/themes/simple/chunk/BuurKv-k.min.js
+?? python/Lib/site-packages/searx/static/themes/simple/chunk/BuurKv-k.min.js.map
+?? python/Lib/site-packages/searx/static/themes/simple/chunk/D3mcqWOe.min.js
+?? python/Lib/site-packages/searx/static/themes/simple/chunk/D3mcqWOe.min.js.map
