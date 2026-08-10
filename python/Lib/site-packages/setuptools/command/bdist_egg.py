@@ -12,7 +12,7 @@ import textwrap
 from collections.abc import Iterator
 from sysconfig import get_path, get_platform, get_python_version
 from types import CodeType
-from typing import TYPE_CHECKING, AnyStr, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal, TypeVar
 
 from setuptools import Command
 from setuptools.extension import Library
@@ -26,6 +26,8 @@ if TYPE_CHECKING:
     from typing import TypeAlias
 
     from _typeshed import GenericPath
+
+    _StrOrBytesT = TypeVar("_StrOrBytesT", str, bytes)
 
 # Same as zipfile._ZipFileMode from typeshed
 _ZipFileMode: TypeAlias = Literal["r", "w", "x", "a"]
@@ -43,8 +45,8 @@ def strip_module(filename):
 
 
 def sorted_walk(
-    dir: GenericPath[AnyStr],
-) -> Iterator[tuple[AnyStr, list[AnyStr], list[AnyStr]]]:
+    dir: GenericPath[_StrOrBytesT],
+) -> Iterator[tuple[_StrOrBytesT, list[_StrOrBytesT], list[_StrOrBytesT]]]:
     """Do os.walk in a reproducible way,
     independent of indeterministic filesystem readdir order
     """
@@ -75,26 +77,36 @@ def write_stub(resource, pyfile) -> None:
 class bdist_egg(Command):
     description = 'create an "egg" distribution'
 
-    user_options = [
+    user_options: ClassVar[
+        list[tuple[str, str, str]] | list[tuple[str, str | None, str]]
+    ] = [
         ('bdist-dir=', 'b', "temporary directory for creating the distribution"),
         (
             'plat-name=',
             'p',
-            "platform name to embed in generated filenames "
-            "(by default uses `sysconfig.get_platform()`)",
+            (
+                "platform name to embed in generated filenames "
+                "(by default uses `sysconfig.get_platform()`)"
+            ),
         ),
         ('exclude-source-files', None, "remove all .py files from the generated egg"),
         (
             'keep-temp',
             'k',
-            "keep the pseudo-installation tree around after "
-            "creating the distribution archive",
+            (
+                "keep the pseudo-installation tree around after "
+                "creating the distribution archive"
+            ),
         ),
         ('dist-dir=', 'd', "directory to put final built distributions in"),
         ('skip-build', None, "skip rebuilding everything (for testing/debugging)"),
     ]
 
-    boolean_options = ['keep-temp', 'skip-build', 'exclude-source-files']
+    boolean_options: ClassVar[list[str]] = [
+        'keep-temp',
+        'skip-build',
+        'exclude-source-files',
+    ]
 
     def initialize_options(self):
         self.bdist_dir = None
@@ -135,15 +147,14 @@ class bdist_egg(Command):
         old, self.distribution.data_files = self.distribution.data_files, []
 
         for item in old:
-            if isinstance(item, tuple) and len(item) == 2:
-                if os.path.isabs(item[0]):
-                    realpath = os.path.realpath(item[0])
-                    normalized = os.path.normcase(realpath)
-                    if normalized == site_packages or normalized.startswith(
-                        site_packages + os.sep
-                    ):
-                        item = realpath[len(site_packages) + 1 :], item[1]
-                        # XXX else: raise ???
+            if isinstance(item, tuple) and len(item) == 2 and os.path.isabs(item[0]):
+                realpath = os.path.realpath(item[0])
+                normalized = os.path.normcase(realpath)
+                if normalized == site_packages or normalized.startswith(
+                    site_packages + os.sep
+                ):
+                    item = realpath[len(site_packages) + 1 :], item[1]
+                    # XXX else: raise ???
             self.distribution.data_files.append(item)
 
         try:
@@ -314,14 +325,15 @@ class bdist_egg(Command):
                     continue
                 fullname = build_cmd.get_ext_fullname(ext.name)
                 filename = build_cmd.get_ext_filename(fullname)
-                if not os.path.basename(filename).startswith('dl-'):
-                    if os.path.exists(os.path.join(self.bdist_dir, filename)):
-                        ext_outputs.append(filename)
+                if not os.path.basename(filename).startswith('dl-') and os.path.exists(
+                    os.path.join(self.bdist_dir, filename)
+                ):
+                    ext_outputs.append(filename)
 
         return all_outputs, ext_outputs
 
 
-NATIVE_EXTENSIONS: dict[str, None] = dict.fromkeys('.dll .so .dylib .pyd'.split())
+NATIVE_EXTENSIONS: dict[str, None] = dict.fromkeys(['.dll', '.so', '.dylib', '.pyd'])
 
 
 def walk_egg(egg_dir: StrPath) -> Iterator[tuple[str, list[str], list[str]]]:
@@ -379,7 +391,7 @@ def scan_module(egg_dir, base, name, stubs):
     pkg = base[len(egg_dir) + 1 :].replace(os.sep, '.')
     module = pkg + (pkg and '.' or '') + os.path.splitext(name)[0]
     skip = 16  # skip magic & reserved? & date & file size
-    f = open(filename, 'rb')
+    f = open(filename, 'rb')  # noqa: SIM115 # handle managed explicitly
     f.read(skip)
     code = marshal.load(f)
     f.close()
