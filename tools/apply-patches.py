@@ -223,6 +223,7 @@ def patch_webapp_scrape_route(content, path):
         "_is_blocked_scrape_host",
         "pinned_dns",
         "_scrape_client",
+        "_scrape_client_verify_ssl",
         "_thread_local_dns",
         "Blocked invalid scheme",
         "Redirect without Location header",
@@ -264,6 +265,7 @@ def patch_webapp_scrape_route(content, path):
 
 # --- GenAI Scrape Helpers ---
 _scrape_client = None
+_scrape_client_verify_ssl = None
 _thread_local_dns = threading.local()
 if not hasattr(socket, '_searxng_original_getaddrinfo'):
     socket._searxng_original_getaddrinfo = socket.getaddrinfo
@@ -337,15 +339,18 @@ def scrape():
         return False
 
     def _fetch_scrape_url(request_url):
-        global _scrape_client
+        global _scrape_client, _scrape_client_verify_ssl
         verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')
         ua = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
               'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36')
 
-        if _scrape_client is None:
+        if _scrape_client is None or _scrape_client_verify_ssl != verify_ssl:
             # Reusable HTTP client with connection pooling and explicit limits
             scrape_limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
+            if _scrape_client is not None:
+                _scrape_client.close()
             _scrape_client = httpx.Client(timeout=10.0, follow_redirects=False, verify=verify_ssl, limits=scrape_limits)
+            _scrape_client_verify_ssl = verify_ssl
 
         def _get_safe_ip_url(url_to_resolve):
             parsed = urllib.parse.urlparse(url_to_resolve)

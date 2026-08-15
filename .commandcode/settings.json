@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(git:*)",
+      "Shell(dir:*)",
+      "Shell(pythonpython.exe:*)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

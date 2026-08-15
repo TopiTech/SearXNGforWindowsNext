@@ -1,0 +1,16 @@
+# User Preferences
+- Prefers comprehensive, read-only code reviews covering the full workspace (HEAD + working tree), not just diffs. Confidence: 0.95
+- Expects code review findings to be concrete and evidence-backed (code references, reproduction steps, command output, primary sources). Excludes style preferences, speculative risks, and generic advice. Confidence: 0.95
+- Uses a strict severity taxonomy for issues: Critical (auth bypass, secret leak, RCE, data loss, major outage), High (major feature broken, severe inconsistency), Medium (limited functional failure, meaningful quality degradation), Low (small reproducible impact or clear improvement value). Confidence: 0.95
+- Wants structured issue output format: [ID][Severity] Summary → Location → Impact path → Problem → Conditions → Evidence → Impact → Fix direction → Acceptance criteria → Tests → Sources. Confidence: 0.95
+- Reviews should include summary sections: Overall assessment, Scope reviewed, Unverified scope and reasons, Verification results, Remaining risks, Primary sources referenced. Confidence: 0.95
+- Expects review process to trace reachable paths from entry points through side effects (startup, API, CLI, module calls, data flow, state, auth, external services, async/concurrency, contracts/schemas). Confidence: 0.9
+- Wants documentation compared against actual code/config/tests/CI rather than assumed correct. Confidence: 0.9
+- Prefers running safe existing verification commands (tests, lint, format, typecheck, static analysis, build, dependency checks) as part of review. Confidence: 0.9
+- Hard constraint: reviews must be read-only — no file modifications, auto-fixes, dependency updates, commits, pushes, PRs, or external service writes. Confidence: 0.95
+- Prioritizes security findings (auth bypass, secret leaks, RCE) at the top of severity ordering. Confidence: 0.9
+- Reviews include explicit analysis of auth, authorization, sessions, credentials, encryption, and external service interactions. Confidence: 0.9
+- Windows development environment (Windows paths, PowerShell + batch scripts alongside Python). Confidence: 0.85
+- Works with Python projects, shell scripting (PowerShell, batch), and git-based workflows. Confidence: 0.85
+- Prefers thorough, systematic, methodical analysis with detailed structured output. Confidence: 0.9
+- Values precision in prompts — provides explicit constraints, definitions, and output templates. Confidence: 0.9
