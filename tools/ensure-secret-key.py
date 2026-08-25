@@ -8,11 +8,13 @@ import os
 import re
 
 DEFAULT_KEY = "SearXNG for Windows-mbaozi"
-# Known committed key in config/settings.yml that must be rotated on first run.
-# This hex value was committed to the repository and is shared by all clones.
+# Known committed keys in config/settings.yml that must be rotated on first run.
+# These values were committed to the repository and are shared by all clones.
 KNOWN_COMMITTED_KEYS = [
     DEFAULT_KEY,
     "654eba279ae3354410f8c36f11535af7b1d6f893482cccad86268bdd50a047c1",
+    "4d7e7376e13c5de05bd915d4e270928abf72686db55a58b27ae3d5c14cf387d4",
+    "CHANGE_ME__generate_with_tools_ensure_secret_key_py__or_set_SEARXNG_SECRET",
 ]
 SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "settings.yml")
 
@@ -38,7 +40,21 @@ def main():
             )
             with open(path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(content)
+            print(f"[INFO] Rotated secret_key in {path}")
             return
+    if re.search(r'secret_key:\s*["\']?CHANGE_ME', content):
+        print("[INFO] Placeholder secret_key detected. Generating a secure random key...")
+        new_key = secrets.token_hex(32)
+        content = re.sub(
+            r'secret_key:\s*["\']?CHANGE_ME[^"\']*["\']?',
+            f'secret_key: "{new_key}"',
+            content,
+            count=1,
+        )
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(content)
+        print(f"[INFO] Rotated placeholder secret_key in {path}")
+        return
 
 
 if __name__ == "__main__":

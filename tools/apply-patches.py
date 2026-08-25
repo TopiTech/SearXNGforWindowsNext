@@ -230,12 +230,19 @@ def patch_webapp_scrape_route(content, path):
         "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')", # default should be true
         "max_keepalive_connections=20",
         "_searxng_original_getaddrinfo",
-        "v9-bulletproof-cleanup-fix"
+        "v9-bulletproof-cleanup-fix",
+        "import re"
     ]
     if all(anchor in content for anchor in required_anchors):
         return "ALREADY_APPLIED"
 
-    # 1. Add `import trafilatura`, `import socket`, `import contextlib`, `import threading` at module level
+    # 1. Add imports at module level (ensure re is present for scrape fallback)
+    if 'import re' not in content:
+        content, count = re.subn(r'(import warnings\n)', r'import re\n\1', content, count=1)
+        if count == 0:
+            content, count = re.subn(r'(import httpx\n)', r'\1import re\n', content, count=1)
+        if count == 0:
+            raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for re.")
     if 'import trafilatura' not in content:
         content, count = re.subn(r'(import flask\b|from flask import\b)', r'import trafilatura\nimport socket\nimport contextlib\nimport threading\n\1', content, count=1)
         if count == 0:
