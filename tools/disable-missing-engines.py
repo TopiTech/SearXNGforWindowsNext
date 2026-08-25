@@ -4,40 +4,36 @@ import yaml
 import re
 
 def disable_engine_in_text(yaml_content, engine_name):
-    # Match the block starting with "- name: engine_name" up to the next list item or outdent
-    # Matches:
-    #   - name: google
-    #     engine: google
-    #     ...
-    pattern = rf"(?m)^([ \t]*-\s*name:\s*[\"']?{re.escape(engine_name)}[\"']?\s*\r?\n(?:[ \t]+[^\r\n]*\r?\n)*)"
-    match = re.search(pattern, yaml_content)
-    if not match:
-        return yaml_content
+    # Match any list item block starting with "  - " containing "name: engine_name"
+    pattern = r"(?m)^([ \t]*-\s+[^\r\n]*\r?\n(?:[ \t]+[^\r\n]*\r?\n)*)"
+    for match in re.finditer(pattern, yaml_content):
+        block = match.group(1)
+        if (re.search(rf"^[ \t]*-\s*name:\s*[\"']?{re.escape(engine_name)}[\"']?(?:\s|$)", block, re.M) or
+                re.search(rf"^[ \t]+name:\s*[\"']?{re.escape(engine_name)}[\"']?(?:\s|$)", block, re.M)):
+            # Check if disabled is already defined in this block
+            if re.search(r'(?m)^[ \t]+disabled:', block):
+                return yaml_content
 
-    block = match.group(1)
-    # Check if disabled is already defined in this block
-    if re.search(r'(?m)^[ \t]+disabled:', block):
-        return yaml_content
+            # Determine child indentation from the second line of the block
+            lines = block.splitlines()
+            child_indent = "    "
+            for line in lines[1:]:
+                if line.strip():
+                    child_indent = line[:len(line) - len(line.lstrip())]
+                    break
 
-    # Determine child indentation from the second line of the block
-    lines = block.splitlines()
-    child_indent = "    "
-    for line in lines[1:]:
-        if line.strip():
-            child_indent = line[:len(line) - len(line.lstrip())]
-            break
+            # Insert disabled: true at the end of the block before any trailing empty lines
+            last_valid_idx = len(lines) - 1
+            while last_valid_idx >= 0 and not lines[last_valid_idx].strip():
+                last_valid_idx -= 1
 
-    # Insert disabled: true at the end of the block before any trailing empty lines
-    last_valid_idx = len(lines) - 1
-    while last_valid_idx >= 0 and not lines[last_valid_idx].strip():
-        last_valid_idx -= 1
+            if last_valid_idx >= 0:
+                lines.insert(last_valid_idx + 1, f"{child_indent}disabled: true")
 
-    if last_valid_idx >= 0:
-        lines.insert(last_valid_idx + 1, f"{child_indent}disabled: true")
-    
-    new_block = "\n".join(lines) + "\n"
-    # Replace the exact block in the content
-    return yaml_content.replace(block, new_block)
+            new_block = "\n".join(lines) + "\n"
+            return yaml_content[:match.start()] + new_block + yaml_content[match.end():]
+
+    return yaml_content
 
 def main():
     if len(sys.argv) < 3:

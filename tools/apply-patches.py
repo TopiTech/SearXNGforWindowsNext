@@ -116,7 +116,7 @@ def patch_settings_defaults(content, path):
 
 # --- Patch 3: webutils.py (add get_json_lite_response, optimised) ---
 def patch_webutils(content, path):
-    if "def get_json_lite_response" in content and "'score': d.get('score', 0)" in content:
+    if "def get_json_lite_response" in content and "'score': d.get('score', 0)" in content and "_get_box" in content:
         return "ALREADY_APPLIED"
 
     lite_func = '''
@@ -125,7 +125,7 @@ def patch_webutils(content, path):
 def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
     """Returns a simplified JSON string (GenAI friendly)."""
     def _r(res):
-        d = res.as_dict()
+        d = res.as_dict() if hasattr(res, 'as_dict') else (res if isinstance(res, dict) else {})
         return {
             'title': d.get('title', ''),
             'url': d.get('url', ''),
@@ -143,17 +143,29 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
         'corrections': list(rc.corrections),
     }
     if rc.answers:
-        data['answers'] = [a.as_dict().get('answer') for a in rc.answers]
+        def _get_ans(a):
+            if hasattr(a, 'as_dict'):
+                return a.as_dict().get('answer', '')
+            if isinstance(a, dict):
+                return a.get('answer', '')
+            return str(a)
+        data['answers'] = [_get_ans(a) for a in rc.answers]
     if rc.infoboxes:
-        data['infoboxes'] = [
-            {
-                'infobox': getattr(i, 'infobox', ''),
-                'content': getattr(i, 'content', ''),
-                'urls': [{'title': u.get('title'), 'url': u.get('url')}
-                         for u in getattr(i, 'urls', [])],
+        def _get_box(i):
+            d = i.as_dict() if hasattr(i, 'as_dict') else (i if isinstance(i, dict) else {})
+            urls_raw = d.get('urls', []) if isinstance(d, dict) else getattr(i, 'urls', [])
+            urls = []
+            for u in urls_raw:
+                if isinstance(u, dict):
+                    urls.append({'title': u.get('title', ''), 'url': u.get('url', '')})
+                else:
+                    urls.append({'title': getattr(u, 'title', ''), 'url': getattr(u, 'url', '')})
+            return {
+                'infobox': d.get('infobox', '') if isinstance(d, dict) else getattr(i, 'infobox', ''),
+                'content': d.get('content', '') if isinstance(d, dict) else getattr(i, 'content', ''),
+                'urls': urls,
             }
-            for i in rc.infoboxes
-        ]
+        data['infoboxes'] = [_get_box(i) for i in rc.infoboxes]
     return json.dumps(data, cls=JSONEncoder)
 
 
@@ -223,6 +235,7 @@ def patch_webapp_scrape_route(content, path):
         "_is_blocked_scrape_host",
         "pinned_dns",
         "_scrape_client",
+        "_scrape_client_lock",
         "_scrape_client_verify_ssl",
         "_thread_local_dns",
         "Blocked invalid scheme",
@@ -230,7 +243,7 @@ def patch_webapp_scrape_route(content, path):
         "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')", # default should be true
         "max_keepalive_connections=20",
         "_searxng_original_getaddrinfo",
-        "v9-bulletproof-cleanup-fix",
+        "v10-bulletproof-scrape-fix",
         "import re"
     ]
     if all(anchor in content for anchor in required_anchors):
@@ -272,6 +285,7 @@ def patch_webapp_scrape_route(content, path):
 
 # --- GenAI Scrape Helpers ---
 _scrape_client = None
+_scrape_client_lock = threading.Lock()
 _scrape_client_verify_ssl = None
 _thread_local_dns = threading.local()
 if not hasattr(socket, '_searxng_original_getaddrinfo'):
@@ -280,13 +294,14 @@ _original_getaddrinfo = socket._searxng_original_getaddrinfo
 
 def _safe_getaddrinfo(h, p, *args, **kwargs):
     pin = getattr(_thread_local_dns, 'pin', None)
-    if pin and h == pin.get('host') and (p == pin.get('port') or p is None):
+    if pin and h == pin.get('host') and (p is None or p == pin.get('port') or str(p) == str(pin.get('port'))):
         try:
             ip_obj = ipaddress.ip_address(pin['ip'])
+            port_num = int(pin.get('port') or (443 if p == 443 else 80))
             family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
-            sockaddr = (pin['ip'], pin['port'], 0, 0) if ip_obj.version == 6 else (pin['ip'], pin['port'])
+            sockaddr = (pin['ip'], port_num, 0, 0) if ip_obj.version == 6 else (pin['ip'], port_num)
             return [(family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', sockaddr)]
-        except ValueError:
+        except Exception:
             pass
     return _original_getaddrinfo(h, p, *args, **kwargs)
 
@@ -309,7 +324,7 @@ def pinned_dns(host, ip, port):
 @app.route('/scrape', methods=['GET', 'POST'])
 def scrape():
     """Extract main text content from URL (GenAI friendly, SSRF-protected).
-    # v9-bulletproof-cleanup-fix
+    # v10-bulletproof-scrape-fix
 
     SECURITY: Blocks loopback, private/reserved IP ranges, link-local, and
     file:// scheme to prevent SSRF attacks and internal resource exposure.
@@ -319,8 +334,10 @@ def scrape():
     Set SEARXNG_SCRAPE_VERIFY_SSL=false to disable validation if needed.
     """
     url = sxng_request.values.get('url')
-    if not url and sxng_request.is_json and sxng_request.json:
-        url = sxng_request.json.get('url')
+    if not url:
+        json_data = sxng_request.get_json(silent=True)
+        if json_data and isinstance(json_data, dict):
+            url = json_data.get('url')
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
 
@@ -351,13 +368,17 @@ def scrape():
         ua = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
               'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36')
 
-        if _scrape_client is None or _scrape_client_verify_ssl != verify_ssl:
-            # Reusable HTTP client with connection pooling and explicit limits
-            scrape_limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
-            if _scrape_client is not None:
-                _scrape_client.close()
-            _scrape_client = httpx.Client(timeout=10.0, follow_redirects=False, verify=verify_ssl, limits=scrape_limits)
-            _scrape_client_verify_ssl = verify_ssl
+        with _scrape_client_lock:
+            if _scrape_client is None or _scrape_client_verify_ssl != verify_ssl:
+                # Reusable HTTP client with connection pooling and explicit limits
+                scrape_limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
+                if _scrape_client is not None:
+                    try:
+                        _scrape_client.close()
+                    except Exception:
+                        pass
+                _scrape_client = httpx.Client(timeout=10.0, follow_redirects=False, verify=verify_ssl, limits=scrape_limits)
+                _scrape_client_verify_ssl = verify_ssl
 
         def _get_safe_ip_url(url_to_resolve):
             parsed = urllib.parse.urlparse(url_to_resolve)
@@ -428,8 +449,14 @@ def scrape():
             return jsonify({'error': 'Could not extract content'}), 422
 
         return jsonify({'url': url, 'content': content_text})
+    except httpx.TimeoutException as e:
+        return jsonify({'error': f'Fetch timeout: {str(e)[:100]}'}), 504
     except httpx.HTTPError as e:
         return jsonify({'error': f'Fetch failed: {str(e)[:100]}'}), 502
+    except RuntimeError as e:
+        err_msg = str(e)[:100]
+        status_code = 400 if 'Blocked' in err_msg else 502
+        return jsonify({'error': err_msg}), status_code
     except Exception as e:
         return jsonify({'error': f'Fetch failed: {str(e)[:100]}'}), 500
 

@@ -5,6 +5,8 @@ param(
     [switch]$CleanTemp
 )
 
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+$OutputEncoding = [System.Text.UTF8Encoding]::new()
 $ErrorActionPreference = "Stop"
 
 function Assert-Command {

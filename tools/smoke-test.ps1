@@ -1,3 +1,5 @@
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+$OutputEncoding = [System.Text.UTF8Encoding]::new()
 $ErrorActionPreference = "Stop"
 
 $base = "http://127.0.0.1:8888"
@@ -102,6 +104,22 @@ try {
     Assert-Blocked -Uri "$base/scrape?url=file:///etc/passwd" -Label "file:// scheme"
     Assert-Blocked -Uri "$base/scrape?url=gopher://127.0.0.1:6379/" -Label "gopher:// scheme"
     Assert-Blocked -Uri "$base/scrape?url=ftp://example.com/test" -Label "ftp:// scheme"
+    Write-Host ""
+
+    # Test 14: Autocomplete endpoint
+    Write-Host "Test 14: Autocomplete endpoint..." -ForegroundColor Cyan
+    $acUri = "$base/autocompleter?q=python"
+    $acResponse = Invoke-WebRequest -Uri $acUri -UseBasicParsing -ErrorAction Stop
+    if ($acResponse.StatusCode -eq 200) {
+        Write-Host "  ✓ Autocompleter returned 200" -ForegroundColor Green
+    } else {
+        throw "FAIL: Autocompleter returned $($acResponse.StatusCode)"
+    }
+    Write-Host ""
+
+    # Test 15: Scrape validation - missing URL
+    Write-Host "Test 15: /scrape error handling (missing URL)..." -ForegroundColor Cyan
+    Assert-HttpStatusCode -Uri "$base/scrape" -ExpectedStatusCode 400 -Label "Scrape missing URL"
     Write-Host ""
 
     Write-Host "=====================================" -ForegroundColor Green
