@@ -490,6 +490,164 @@ def patch_processors_init(content, path):
     content, count = re.subn(pattern, r"\1" + inject_code, content)
     return content
 
+# --- Patch 8: engines/google.py (fix CAPTCHA false positives) ---
+def patch_google_captcha(content, path):
+    if 'sogou.com/antispider' in content:
+        return content
+    if 'loc = (resp.headers.get("Location")' in content:
+        return "ALREADY_APPLIED"
+    old = (
+        "    if resp.status_code == 302:\n"
+        "        raise SearxEngineCaptchaException()\n"
+        "\n"
+        "    if len(resp.text) < 2000 and \"/sorry/\" in resp.text:\n"
+        "        raise SearxEngineCaptchaException()"
+    )
+    new = (
+        "    if resp.status_code == 302:\n"
+        "        loc = (resp.headers.get(\"Location\") or resp.headers.get(\"location\") or \"\")\n"
+        "        if \"/sorry\" in loc or \"sorry.google.com\" in loc or not loc:\n"
+        "            raise SearxEngineCaptchaException()\n"
+        "\n"
+        "    if len(resp.text) < 2000 and \"/sorry/\" in resp.text:\n"
+        "        raise SearxEngineCaptchaException()"
+    )
+    if old in content:
+        return content.replace(old, new)
+    return content
+
+# --- Patch 9: engines/sogou.py (robust CAPTCHA detection) ---
+def patch_sogou_captcha(content, path):
+    if "antispider" in content and "captcha" in content.lower() and "resp.headers.get" in content:
+        return "ALREADY_APPLIED"
+    old = (
+        "def response(resp):\n"
+        "    if (\n"
+        "        resp.status_code == 302\n"
+        "        and resp.next_request is not None\n"
+        "        and str(resp.next_request.url).startswith(\"http://www.sogou.com/antispider\")\n"
+        "    ):\n"
+        "        raise SearxEngineCaptchaException()"
+    )
+    new = (
+        "def response(resp):\n"
+        "    if resp.status_code == 302:\n"
+        "        loc = resp.headers.get(\"Location\") or resp.headers.get(\"location\") or \"\"\n"
+        "        if \"antispider\" in loc or \"sogou.com/antispider\" in loc:\n"
+        "            raise SearxEngineCaptchaException()\n"
+        "        if resp.next_request is not None and str(resp.next_request.url).startswith(\"http://www.sogou.com/antispider\"):\n"
+        "            raise SearxEngineCaptchaException()\n"
+        "        text_preview = (resp.text or \"\")[:4096]\n"
+        "        if \"antispider\" in text_preview or \"captcha\" in text_preview.lower():\n"
+        "            raise SearxEngineCaptchaException()\n"
+        "    if resp.status_code == 200:\n"
+        "        text_preview = (resp.text or \"\")[:8192].lower()\n"
+        "        if \"antispider\" in text_preview and (\"captcha\" in text_preview or \"verify\" in text_preview):\n"
+        "            if \"class=\\\"result\\\"\" not in text_preview and \"class=\\\"rb\\\"\" not in text_preview:\n"
+        "                raise SearxEngineCaptchaException()"
+    )
+    if old in content:
+        return content.replace(old, new)
+    return content
+
+# --- Patch 10: search/processors/abstract.py (cap CAPTCHA suspend, quick retry) ---
+def patch_abstract_suspend(content, path):
+    if "captcha" in content.lower() and "SearxEngineCaptcha" in content and "suspended_time = min(suspended_time, 900)" in content:
+        return "ALREADY_APPLIED"
+    old = (
+        "            self.suspend_end_time = default_timer() + suspended_time\n"
+        "            self.suspend_reason = suspend_reason\n"
+        "            logger.debug(\"Suspend for %i seconds\", suspended_time)"
+    )
+    new = (
+        "            suspended_time = min(suspended_time, get_setting(\"search.max_ban_time_on_fail\"))\n"
+        "            if \"captcha\" in suspend_reason.lower() or \"SearxEngineCaptcha\" in suspend_reason:\n"
+        "                suspended_time = min(suspended_time, 900)\n"
+        "            if suspended_time > 120 and self.continuous_errors == 1:\n"
+        "                suspended_time = min(suspended_time, 120)\n"
+        "\n"
+        "            self.suspend_end_time = default_timer() + suspended_time\n"
+        "            self.suspend_reason = suspend_reason\n"
+        "            logger.debug(\"Suspend for %i seconds\", suspended_time)"
+    )
+    if old in content:
+        return content.replace(old, new)
+    return content
+
+# --- Patch 11: search/processors/online.py (Retry-After + 15min cap, proper logging) ---
+def patch_online_captcha(content, path):
+    if "_parse_retry_after_header" in content:
+        return "ALREADY_APPLIED"
+    old_import = "from searx.metrics.error_recorder import count_error\nfrom .abstract import EngineProcessor, RequestParams"
+    new_import = (
+        "from searx.metrics.error_recorder import count_error\n"
+        "from .abstract import EngineProcessor, RequestParams\n"
+        "\n"
+        "\n"
+        "def _parse_retry_after_header(resp) -> int | None:\n"
+        "    if resp is None:\n"
+        "        return None\n"
+        "    try:\n"
+        "        hdr = None\n"
+        "        if hasattr(resp, 'headers'):\n"
+        "            hdr = resp.headers.get('Retry-After') or resp.headers.get('retry-after')\n"
+        "        if hdr is None:\n"
+        "            return None\n"
+        "        hdr = hdr.strip()\n"
+        "        if hdr.isdigit():\n"
+        "            v = int(hdr)\n"
+        "            return max(5, min(v, 900))\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    return None"
+    )
+    if old_import in content:
+        content = content.replace(old_import, new_import)
+    old_block = (
+        "        except (\n"
+        "            SearxEngineCaptchaException,\n"
+        "            SearxEngineTooManyRequestsException,\n"
+        "            SearxEngineAccessDeniedException,\n"
+        "        ) as e:\n"
+        "            self.handle_exception(result_container, e, suspend=True)\n"
+        "            self.logger.debug(e.message)"
+    )
+    new_block = (
+        "        except SearxEngineCaptchaException as e:\n"
+        "            retry_after = _parse_retry_after_header(getattr(e, 'response', None))\n"
+        "            if retry_after is not None:\n"
+        "                e.suspended_time = min(e.suspended_time, retry_after)\n"
+        "            e.suspended_time = min(e.suspended_time, 900)\n"
+        "            self.handle_exception(result_container, e, suspend=True)\n"
+        "            self.logger.warning(\"CAPTCHA %s suspended for %ss: %s\", self.engine.name, e.suspended_time, e.message)\n"
+        "        except (\n"
+        "            SearxEngineTooManyRequestsException,\n"
+        "            SearxEngineAccessDeniedException,\n"
+        "        ) as e:\n"
+        "            self.handle_exception(result_container, e, suspend=True)\n"
+        "            self.logger.debug(e.message)"
+    )
+    if old_block in content:
+        content = content.replace(old_block, new_block)
+    return content
+
+# --- Patch 12: settings.yml / settings_defaults.py (reduce suspended_times) ---
+def patch_settings_yml(content, path):
+    if "SearxEngineCaptcha: 900" in content:
+        return "ALREADY_APPLIED"
+    content = content.replace("SearxEngineCaptcha: 86400", "SearxEngineCaptcha: 900")
+    content = content.replace("SearxEngineCaptcha: 3600", "SearxEngineCaptcha: 900")
+    content = content.replace("SearxEngineAccessDenied: 86400", "SearxEngineAccessDenied: 900")
+    content = content.replace("SearxEngineTooManyRequests: 3600", "SearxEngineTooManyRequests: 600")
+    content = content.replace("cf_SearxEngineCaptcha: 1296000", "cf_SearxEngineCaptcha: 3600")
+    content = content.replace("recaptcha_SearxEngineCaptcha: 604800", "recaptcha_SearxEngineCaptcha: 3600")
+    return content
+
+def patch_config_settings_yml(content, path):
+    if "SearxEngineCaptcha: 900" in content:
+        return "ALREADY_APPLIED"
+    return patch_settings_yml(content, path)
+
 def main():
     logger.info("Applying Windows compatibility and feature patches...")
     
@@ -528,6 +686,36 @@ def main():
         os.path.join(SITE_PACKAGES, "searx", "search", "processors", "__init__.py"),
         "search/processors/__init__.py (skip disabled engines)",
         patch_processors_init
+    )
+    update_file(
+        os.path.join(SITE_PACKAGES, "searx", "engines", "google.py"),
+        "engines/google.py (CAPTCHA false-positive fix)",
+        patch_google_captcha
+    )
+    update_file(
+        os.path.join(SITE_PACKAGES, "searx", "engines", "sogou.py"),
+        "engines/sogou.py (robust CAPTCHA detection)",
+        patch_sogou_captcha
+    )
+    update_file(
+        os.path.join(SITE_PACKAGES, "searx", "search", "processors", "abstract.py"),
+        "search/processors/abstract.py (cap CAPTCHA suspend to 15m, first-fail 2m)",
+        patch_abstract_suspend
+    )
+    update_file(
+        os.path.join(SITE_PACKAGES, "searx", "search", "processors", "online.py"),
+        "search/processors/online.py (Retry-After + CAPTCHA cap)",
+        patch_online_captcha
+    )
+    update_file(
+        os.path.join(SITE_PACKAGES, "searx", "settings.yml"),
+        "searx/settings.yml (reduce suspended_times defaults)",
+        patch_settings_yml
+    )
+    update_file(
+        os.path.join(REPO_ROOT, "config", "settings.yml"),
+        "config/settings.yml (reduce suspended_times)",
+        patch_config_settings_yml
     )
 
     logger.info("All patches processed.")

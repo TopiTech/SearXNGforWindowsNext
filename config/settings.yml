@@ -62,16 +62,16 @@ search:
   suspended_times:
     # Engine suspension time after error (in seconds; set to 0 to disable)
     # For error "Access denied" and "HTTP error [402, 403]"
-    SearxEngineAccessDenied: 86400
-    # For error "CAPTCHA"
-    SearxEngineCaptcha: 86400
+    SearxEngineAccessDenied: 900
+    # For error "CAPTCHA" — reduced for single-user local instance to auto-recover quickly
+    SearxEngineCaptcha: 900
     # For error "Too many request" and "HTTP error 429"
-    SearxEngineTooManyRequests: 3600
+    SearxEngineTooManyRequests: 600
     # Cloudflare CAPTCHA
-    cf_SearxEngineCaptcha: 1296000
-    cf_SearxEngineAccessDenied: 86400
+    cf_SearxEngineCaptcha: 3600
+    cf_SearxEngineAccessDenied: 1800
     # ReCAPTCHA
-    recaptcha_SearxEngineCaptcha: 604800
+    recaptcha_SearxEngineCaptcha: 3600
 
   # remove format to deny access, use lower case.
   # formats: [html, csv, json, rss]
