@@ -3,7 +3,11 @@
     "allow": [
       "Shell(git:*)",
       "Shell(dir:*)",
-      "Shell(pythonpython.exe:*)"
+      "Shell(pythonpython.exe:*)",
+      "Shell(python tools/apply-patches.py)",
+      "Shell(python -c \"import py_compile; py_compile.compile(r'python\\Lib\\site-packages\\searx\\search\\processors\\online.py', doraise=True); py_compile.compile(r'python\\Lib\\site-packages\\searx\\search\\processors\\abstract.py', doraise=True); py_compile.compile(r'python\\Lib\\site-packages\\searx\\engines\\google.py', doraise=True); py_compile.compile(r'python\\Lib\\site-packages\\searx\\engines\\sogou.py', doraise=True); py_compile.compile(r'python\\Lib\\site-packages\\searx\\settings_defaults.py', doraise=True); print('compile ok')\")",
+      "Shell(python tools/apply-patches.py 2 >& 1)",
+      "Shell(Select-String:*)"
     ],
     "deny": [],
     "defaultMode": "default"

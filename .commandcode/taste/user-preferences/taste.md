@@ -14,3 +14,5 @@
 - Works with Python projects, shell scripting (PowerShell, batch), and git-based workflows. Confidence: 0.85
 - Prefers thorough, systematic, methodical analysis with detailed structured output. Confidence: 0.9
 - Values precision in prompts — provides explicit constraints, definitions, and output templates. Confidence: 0.9
+- Prefers exhaustive, multi-angle fixes for errors ("可能な限りの対策を実装") rather than minimal single fixes, and expects all site-packages/config changes to be codified as durable patches in tools/apply-patches.py to survive upstream sync. Confidence: 0.95
+- Primarily communicates in Japanese for this SearXNGforWindows workspace and expects implementation summaries/explanations in Japanese. Confidence: 0.9
