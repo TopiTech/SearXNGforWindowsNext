@@ -14,6 +14,7 @@ KNOWN_COMMITTED_KEYS = [
     DEFAULT_KEY,
     "654eba279ae3354410f8c36f11535af7b1d6f893482cccad86268bdd50a047c1",
     "4d7e7376e13c5de05bd915d4e270928abf72686db55a58b27ae3d5c14cf387d4",
+    "c131e23ee31e69e1f16c712e6e1b3e1a7b20b976bf75f10d2a45da807201ba70",
     "CHANGE_ME__generate_with_tools_ensure_secret_key_py__or_set_SEARXNG_SECRET",
 ]
 SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "settings.yml")
