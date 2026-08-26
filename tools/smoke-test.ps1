@@ -3,6 +3,8 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new()
 $ErrorActionPreference = "Stop"
 
 $base = "http://127.0.0.1:8888"
+$scriptDir = Split-Path -Parent $PSCommandPath
+$repoRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
 
 Write-Host "Smoke Test: SearXNG for Windows" -ForegroundColor Cyan
 Write-Host "================================" -ForegroundColor Cyan
@@ -15,12 +17,27 @@ function Assert-HttpStatusCode {
     param(
         [string]$Uri,
         [int]$ExpectedStatusCode,
-        [string]$Label
+        [string]$Label,
+        [string]$Method = "GET",
+        [object]$Body = $null,
+        [string]$ContentType = $null
     )
 
     $statusCode = 0
     try {
-        $response = Invoke-WebRequest -Uri $Uri -UseBasicParsing -ErrorAction Stop
+        $requestArgs = @{
+            Uri = $Uri
+            UseBasicParsing = $true
+            ErrorAction = "Stop"
+            Method = $Method
+        }
+        if ($null -ne $Body) {
+            $requestArgs["Body"] = $Body
+        }
+        if ($ContentType) {
+            $requestArgs["ContentType"] = $ContentType
+        }
+        $response = Invoke-WebRequest @requestArgs
         $statusCode = [int]$response.StatusCode
     }
     catch {
@@ -54,6 +71,15 @@ function Assert-JsonProperty {
     }
 }
 
+# Helper: Verify a value is one of an allowed set.
+function Assert-In {
+    param([string]$Value, [string[]]$Allowed, [string]$Label)
+    if ($Allowed -notcontains $Value) {
+        $msg = "${Label}: expected one of [$($Allowed -join ', ')], got '$Value'"
+        throw $msg
+    }
+}
+
 try {
     # Test 1: Root page
     Write-Host "Test 1: Root page..." -ForegroundColor Cyan
@@ -74,6 +100,16 @@ try {
     Assert-JsonProperty -Value $lite -PropertyName "results" -Label "json_lite API"
     $resultCount = @($lite.results).Count
     Write-Host "  ✓ Status 200, $resultCount result(s)" -ForegroundColor Green
+    if ($resultCount -gt 0) {
+        $firstResult = $lite.results[0]
+        $expectedFields = @("title", "url", "content", "source")
+        foreach ($field in $expectedFields) {
+            if (-not ($firstResult.PSObject.Properties.Name -contains $field)) {
+                throw "json_lite result missing required field: $field"
+            }
+        }
+        Write-Host "  ✓ All required fields present (title, url, content, source)" -ForegroundColor Green
+    }
     Write-Host "  Sample result keys: $(@($lite.results[0].PSObject.Properties.Name | Select-Object -First 3) -join ', ')" -ForegroundColor Gray
     Write-Host ""
 
@@ -120,6 +156,19 @@ try {
     # Test 15: Scrape validation - missing URL
     Write-Host "Test 15: /scrape error handling (missing URL)..." -ForegroundColor Cyan
     Assert-HttpStatusCode -Uri "$base/scrape" -ExpectedStatusCode 400 -Label "Scrape missing URL"
+    Write-Host ""
+
+    # Test 16: json_lite with empty query (server should reject with 400 "No query")
+    Write-Host "Test 16: json_lite with empty query..." -ForegroundColor Cyan
+    $emptyUri = "$base/search?q=&format=json_lite"
+    Assert-HttpStatusCode -Uri $emptyUri -ExpectedStatusCode 400 -Label "json_lite rejects empty query"
+    Write-Host ""
+
+    # Test 17: Healthcheck endpoint
+    Write-Host "Test 17: Healthcheck endpoint..." -ForegroundColor Cyan
+    $hcResponse = Invoke-WebRequest -Uri "$base/healthz" -UseBasicParsing -ErrorAction Stop
+    Assert-In -Value $hcResponse.Content.Trim() -Allowed @("OK") -Label "Healthcheck body"
+    Write-Host "  ✓ /healthz returned OK" -ForegroundColor Green
     Write-Host ""
 
     Write-Host "=====================================" -ForegroundColor Green

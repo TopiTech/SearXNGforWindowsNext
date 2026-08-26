@@ -175,7 +175,13 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
         content = re.sub(r'(?s)\n+def get_json_lite_response.*?return json\.dumps\(data, cls=JSONEncoder\)\n+', "\n", content)
 
     # Insert before get_themes while preserving a single blank-line boundary.
-    content, count = re.subn(r'(\n)(def get_themes\b)', lite_func + r'\1\2', content)
+    # Match the line start optionally so the patch works whether get_themes is
+    # the first definition in the module or follows other top-level code.
+    content, count = re.subn(
+        r'(^|\n)(def get_themes\b)',
+        lite_func + r'\1\2',
+        content,
+    )
     return content
 
 # --- Patch 4: webapp.py (json_lite handler + ipaddress import) ---
@@ -244,7 +250,8 @@ def patch_webapp_scrape_route(content, path):
         "max_keepalive_connections=20",
         "_searxng_original_getaddrinfo",
         "v10-bulletproof-scrape-fix",
-        "import re"
+        "import re",
+        "class _ScrapeBlockedError",
     ]
     if all(anchor in content for anchor in required_anchors):
         return "ALREADY_APPLIED"
@@ -284,6 +291,10 @@ def patch_webapp_scrape_route(content, path):
     scrape_route_code = '''
 
 # --- GenAI Scrape Helpers ---
+class _ScrapeBlockedError(Exception):
+    """Raised by /scrape when a request is denied for security reasons."""
+
+
 _scrape_client = None
 _scrape_client_lock = threading.Lock()
 _scrape_client_verify_ssl = None
@@ -383,11 +394,11 @@ def scrape():
         def _get_safe_ip_url(url_to_resolve):
             parsed = urllib.parse.urlparse(url_to_resolve)
             if parsed.scheme not in ('http', 'https'):
-                raise RuntimeError(f'Blocked invalid scheme: {parsed.scheme}')
+                raise _ScrapeBlockedError(f'Blocked invalid scheme: {parsed.scheme}')
 
             host = parsed.hostname
             if _is_blocked_scrape_host(host):
-                raise RuntimeError(f'Blocked: {host} is a private/reserved host')
+                raise _ScrapeBlockedError(f'Blocked: {host} is a private/reserved host')
 
             try:
                 port = parsed.port or (443 if parsed.scheme == 'https' else 80)
@@ -397,7 +408,9 @@ def scrape():
                     ip_obj = ipaddress.ip_address(ip_raw)
                     if ip_obj.is_global:
                         return ip_raw, host, port
-                raise RuntimeError(f'Could not find a global IP for {host}')
+                raise _ScrapeBlockedError(f'Could not find a global IP for {host}')
+            except _ScrapeBlockedError:
+                raise
             except Exception as e:
                 raise RuntimeError(f'DNS resolution failed for {host}: {e}')
 
@@ -405,7 +418,7 @@ def scrape():
         for _ in range(5):
             cur_parsed = urllib.parse.urlparse(current_url)
             if cur_parsed.scheme not in ('http', 'https'):
-                raise RuntimeError(f'Blocked invalid scheme during redirect: {cur_parsed.scheme}')
+                raise _ScrapeBlockedError(f'Blocked invalid scheme during redirect: {cur_parsed.scheme}')
 
             safe_ip, original_host, port = _get_safe_ip_url(current_url)
             headers = {'User-Agent': ua}
@@ -432,11 +445,11 @@ def scrape():
         return jsonify({'error': 'Invalid or blocked URL'}), 400
 
     try:
-        downloaded = _fetch_scrape_url(url)
+        downloaded = _fetch_scrape_url(url) or ''
         content_text = trafilatura.extract(
             downloaded, include_comments=False, include_tables=True
         )
-        if not content_text:
+        if not content_text and downloaded:
             # Fallback to basic HTML text extraction if trafilatura returns None/empty
             raw_text = re.sub(r'(?s)<script.*?>.*?</script>', ' ', downloaded)
             raw_text = re.sub(r'(?s)<style.*?>.*?</style>', ' ', raw_text)
@@ -453,10 +466,10 @@ def scrape():
         return jsonify({'error': f'Fetch timeout: {str(e)[:100]}'}), 504
     except httpx.HTTPError as e:
         return jsonify({'error': f'Fetch failed: {str(e)[:100]}'}), 502
+    except _ScrapeBlockedError as e:
+        return jsonify({'error': str(e)[:100]}), 400
     except RuntimeError as e:
-        err_msg = str(e)[:100]
-        status_code = 400 if 'Blocked' in err_msg else 502
-        return jsonify({'error': err_msg}), status_code
+        return jsonify({'error': str(e)[:100]}), 502
     except Exception as e:
         return jsonify({'error': f'Fetch failed: {str(e)[:100]}'}), 500
 
@@ -472,10 +485,23 @@ def scrape():
 
 # --- Patch 6: engines/__init__.py (check disabled flag BEFORE loading module) ---
 def patch_engines_init(content, path):
-    if "skipping load" in content or "inactive or disabled in config!" in content:
+    # Idempotency: if both our load_engine block and our load_engines block
+    # are already present, treat the patch as applied. We also detect a
+    # previous run that left a redundant `inactive is True: continue` line
+    # in the loop body and re-run so we can clean it up.
+    has_engine_block = "skipping load" in content
+    has_engines_block = "inactive or disabled in config!" in content
+    has_legacy_duplicate = re.search(
+        r"""(?m)^[ \t]*if engine_data\.get\(\s*['"]inactive['"]\s*\) is True:\n[ \t]*continue\n""",
+        content[content.find("for engine_data in engine_list:"):] if "for engine_data in engine_list:" in content else "",
+    ) is not None
+    has_legacy_engine_duplicate = content.count("intentionally disabled or inactive in config.") > 1
+    if has_engine_block and has_engines_block and not has_legacy_duplicate and not has_legacy_engine_duplicate:
         return "ALREADY_APPLIED"
 
-    # 1. Patch load_engine (singular) - add early return for disabled/inactive
+    # 1. Patch load_engine (singular) - add early return for disabled/inactive.
+    # Strip any pre-existing copies of our injection so re-running the patch
+    # does not stack duplicate early-return blocks.
     inject_code = """
     # Early return for engines that are intentionally disabled or inactive in config.
     if engine_data.get('inactive') is True:
@@ -485,25 +511,59 @@ def patch_engines_init(content, path):
         logger.debug('Engine "%s" is disabled in config, skipping load', engine_name)
         return None
 """
+    # Idempotency cleanup: remove any existing copies of the inject_code block
+    # (covers legacy duplicates and self-re-application).
+    content = re.sub(
+        r'(?ms)^    # Early return for engines that are intentionally disabled or inactive in config\.\n'
+        r'    if engine_data\.get\(\'inactive\'\) is True:\n'
+        r'        logger\.debug\(\'Engine "%s" is inactive in config, skipping load\', engine_name\)\n'
+        r'        return None\n'
+        r'    if engine_data\.get\(\'disabled\'\) is True:\n'
+        r'        logger\.debug\(\'Engine "%s" is disabled in config, skipping load\', engine_name\)\n'
+        r'        return None\n',
+        "",
+        content,
+    )
     pattern = r"(if engine_name\.lower\(\) != engine_name:.*?engine_data\['name'\] = engine_name\n)"
     content, count = re.subn(pattern, r"\1" + inject_code, content, flags=re.S)
     if count == 0:
         return content
 
-    # 2. Patch load_engines (plural) - skip loading disabled engines to avoid noise
-    inject_loop = """
-        if engine_data.get("inactive") is True or engine_data.get("disabled") is True:
+    # 2. Patch load_engines (plural) - skip loading disabled engines to avoid noise.
+    # This widens the existing upstream check (which only handles `inactive`) so
+    # `disabled: true` engines are also short-circuited before module load.
+    # It also removes any duplicated narrow `inactive`-only check left over from
+    # previous patch runs so the loop body is not re-injected on each sync.
+    inject_loop = """        if engine_data.get("inactive") is True or engine_data.get("disabled") is True:
             logger.debug(
                 "loading engine %s skipped: inactive or disabled in config!",
                 engine_data.get("name", "???"),
             )
-            continue"""
+            continue
+"""
+
+    # Remove any previous copy of our injection (idempotency cleanup) so re-running
+    # the patch does not stack duplicate checks.
+    if "inactive or disabled in config!" in content:
+        content = re.sub(
+            r'(?ms)^[ \t]*if engine_data\.get\("inactive"\) is True or engine_data\.get\("disabled"\) is True:.*?\n[ \t]*continue\n',
+            "",
+            content,
+        )
+
+    # Remove the now-redundant narrow `inactive`-only `continue` that upstream
+    # SearXNG has at the top of the loop body. Our combined check subsumes it.
+    # Match both single- and double-quoted forms to be robust to formatting drift.
+    content = re.sub(
+        r"""(?ms)^[ \t]*if engine_data\.get\(\s*['"]inactive['"]\s*\) is True:\n[ \t]*continue\n""",
+        "",
+        content,
+    )
 
     pattern = r"(def load_engines\(engine_list:.*?for engine_data in engine_list:)"
-    content, count = re.subn(pattern, r"\1" + inject_loop, content, flags=re.S)
+    content, count = re.subn(pattern, r"\1\n" + inject_loop, content, flags=re.S)
     if count == 0:
-        pattern = r"(for engine_data in engine_list:)"
-        content, count = re.subn(pattern, r"\1" + inject_loop, content, count=1)
+        content, count = re.subn(r"(for engine_data in engine_list:)", r"\1\n" + inject_loop, content, count=1)
 
     if count == 0:
         return content
