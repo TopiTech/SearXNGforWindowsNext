@@ -43,7 +43,7 @@ function Sync-MirrorItem {
                 if ($retry -eq $MaxRetries) {
                     throw "Failed to remove $Dst after $MaxRetries attempts: $_"
                 }
-                Write-Host "  ⚠ File locked while removing $Dst. Retrying ($retry/$MaxRetries)..." -ForegroundColor Yellow
+                Write-Host "  [WARN] File locked while removing $Dst. Retrying ($retry/$MaxRetries)..." -ForegroundColor Yellow
                 Start-Sleep -Milliseconds (500 * $retry)
             }
         }
@@ -58,7 +58,7 @@ function Sync-MirrorItem {
             if ($retry -eq $MaxRetries) {
                 throw "Failed to copy $Src to $Dst after $MaxRetries attempts: $_"
             }
-            Write-Host "  ⚠ File locked while copying to $Dst. Retrying ($retry/$MaxRetries)..." -ForegroundColor Yellow
+            Write-Host "  [WARN] File locked while copying to $Dst. Retrying ($retry/$MaxRetries)..." -ForegroundColor Yellow
             Start-Sleep -Milliseconds (500 * $retry)
         }
     }
@@ -82,7 +82,7 @@ function Invoke-GitAction {
 # === PRE-FLIGHT CHECKS ===
 Write-Host "Performing pre-flight checks..." -ForegroundColor Cyan
 @("git") | ForEach-Object { Assert-Command $_ }
-Write-Host "✓ All required commands found" -ForegroundColor Green
+Write-Host "[OK] All required commands found" -ForegroundColor Green
 Write-Host ""
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -128,7 +128,7 @@ try {
     $commitSha = (git -C $tempRoot rev-parse HEAD).Trim()
     $commitDate = (git -C $tempRoot show -s --format=%cI HEAD).Trim()
 
-    Write-Host "✓ Upstream checkout successful" -ForegroundColor Green
+    Write-Host "[OK] Upstream checkout successful" -ForegroundColor Green
     Write-Host "  Commit:  $commitSha"
     Write-Host "  Date:    $commitDate"
     Write-Host ""
@@ -142,7 +142,7 @@ try {
         throw "ERROR: Upstream searx/ directory not found. Upstream structure may have changed."
     }
     Sync-MirrorItem -Src $srcSearx -Dst (Join-Path $sitePackages "searx")
-    Write-Host "  ✓ searx/"
+    Write-Host "  -> searx/"
 
     # Validate engines referenced in config\settings.yml: if an upstream sync removed
     # an engine module, mark the corresponding engine entry as disabled to avoid
@@ -161,14 +161,14 @@ try {
             }
         }
         catch {
-            Write-Host "⚠  Warning: Could not validate settings.yml: $_" -ForegroundColor Yellow
+            Write-Host "[WARN] Could not validate settings.yml: $_" -ForegroundColor Yellow
         }
     }
 
     $srcExtra = Join-Path $tempRoot "searxng_extra"
     if (Test-Path $srcExtra) {
         Sync-MirrorItem -Src $srcExtra -Dst (Join-Path $sitePackages "searxng_extra")
-        Write-Host "  ✓ searxng_extra/"
+        Write-Host "  -> searxng_extra/"
     }
 
     # Track requirements changes for user notification
@@ -181,7 +181,7 @@ try {
     # Copy requirements and other metadata
     Write-Host "Syncing configuration files..." -ForegroundColor Green
     Copy-Item -LiteralPath (Join-Path $tempRoot "requirements.txt") $oldReqPath -Force
-    Write-Host "  ✓ requirements.txt"
+    Write-Host "  -> requirements.txt"
 
     if (Test-Path -LiteralPath (Join-Path $tempRoot "requirements-server.txt")) {
         Copy-Item -LiteralPath (Join-Path $tempRoot "requirements-server.txt") `
@@ -194,7 +194,7 @@ try {
     $newReqHash = (Get-FileHash $oldReqPath).Hash
     if ($oldReqHash -ne "" -and ($oldReqHash -ne $newReqHash)) {
         Write-Host ""
-        Write-Host "⚠  NOTICE: Upstream requirements.txt has changed!" -ForegroundColor Yellow
+        Write-Host "[WARN] NOTICE: Upstream requirements.txt has changed!" -ForegroundColor Yellow
         Write-Host "   Run: .\tools\install-requirements.ps1" -ForegroundColor Yellow
     }
 
@@ -212,7 +212,7 @@ synced_at=$(Get-Date -Format o)
     & (Join-Path $repoRoot "tools\apply-windows-patches.ps1")
 
     Write-Host ""
-    Write-Host "✓ Upstream synchronization complete!" -ForegroundColor Green
+    Write-Host "[OK] Upstream synchronization complete!" -ForegroundColor Green
 }
 finally {
     if ($CleanTemp -and (Test-Path -LiteralPath $tempRoot)) {
@@ -221,7 +221,7 @@ finally {
             Remove-Item -LiteralPath $tempRoot -Recurse -Force
         }
         catch {
-            Write-Host "⚠  Warning: Could not remove temp directory: $_" -ForegroundColor Yellow
+            Write-Host "[WARN] Could not remove temp directory: $_" -ForegroundColor Yellow
         }
     }
 }

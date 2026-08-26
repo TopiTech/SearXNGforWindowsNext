@@ -11,7 +11,7 @@ Write-Host "==============================" -ForegroundColor Cyan
 Write-Host ""
 
 if (-not (Test-Path $pythonExe)) {
-    Write-Host "✗ Embedded Python not found at: $pythonExe" -ForegroundColor Red
+    Write-Host "[ERROR] Embedded Python not found at: $pythonExe" -ForegroundColor Red
     Write-Host ""
     Write-Host "Make sure you have the complete SearXNG for Windows directory with embedded Python." -ForegroundColor Yellow
     exit 1
@@ -44,12 +44,12 @@ try {
     }
 
     Write-Host ""
-    Write-Host "✓ Installation complete!" -ForegroundColor Green
+    Write-Host "[OK] Installation complete!" -ForegroundColor Green
     Write-Host ""
     Write-Host "Next: Run '.\SearXNG for Windows.bat' to start the server." -ForegroundColor Cyan
 }
 catch {
     Write-Host ""
-    Write-Host "✗ Installation failed: $_" -ForegroundColor Red
+    Write-Host "[ERROR] Installation failed: $_" -ForegroundColor Red
     exit 1
 }

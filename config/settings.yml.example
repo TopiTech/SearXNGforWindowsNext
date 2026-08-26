@@ -7,17 +7,15 @@
 # IMPORTANT — secret_key handling:
 #   * This file ships with a placeholder secret_key ("ultrasecretkey"). It is
 #     NOT a working secret; it is a stable marker that tools/ensure-secret-key.py
-#     recognises so it can replace it with a freshly generated key.
-#   * On every launch, ensure-secret-key.py writes a brand-new random key to
-#     config/secret.key (gitignored) and the launcher exports it via
-#     SEARXNG_SECRET, which overrides the placeholder in this file. The
-#     placeholder is therefore never used at runtime.
+#     recognises.
+#   * On first launch, ensure-secret-key.py generates a secure random key in
+#     config/secret.key (gitignored) and reuses it on subsequent launches to
+#     preserve session cookies across restarts. Delete config/secret.key to rotate.
+#   * The launcher exports the key via SEARXNG_SECRET, which overrides the
+#     placeholder in this file at runtime.
 #   * Because the real key never lives in any tracked file, rotating it does
-#     not create a git diff. You can change the key as often as you like.
-#   * To pin a key yourself (e.g. to keep session cookies across restarts),
-#     run the launcher once to generate one, then copy config/secret.key to
-#     a safe location and restore it on next launch — or set SEARXNG_SECRET
-#     in your environment.
+#     not create a git diff.
+
 general:
   # Debug mode, only for development. Is overwritten by ${SEARXNG_DEBUG}
   debug: false

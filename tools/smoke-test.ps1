@@ -50,10 +50,10 @@ function Assert-HttpStatusCode {
     }
 
     if ($statusCode -eq $ExpectedStatusCode) {
-        Write-Host "  ✓ $Label returned $statusCode" -ForegroundColor Green
+        Write-Host "  [OK] $Label returned $statusCode" -ForegroundColor Green
         return
     }
-    throw "FAIL: $Label expected $ExpectedStatusCode, got $statusCode"
+    throw "[FAIL] $Label expected $ExpectedStatusCode, got $statusCode"
 }
 
 # Helper: Verify HTTP 400 (SSRF blocked).
@@ -99,7 +99,7 @@ try {
     $lite = $liteResponse | ConvertFrom-Json
     Assert-JsonProperty -Value $lite -PropertyName "results" -Label "json_lite API"
     $resultCount = @($lite.results).Count
-    Write-Host "  ✓ Status 200, $resultCount result(s)" -ForegroundColor Green
+    Write-Host "  [OK] Status 200, $resultCount result(s)" -ForegroundColor Green
     if ($resultCount -gt 0) {
         $firstResult = $lite.results[0]
         $expectedFields = @("title", "url", "content", "source")
@@ -108,7 +108,7 @@ try {
                 throw "json_lite result missing required field: $field"
             }
         }
-        Write-Host "  ✓ All required fields present (title, url, content, source)" -ForegroundColor Green
+        Write-Host "  [OK] All required fields present (title, url, content, source)" -ForegroundColor Green
     }
     Write-Host "  Sample result keys: $(@($lite.results[0].PSObject.Properties.Name | Select-Object -First 3) -join ', ')" -ForegroundColor Gray
     Write-Host ""
@@ -118,7 +118,7 @@ try {
     $scrapeForm = Invoke-RestMethod -Method Post -Uri "$base/scrape" -Body @{ url = "https://example.com" } -ErrorAction Stop
     Assert-JsonProperty -Value $scrapeForm -PropertyName "content" -Label "Scrape API (Form)"
     $contentLen = $scrapeForm.content.Length
-    Write-Host "  ✓ Content extracted: $contentLen chars" -ForegroundColor Green
+    Write-Host "  [OK] Content extracted: $contentLen chars" -ForegroundColor Green
     Write-Host ""
 
     # Test 5: /scrape API (JSON POST)
@@ -127,11 +127,18 @@ try {
         -Body (@{ url = "https://example.com" } | ConvertTo-Json) `
         -ContentType "application/json" -ErrorAction Stop
     Assert-JsonProperty -Value $scrapeJson -PropertyName "content" -Label "Scrape API (JSON)"
-    Write-Host "  ✓ Content extracted: $($scrapeJson.content.Length) chars" -ForegroundColor Green
+    Write-Host "  [OK] Content extracted: $($scrapeJson.content.Length) chars" -ForegroundColor Green
     Write-Host ""
 
-    # Test 6-13: SSRF Protection
-    Write-Host "Test 6-13: SSRF Protection" -ForegroundColor Cyan
+    # Test 6: /scrape API (GET)
+    Write-Host "Test 6: /scrape endpoint (GET query param)..." -ForegroundColor Cyan
+    $scrapeGet = Invoke-RestMethod -Method Get -Uri "$base/scrape?url=https://example.com" -ErrorAction Stop
+    Assert-JsonProperty -Value $scrapeGet -PropertyName "content" -Label "Scrape API (GET)"
+    Write-Host "  [OK] Content extracted: $($scrapeGet.content.Length) chars" -ForegroundColor Green
+    Write-Host ""
+
+    # Test 7-16: SSRF Protection
+    Write-Host "Test 7-16: SSRF Protection" -ForegroundColor Cyan
     Assert-Blocked -Uri "$base/scrape?url=http://127.0.0.1/" -Label "loopback IP (127.0.0.1)"
     Assert-Blocked -Uri "$base/scrape?url=http://192.168.1.1/" -Label "private range (192.168.x.x)"
     Assert-Blocked -Uri "$base/scrape?url=http://127.0.0.1.nip.io/" -Label "hostname to localhost (nip.io)"
@@ -140,45 +147,47 @@ try {
     Assert-Blocked -Uri "$base/scrape?url=file:///etc/passwd" -Label "file:// scheme"
     Assert-Blocked -Uri "$base/scrape?url=gopher://127.0.0.1:6379/" -Label "gopher:// scheme"
     Assert-Blocked -Uri "$base/scrape?url=ftp://example.com/test" -Label "ftp:// scheme"
+    Assert-Blocked -Uri "$base/scrape?url=javascript:alert(1)" -Label "javascript: scheme"
+    Assert-Blocked -Uri "$base/scrape?url=data:text/html,test" -Label "data: scheme"
     Write-Host ""
 
-    # Test 14: Autocomplete endpoint
-    Write-Host "Test 14: Autocomplete endpoint..." -ForegroundColor Cyan
+    # Test 17: Autocomplete endpoint
+    Write-Host "Test 17: Autocomplete endpoint..." -ForegroundColor Cyan
     $acUri = "$base/autocompleter?q=python"
     $acResponse = Invoke-WebRequest -Uri $acUri -UseBasicParsing -ErrorAction Stop
     if ($acResponse.StatusCode -eq 200) {
-        Write-Host "  ✓ Autocompleter returned 200" -ForegroundColor Green
+        Write-Host "  [OK] Autocompleter returned 200" -ForegroundColor Green
     } else {
-        throw "FAIL: Autocompleter returned $($acResponse.StatusCode)"
+        throw "[FAIL] Autocompleter returned $($acResponse.StatusCode)"
     }
     Write-Host ""
 
-    # Test 15: Scrape validation - missing URL
-    Write-Host "Test 15: /scrape error handling (missing URL)..." -ForegroundColor Cyan
+    # Test 18: Scrape validation - missing URL
+    Write-Host "Test 18: /scrape error handling (missing URL)..." -ForegroundColor Cyan
     Assert-HttpStatusCode -Uri "$base/scrape" -ExpectedStatusCode 400 -Label "Scrape missing URL"
     Write-Host ""
 
-    # Test 16: json_lite with empty query (server should reject with 400 "No query")
-    Write-Host "Test 16: json_lite with empty query..." -ForegroundColor Cyan
+    # Test 19: json_lite with empty query (server should reject with 400 "No query")
+    Write-Host "Test 19: json_lite with empty query..." -ForegroundColor Cyan
     $emptyUri = "$base/search?q=&format=json_lite"
     Assert-HttpStatusCode -Uri $emptyUri -ExpectedStatusCode 400 -Label "json_lite rejects empty query"
     Write-Host ""
 
-    # Test 17: Healthcheck endpoint
-    Write-Host "Test 17: Healthcheck endpoint..." -ForegroundColor Cyan
+    # Test 20: Healthcheck endpoint
+    Write-Host "Test 20: Healthcheck endpoint..." -ForegroundColor Cyan
     $hcResponse = Invoke-WebRequest -Uri "$base/healthz" -UseBasicParsing -ErrorAction Stop
     Assert-In -Value $hcResponse.Content.Trim() -Allowed @("OK") -Label "Healthcheck body"
-    Write-Host "  ✓ /healthz returned OK" -ForegroundColor Green
+    Write-Host "  [OK] /healthz returned OK" -ForegroundColor Green
     Write-Host ""
 
     Write-Host "=====================================" -ForegroundColor Green
-    Write-Host "✓ All smoke tests PASSED" -ForegroundColor Green
+    Write-Host "[OK] All smoke tests PASSED" -ForegroundColor Green
     Write-Host "=====================================" -ForegroundColor Green
 }
 catch {
     Write-Host ""
     Write-Host "================================" -ForegroundColor Red
-    Write-Host "✗ Smoke test FAILED" -ForegroundColor Red
+    Write-Host "[FAIL] Smoke test FAILED" -ForegroundColor Red
     Write-Host "================================" -ForegroundColor Red
     Write-Host ""
     Write-Host $_ -ForegroundColor Red

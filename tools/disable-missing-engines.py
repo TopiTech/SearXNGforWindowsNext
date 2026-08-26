@@ -10,9 +10,20 @@ def disable_engine_in_text(yaml_content, engine_name):
         block = match.group(1)
         if (re.search(rf"^[ \t]*-\s*name:\s*[\"']?{re.escape(engine_name)}[\"']?(?:\s|$)", block, re.M) or
                 re.search(rf"^[ \t]+name:\s*[\"']?{re.escape(engine_name)}[\"']?(?:\s|$)", block, re.M)):
+
             # Check if disabled is already defined in this block
-            if re.search(r'(?m)^[ \t]+disabled:', block):
-                return yaml_content
+            disabled_match = re.search(r'(?m)^([ \t]+)disabled:\s*([^\r\n]*)', block)
+            if disabled_match:
+                val = disabled_match.group(2).strip().lower()
+                if val in ('true', 'yes', 'on', '1'):
+                    return yaml_content
+                # Replace the existing disabled line with disabled: true
+                new_block = (
+                    block[:disabled_match.start()]
+                    + f"{disabled_match.group(1)}disabled: true"
+                    + block[disabled_match.end():]
+                )
+                return yaml_content[:match.start()] + new_block + yaml_content[match.end():]
 
             # Determine child indentation from the second line of the block
             lines = block.splitlines()
@@ -30,7 +41,8 @@ def disable_engine_in_text(yaml_content, engine_name):
             if last_valid_idx >= 0:
                 lines.insert(last_valid_idx + 1, f"{child_indent}disabled: true")
 
-            new_block = "\n".join(lines) + "\n"
+            nl = "\r\n" if "\r\n" in block else "\n"
+            new_block = nl.join(lines) + nl
             return yaml_content[:match.start()] + new_block + yaml_content[match.end():]
 
     return yaml_content

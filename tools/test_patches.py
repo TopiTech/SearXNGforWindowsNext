@@ -30,6 +30,7 @@ def _load(name, path):
 
 apply_patches = _load("apply_patches", os.path.join(HERE, "apply-patches.py"))
 ensure_secret_key = _load("ensure_secret_key", os.path.join(HERE, "ensure-secret-key.py"))
+disable_missing_engines = _load("disable_missing_engines", os.path.join(HERE, "disable-missing-engines.py"))
 
 
 class TestEnsureSecretKey(unittest.TestCase):
@@ -181,7 +182,8 @@ class TestEnsureSecretKey(unittest.TestCase):
         with mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path), \
              mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
              mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
-            self.fn.main()
+            with mock.patch.object(sys, "stdout", new_callable=io.StringIO):
+                self.fn.main()
         self.assertEqual(os.path.getmtime(settings_path), original_mtime)
 
 
@@ -324,5 +326,237 @@ class TestPatchSettingsYml(unittest.TestCase):
         self.assertEqual(self.fn(content, "settings.yml"), "ALREADY_APPLIED")
 
 
+class TestPatchWebappJsonHandler(unittest.TestCase):
+    def setUp(self):
+        self.fn = apply_patches.patch_webapp_json_handler
+
+    def test_already_applied(self):
+        content = (
+            "import ipaddress\n"
+            "if output_format in ('json', 'json_lite'):\n"
+            "    pass\n"
+            "if output_format == 'json_lite':\n"
+            "    pass\n"
+        )
+        self.assertEqual(self.fn(content, "webapp.py"), "ALREADY_APPLIED")
+
+    def test_patches_index_error_and_handler(self):
+        content = (
+            "import warnings\n"
+            "def index_error(output_format, err):\n"
+            "    if output_format == 'json':\n"
+            "        return err\n"
+            "    if output_format == 'json':\n"
+            "        response = webutils.get_json_response\n"
+        )
+        res = self.fn(content, "webapp.py")
+        self.assertIn("import ipaddress", res)
+        self.assertIn("if output_format in ('json', 'json_lite'):", res)
+        self.assertIn("if output_format == 'json_lite':", res)
+
+
+class TestPatchWebappScrapeRoute(unittest.TestCase):
+    def setUp(self):
+        self.fn = apply_patches.patch_webapp_scrape_route
+
+    def test_already_applied(self):
+        content = (
+            "def scrape()\n"
+            "_is_blocked_scrape_host\n"
+            "pinned_dns\n"
+            "_scrape_client\n"
+            "_scrape_client_lock\n"
+            "_scrape_client_verify_ssl\n"
+            "_thread_local_dns\n"
+            "Blocked invalid scheme\n"
+            "Redirect without Location header\n"
+            "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')\n"
+            "max_keepalive_connections=20\n"
+            "_searxng_original_getaddrinfo\n"
+            "v11-bulletproof-scrape-fix\n"
+            "import re\n"
+            "class _ScrapeBlockedError\n"
+        )
+        self.assertEqual(self.fn(content, "webapp.py"), "ALREADY_APPLIED")
+
+    def test_injects_scrape_route(self):
+        content = (
+            "import warnings\n"
+            "from flask import Flask\n\n"
+            "@app.route('/search')\n"
+            "def search():\n"
+            "    pass\n"
+        )
+        res = self.fn(content, "webapp.py")
+        self.assertIn("import trafilatura", res)
+        self.assertIn("@app.route('/scrape'", res)
+        self.assertIn("def scrape():", res)
+        self.assertIn("v11-bulletproof-scrape-fix", res)
+
+
+class TestPatchProcessorsInit(unittest.TestCase):
+    def setUp(self):
+        self.fn = apply_patches.patch_processors_init
+
+    def test_already_applied(self):
+        content = "skipping processor init"
+        self.assertEqual(self.fn(content, "__init__.py"), "ALREADY_APPLIED")
+
+    def test_patches_disabled_processor(self):
+        content = (
+            "if eng_settings.get(\"inactive\", False) is True:\n"
+            "    continue\n"
+        )
+        res = self.fn(content, "__init__.py")
+        self.assertIn("skipping processor init", res)
+        self.assertIn("if eng_settings.get(\"disabled\", False) is True:", res)
+
+
+class TestPatchGoogleCaptcha(unittest.TestCase):
+    def setUp(self):
+        self.fn = apply_patches.patch_google_captcha
+
+    def test_already_applied(self):
+        content = 'loc = (resp.headers.get("Location")'
+        self.assertEqual(self.fn(content, "google.py"), "ALREADY_APPLIED")
+
+    def test_replaces_location_check(self):
+        old = (
+            "    if resp.status_code == 302:\n"
+            "        raise SearxEngineCaptchaException()\n"
+            "\n"
+            "    if len(resp.text) < 2000 and \"/sorry/\" in resp.text:\n"
+            "        raise SearxEngineCaptchaException()"
+        )
+        res = self.fn(old, "google.py")
+        self.assertIn('loc = (resp.headers.get("Location")', res)
+        self.assertIn('sorry.google.com', res)
+
+
+class TestPatchSogouCaptcha(unittest.TestCase):
+    def setUp(self):
+        self.fn = apply_patches.patch_sogou_captcha
+
+    def test_already_applied(self):
+        content = 'antispider in content and captcha in content.lower() and resp.headers.get in content'
+        self.assertEqual(self.fn(content, "sogou.py"), "ALREADY_APPLIED")
+
+    def test_replaces_sogou_response(self):
+        old = (
+            "def response(resp):\n"
+            "    if (\n"
+            "        resp.status_code == 302\n"
+            "        and resp.next_request is not None\n"
+            "        and str(resp.next_request.url).startswith(\"http://www.sogou.com/antispider\")\n"
+            "    ):\n"
+            "        raise SearxEngineCaptchaException()"
+        )
+        res = self.fn(old, "sogou.py")
+        self.assertIn("antispider", res)
+        self.assertIn("resp.headers.get(\"Location\")", res)
+
+
+class TestPatchAbstractSuspend(unittest.TestCase):
+    def setUp(self):
+        self.fn = apply_patches.patch_abstract_suspend
+
+    def test_already_applied(self):
+        content = "captcha in content.lower() and SearxEngineCaptcha in content and suspended_time = min(suspended_time, 900)"
+        self.assertEqual(self.fn(content, "abstract.py"), "ALREADY_APPLIED")
+
+    def test_caps_suspend_time(self):
+        old = (
+            "            self.suspend_end_time = default_timer() + suspended_time\n"
+            "            self.suspend_reason = suspend_reason\n"
+            "            logger.debug(\"Suspend for %i seconds\", suspended_time)"
+        )
+        res = self.fn(old, "abstract.py")
+        self.assertIn("suspended_time = min(suspended_time, 900)", res)
+
+
+class TestPatchOnlineCaptcha(unittest.TestCase):
+    def setUp(self):
+        self.fn = apply_patches.patch_online_captcha
+
+    def test_already_applied(self):
+        content = "_parse_retry_after_header"
+        self.assertEqual(self.fn(content, "online.py"), "ALREADY_APPLIED")
+
+    def test_adds_retry_after_parser(self):
+        old = (
+            "from searx.metrics.error_recorder import count_error\n"
+            "from .abstract import EngineProcessor, RequestParams\n"
+            "        except (\n"
+            "            SearxEngineCaptchaException,\n"
+            "            SearxEngineTooManyRequestsException,\n"
+            "            SearxEngineAccessDeniedException,\n"
+            "        ) as e:\n"
+            "            self.handle_exception(result_container, e, suspend=True)\n"
+            "            self.logger.debug(e.message)"
+        )
+        res = self.fn(old, "online.py")
+        self.assertIn("def _parse_retry_after_header", res)
+        self.assertIn("Retry-After", res)
+
+
+class TestDisableMissingEngines(unittest.TestCase):
+    def setUp(self):
+        self.mod = disable_missing_engines
+        self._tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self._tmpdir, ignore_errors=True)
+
+    def test_disable_engine_when_no_disabled_field(self):
+        sample = (
+            "engines:\n"
+            "  - name: google\n"
+            "    engine: google\n"
+            "  - name: removed_engine\n"
+            "    engine: removed_engine\n"
+            "    categories: general\n"
+        )
+        res = self.mod.disable_engine_in_text(sample, "removed_engine")
+        self.assertIn("disabled: true", res)
+        self.assertIn("categories: general", res)
+
+    def test_disable_engine_when_disabled_false(self):
+        # Critical bugfix test: previously disabled: false was skipped
+        sample = (
+            "engines:\n"
+            "  - name: removed_engine\n"
+            "    engine: removed_mod\n"
+            "    disabled: false\n"
+            "    shortcut: rm\n"
+        )
+        res = self.mod.disable_engine_in_text(sample, "removed_engine")
+        self.assertIn("disabled: true", res)
+        self.assertNotIn("disabled: false", res)
+        self.assertIn("shortcut: rm", res)
+
+    def test_disable_engine_when_disabled_true_is_noop(self):
+        sample = (
+            "engines:\n"
+            "  - name: removed_engine\n"
+            "    engine: removed_mod\n"
+            "    disabled: true\n"
+        )
+        res = self.mod.disable_engine_in_text(sample, "removed_engine")
+        self.assertEqual(res, sample)
+
+    def test_preserves_comments_and_formatting(self):
+        sample = (
+            "# Top comment\n"
+            "engines:\n"
+            "  # Engine comment\n"
+            "  - name: missing\n"
+            "    # inner comment\n"
+            "    engine: missing\n"
+        )
+        res = self.mod.disable_engine_in_text(sample, "missing")
+        self.assertIn("# Top comment", res)
+        self.assertIn("# inner comment", res)
+        self.assertIn("disabled: true", res)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

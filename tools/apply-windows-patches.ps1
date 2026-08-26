@@ -21,4 +21,4 @@ if ($LASTEXITCODE -ne 0) {
     throw "Python patch tool failed with exit code $LASTEXITCODE"
 }
 
-Write-Host "✓ Windows patches applied successfully." -ForegroundColor Green
+Write-Host "[OK] Windows patches applied successfully." -ForegroundColor Green

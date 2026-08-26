@@ -16,7 +16,7 @@ try {
     Write-Host ""
 
     # 1. Install dependencies
-    Write-Host "[1/5] Installing Python dependencies..." -ForegroundColor Green
+    Write-Host "[1/6] Installing Python dependencies..." -ForegroundColor Green
     & .\tools\install-requirements.ps1
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to install dependencies via install-requirements.ps1"
@@ -24,7 +24,7 @@ try {
 
     # 2. Ensure settings.yml is present. The Python tool seeds it from the
     # tracked settings.yml.example on its own, so we just run it here.
-    Write-Host "[2/5] Checking configuration files..." -ForegroundColor Green
+    Write-Host "[2/6] Checking configuration files..." -ForegroundColor Green
     if (-not (Test-Path "config\settings.yml")) {
         Write-Host "  -> config\settings.yml not found; tools\ensure-secret-key.py will seed it from settings.yml.example." -ForegroundColor Yellow
     } else {
@@ -34,7 +34,7 @@ try {
     # 3. Ensure a secure secret key is configured. The tool seeds
     # config\settings.yml from the example if missing and prints
     # `set SEARXNG_SECRET=<key>` on stdout (info goes to stderr).
-    Write-Host "[3/5] Securing instance secret key..." -ForegroundColor Green
+    Write-Host "[3/6] Securing instance secret key..." -ForegroundColor Green
     $secretKeyLine = & ".\python\python.exe" "tools\ensure-secret-key.py"
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to verify or generate secure secret key."
@@ -44,8 +44,16 @@ try {
     }
     $env:SEARXNG_SECRET = $Matches[1]
 
-    # 4. Start SearXNG server in the background
-    Write-Host "[4/5] Starting SearXNG server in background..." -ForegroundColor Green
+    # 4. Run Unit Tests (patch idempotency, engine disabling, secret key generation)
+    Write-Host "[4/6] Running unit tests..." -ForegroundColor Green
+    & ".\python\python.exe" "tools\test_patches.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unit tests in tools\test_patches.py failed with exit code $LASTEXITCODE"
+    }
+    Write-Host "  [OK] Unit tests passed!" -ForegroundColor Green
+
+    # 5. Start SearXNG server in the background
+    Write-Host "[5/6] Starting SearXNG server in background..." -ForegroundColor Green
     $env:SEARXNG_SETTINGS_PATH = "$repoRoot\config\settings.yml"
     
     # Run the server under the embedded python
@@ -53,8 +61,8 @@ try {
         -ArgumentList "-m granian --interface wsgi searx.webapp:application --host 127.0.0.1 --port 8888 --blocking-threads 4" `
         -PassThru -NoNewWindow
 
-    # 5. Wait for the server to become responsive
-    Write-Host "[5/5] Waiting for server to respond at http://127.0.0.1:8888 ..." -ForegroundColor Green
+    # 6. Wait for the server to become responsive
+    Write-Host "[6/6] Waiting for server to respond at http://127.0.0.1:8888 ..." -ForegroundColor Green
     $maxRetries = 30
     $serverReady = $false
     for ($i = 1; $i -le $maxRetries; $i++) {
@@ -108,13 +116,13 @@ finally {
             if (-not $serverProcess.HasExited) {
                 # Stop the process tree to ensure all workers are terminated
                 Stop-Process -Id $serverProcess.Id -Force -ErrorAction Stop
-                Write-Host "  ✓ SearXNG server process stopped successfully." -ForegroundColor Green
+                Write-Host "  [OK] SearXNG server process stopped successfully." -ForegroundColor Green
             } else {
                 Write-Host "  -> Server process was already stopped." -ForegroundColor Gray
             }
         }
         catch {
-            Write-Host "  ⚠ Warning: Failed to stop background server: $_" -ForegroundColor Yellow
+            Write-Host "  [WARN] Failed to stop background server: $_" -ForegroundColor Yellow
         }
     }
     Pop-Location
