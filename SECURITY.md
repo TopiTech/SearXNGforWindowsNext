@@ -33,7 +33,7 @@ This document outlines security considerations and best practices for deploying 
 | **No Authentication** | MEDIUM | Add reverse proxy with auth (OAuth2, OIDC, Basic Auth) | All endpoints publicly accessible on localhost |
 | **No Rate Limiting** | MEDIUM | Implement nginx/HAProxy rate limiting | Upstream engines have their own limits |
 | **No TLS/HTTPS** | LOW | Add reverse proxy with TLS | Safe for localhost; needed for network exposure |
-| **SSL verify=False** | LOW | Add cert validation for internet deployments | Only used in httpx fallback (trafilatura primary) |
+| **SSL verification** | LOW | Env `SEARXNG_SCRAPE_VERIFY_SSL` (default `true`) — set `false` only for localhost without CA | httpx verifies certs by default, trafilatura primary |
 | **No CORS Controls** | MEDIUM | Configure CORS headers in reverse proxy | Not an issue for localhost use |
 | **User-Agent Spoofing** | LOW | Legitimate UX enhancement (documented) | Used to bypass bot-detection, not malware |
 

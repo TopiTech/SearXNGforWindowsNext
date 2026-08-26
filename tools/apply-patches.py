@@ -586,8 +586,6 @@ def patch_processors_init(content, path):
 
 # --- Patch 8: engines/google.py (fix CAPTCHA false positives) ---
 def patch_google_captcha(content, path):
-    if 'sogou.com/antispider' in content:
-        return content
     if 'loc = (resp.headers.get("Location")' in content:
         return "ALREADY_APPLIED"
     old = (

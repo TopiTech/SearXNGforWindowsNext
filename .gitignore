@@ -39,14 +39,14 @@ Desktop.ini
 !/python/Lib/site-packages/setuptools-*.dist-info/
 !/python/Lib/site-packages/wheel/
 !/python/Lib/site-packages/wheel-*.dist-info/
-!/python/Scripts/pip.exe
-!/python/Scripts/pip3.exe
-!/python/Scripts/pip3.11.exe
 
 # Keep bytecode ignored even inside whitelisted packages
 **/__pycache__/
 **/*.py[cod]
 **/*$py.class
 
-# Ignore embedded Python scripts
+# Ignore embedded Python scripts except pip entry points needed for install
 /python/Scripts/*
+!/python/Scripts/pip.exe
+!/python/Scripts/pip3.exe
+!/python/Scripts/pip3.11.exe

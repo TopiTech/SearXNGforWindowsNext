@@ -33,7 +33,7 @@ REM prints a single `set SEARXNG_SECRET=<key>` line that we capture below.
 REM The real key never lives in any tracked file, so rotating it produces
 REM no git diff.
 echo Checking security settings...
-for /f "delims=" %%K in ('".\python\python.exe" "tools\ensure-secret-key.py"') do set "SEARXNG_SECRET=%%K"
+for /f "delims=" %%K in ('".\python\python.exe" "tools\ensure-secret-key.py"') do %%K
 
 REM === Start server ===
 echo.

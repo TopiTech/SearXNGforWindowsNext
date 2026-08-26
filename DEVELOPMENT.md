@@ -56,7 +56,7 @@ workspace/
 
 This project **stays synchronized with upstream SearXNG** while maintaining Windows compatibility via **idempotent patches**. Patches are applied after every upstream sync and are safe to run multiple times.
 
-### Patch Targets (5 Core Python Files)
+### Patch Targets (12 Patches across 8 Files)
 
 | # | File | Patch | Purpose |
 |---|------|-------|---------|
@@ -67,6 +67,11 @@ This project **stays synchronized with upstream SearXNG** while maintaining Wind
 | 5 | `webapp.py` (pt 2) | `/scrape` endpoint (SSRF-protected) | Content extraction API |
 | 6 | `engines/__init__.py` | Early return for disabled engines | Performance + skip noise |
 | 7 | `search/processors/__init__.py` | Skip disabled engines in init | Performance + skip noise |
+| 8 | `engines/google.py` | CAPTCHA false-positive fix | Reduce spurious suspensions |
+| 9 | `engines/sogou.py` | Robust CAPTCHA detection | Reduce spurious suspensions |
+| 10 | `search/processors/abstract.py` | Cap CAPTCHA suspend, quick retry | 15m max / first-fail 2m |
+| 11 | `search/processors/online.py` | Retry-After + CAPTCHA cap, logging | Respect Retry-After header |
+| 12 | `settings.yml` + `config/settings.yml` | Reduce suspended_times defaults | Auto-recovery on single-user instance |
 
 ### Patch Execution Flow
 
@@ -77,14 +82,19 @@ sync-upstream.ps1
   ├─ Sync searx/ and searxng_extra/ packages
   ├─ Copy requirements.txt, setup.py, LICENSE
   ├─ Update UPSTREAM_VERSION.txt (metadata)
-  └─ apply-windows-patches.ps1 (7 patches, idempotent)
+  └─ apply-windows-patches.ps1 (12 patches, idempotent)
        ├─ Patch 1: valkeydb.py ✓
        ├─ Patch 2: settings_defaults.py ✓
        ├─ Patch 3: webutils.py ✓
        ├─ Patch 4a: webapp.py (json_lite handler) ✓
        ├─ Patch 4b: webapp.py (/scrape route) ✓
        ├─ Patch 6: engines/__init__.py ✓
-       └─ Patch 7: search/processors/__init__.py ✓
+       ├─ Patch 7: search/processors/__init__.py ✓
+       ├─ Patch 8: engines/google.py ✓
+       ├─ Patch 9: engines/sogou.py ✓
+       ├─ Patch 10: search/processors/abstract.py ✓
+       ├─ Patch 11: search/processors/online.py ✓
+       └─ Patch 12: settings.yml + config/settings.yml ✓
 ```
 
 ### Idempotency Strategy
@@ -209,12 +219,12 @@ except ValueError:
    - Assumes trusted local network
    - Not suitable for internet-facing deployment without authentication middleware
 
-3. **SSL Verification Disabled in httpx**
-   ```python
-   httpx.Client(..., verify=False)
-   ```
-   - Safe for localhost (no MITM risk)
-   - **Not safe for internet deployments** — add proper cert handling
+3. **SSL Verification (httpx for /scrape)**
+    ```python
+    verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')
+    httpx.Client(..., verify=verify_ssl)
+    ```
+    - Default is `true` (certificates verified); set `SEARXNG_SCRAPE_VERIFY_SSL=false` for localhost-only without CA issues.
 
 4. **No Rate Limiting on /scrape**
    - Relies on upstream engine rate limits
