@@ -22,25 +22,27 @@ try {
         throw "Failed to install dependencies via install-requirements.ps1"
     }
 
-    # 2. Ensure settings.yml is present
+    # 2. Ensure settings.yml is present. The Python tool seeds it from the
+    # tracked settings.yml.example on its own, so we just run it here.
     Write-Host "[2/5] Checking configuration files..." -ForegroundColor Green
     if (-not (Test-Path "config\settings.yml")) {
-        if (Test-Path "config\settings.yml.bak") {
-            Write-Host "  -> config\settings.yml not found. Copying from backup..." -ForegroundColor Yellow
-            Copy-Item -Path "config\settings.yml.bak" -Destination "config\settings.yml"
-        } else {
-            throw "config\settings.yml does not exist and backup config\settings.yml.bak is missing."
-        }
+        Write-Host "  -> config\settings.yml not found; tools\ensure-secret-key.py will seed it from settings.yml.example." -ForegroundColor Yellow
     } else {
         Write-Host "  -> config\settings.yml is present." -ForegroundColor Gray
     }
 
-    # 3. Ensure a secure secret key is configured
+    # 3. Ensure a secure secret key is configured. The tool seeds
+    # config\settings.yml from the example if missing and prints
+    # `set SEARXNG_SECRET=<key>` on stdout (info goes to stderr).
     Write-Host "[3/5] Securing instance secret key..." -ForegroundColor Green
-    & ".\python\python.exe" "tools\ensure-secret-key.py"
+    $secretKeyLine = & ".\python\python.exe" "tools\ensure-secret-key.py"
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to verify or generate secure secret key."
     }
+    if ($secretKeyLine -notmatch '^set SEARXNG_SECRET=(.+)$') {
+        throw "tools\ensure-secret-key.py did not emit a SEARXNG_SECRET line. Got: $secretKeyLine"
+    }
+    $env:SEARXNG_SECRET = $Matches[1]
 
     # 4. Start SearXNG server in the background
     Write-Host "[4/5] Starting SearXNG server in background..." -ForegroundColor Green

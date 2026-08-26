@@ -1,148 +1,159 @@
-"""Ensure secret_key in settings.yml is not a known committed value.
+"""Provide a stable per-install Flask secret_key without touching tracked files.
 
-If the secret_key is the literal default, a known committed value from the
-historical defaults, or any key present in the git history of
-config/settings.yml, generate a new random key.
+Why this script exists
+----------------------
+The previous design rotated ``config/settings.yml`` in place every time the
+placeholder or a known-committed value was detected, which meant the freshly
+generated key landed in a git-tracked file. Every rotation produced a commit
+diff with a real secret in it.
 
-This script is called by the launcher batch file before starting the server.
+The fix is to keep the key out of tracked paths entirely:
+
+* ``config/settings.yml`` is gitignored. The launcher seeds it from
+  ``config/settings.yml.example`` on first run, and the user customises it
+  freely. The ``secret_key:`` line in that file is a placeholder that SearXNG
+  overrides via the ``SEARXNG_SECRET`` environment variable at runtime.
+* ``config/secret.key`` is also gitignored. It is the only place a real key
+  is persisted, and is regenerated on demand (delete the file to rotate).
+
+This script is called by the launcher (``SearXNG for Windows.bat``) before
+the server starts. It:
+
+1. Seeds ``config/settings.yml`` from ``config/settings.yml.example`` if the
+   local copy is missing.
+2. Reads ``config/secret.key``. If it is present and non-empty, the key is
+   reused (this preserves Flask session cookies across restarts).
+3. Otherwise, generates a fresh 32-byte random hex key, writes it to
+   ``config/secret.key`` with restrictive permissions, and prints
+   ``set SEARXNG_SECRET=<key>`` so the batch launcher can capture it via
+   ``for /f``.
+
+The launcher always exports ``SEARXNG_SECRET`` from whatever key this script
+emits, which means the ``secret_key`` value in ``config/settings.yml`` is
+never used at runtime.
 """
-import secrets
+from __future__ import annotations
+
 import os
-import re
-import subprocess
+import secrets
+import stat
 import sys
 
-DEFAULT_KEY = "SearXNG for Windows-mbaozi"
-# Known committed keys in config/settings.yml that must be rotated on first run.
-# These values were committed to the repository and are shared by all clones.
-KNOWN_COMMITTED_KEYS = [
-    DEFAULT_KEY,
-    "ultrasecretkey",
-    "your_secret_key",
-    "default_secret_key",
-    "654eba279ae3354410f8c36f11535af7b1d6f893482cccad86268bdd50a047c1",
-    "4d7e7376e13c5de05bd915d4e270928abf72686db55a58b27ae3d5c14cf387d4",
-    "c131e23ee31e69e1f16c712e6e1b3e1a7b20b976bf75f10d2a45da807201ba70",
-    "7daba0202efb9448f5bcd68e7e4897d046346b1cdcf2804a72cd60039944442e",
-    "9f2e5f8b6f1c4a8da1e4e9d5f0b2c7a49b1f9e2d3c4a5b6d7e8f9a0b1c2d3e4",
-    "CHANGE_ME__generate_with_tools_ensure_secret_key_py__or_set_SEARXNG_SECRET",
-]
-SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "settings.yml")
-SECRET_REGEX = re.compile(
-    r"""^\s*secret_key:\s*["']?(?P<value>[^"'\s#]+)["']?""",
-    re.MULTILINE,
-)
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.normpath(os.path.join(HERE, ".."))
+CONFIG_DIR = os.path.join(REPO_ROOT, "config")
+SETTINGS_PATH = os.path.join(CONFIG_DIR, "settings.yml")
+SETTINGS_EXAMPLE_PATH = os.path.join(CONFIG_DIR, "settings.yml.example")
+SECRET_KEY_PATH = os.path.join(CONFIG_DIR, "secret.key")
+
+# Output format understood by the Windows batch launcher:
+#   for /f "delims=" %%K in ('python tools\ensure-secret-key.py') do set "SEARXNG_SECRET=%%K"
+# On non-Windows the same line is a harmless `set` definition that the calling
+# shell can `eval` if it wishes.
+KEY_LINE_PREFIX = "set SEARXNG_SECRET="
+
+MIN_KEY_LEN = 32
 
 
-def get_current_secret(content):
-    """Extract the current secret_key value from settings.yml text."""
-    match = SECRET_REGEX.search(content)
-    return match.group("value") if match else None
-
-
-def get_committed_secrets_from_git():
-    """Return a set of secret_key values that appear in git history for settings.yml.
-
-    Returns an empty set if git is unavailable, the file is not tracked, or the
-    command fails. Failures are non-fatal because secret rotation must also work
-    in fresh checkouts without a .git directory.
-    """
-    repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
-    git_dir = os.path.join(repo_root, ".git")
-    if not os.path.isdir(git_dir):
-        return set()
-    try:
-        result = subprocess.run(
-            [
-                "git",
-                "-C",
-                repo_root,
-                "log",
-                "-p",
-                "--no-color",
-                "--",
-                os.path.relpath(SETTINGS_PATH, repo_root).replace(os.sep, "/"),
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return set()
-    if result.returncode != 0 or not result.stdout:
-        return set()
-    found = set()
-    for match in re.finditer(
-        r"""^[+\-]\s*secret_key:\s*["']?([^"'\s#]+)["']?""",
-        result.stdout,
-        re.MULTILINE,
-    ):
-        found.add(match.group(1))
-    return found
-
-
-def rotate_secret(content, current_value, reason):
-    """Replace the current secret_key with a fresh random hex key."""
-    new_key = secrets.token_hex(32)
-    pattern = re.compile(
-        r'(secret_key:\s*["\']?)' + re.escape(current_value) + r'(["\']?)'
-    )
-    if not pattern.search(content):
-        return content, False
-    rotated = pattern.sub(lambda m: f"{m.group(1)}{new_key}{m.group(2)}", content, count=1)
-    print(f"[INFO] {reason}. Generated secure random key.")
-    return rotated, True
-
-
-def main():
-    path = os.path.normpath(SETTINGS_PATH)
-    if not os.path.exists(path):
-        return 0
-
+def _read_key(path: str) -> str | None:
     try:
         with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
+            value = f.read().strip()
+    except FileNotFoundError:
+        return None
     except OSError as exc:
         print(f"[WARN] Could not read {path}: {exc}", file=sys.stderr)
-        return 0
+        return None
+    return value or None
 
-    current = get_current_secret(content)
-    if not current:
-        return 0
 
-    committed = get_committed_secrets_from_git()
-
-    if current in KNOWN_COMMITTED_KEYS or current in committed:
-        new_content, rotated = rotate_secret(
-            content,
-            current,
-            reason="Known committed secret_key detected",
-        )
-    elif re.search(
-        r"secret_key:\s*[\"']?(?:CHANGE_ME|ultrasecretkey|your_secret_key|placeholder)[^\"']*[\"']?",
-        content,
-        re.IGNORECASE,
-    ):
-        new_content, rotated = rotate_secret(
-            content,
-            current,
-            reason="Placeholder secret_key detected",
-        )
-    else:
-        return 0
-
-    if not rotated:
-        return 0
+def _write_key(path: str, key: str) -> bool:
     try:
-        with open(path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(new_content)
+        # Write atomically: write to a sibling temp file, fsync, then replace.
+        # This avoids leaving a half-written file if the process is killed
+        # mid-write, which would force an unnecessary rotation on next launch.
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(key + "\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except (AttributeError, OSError):
+                # fsync isn't critical; the file is small and the worst case
+                # is a one-time rotation on the next launch.
+                pass
+        os.replace(tmp_path, path)
     except OSError as exc:
-        print(f"[ERROR] Could not write rotated secret to {path}: {exc}", file=sys.stderr)
-        return 1
-    print(f"[INFO] Rotated secret_key in {path}")
+        print(f"[ERROR] Could not write {path}: {exc}", file=sys.stderr)
+        return False
+
+    # Best-effort: lock down permissions on POSIX. Windows ignores the mode
+    # bits but NTFS ACL inheritance already keeps the file user-private in
+    # the common case.
+    try:
+        if hasattr(os, "chmod"):
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+    return True
+
+
+def _ensure_settings_file() -> None:
+    """Seed config/settings.yml from the tracked example if it is missing.
+
+    Existing users keep their customised ``settings.yml`` untouched. Fresh
+    checkouts get a working default so the launcher can start without manual
+    setup. The seeded file is gitignored, so the user can edit it freely
+    without affecting the repository.
+    """
+    if os.path.exists(SETTINGS_PATH):
+        return
+    if not os.path.exists(SETTINGS_EXAMPLE_PATH):
+        print(
+            f"[ERROR] Neither {SETTINGS_PATH} nor {SETTINGS_EXAMPLE_PATH} "
+            "exists. Cannot seed a default configuration.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    try:
+        with open(SETTINGS_EXAMPLE_PATH, "r", encoding="utf-8") as src:
+            content = src.read()
+        with open(SETTINGS_PATH, "w", encoding="utf-8", newline="\n") as dst:
+            dst.write(content)
+    except OSError as exc:
+        print(f"[ERROR] Could not seed {SETTINGS_PATH}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"[INFO] Seeded {SETTINGS_PATH} from settings.yml.example", file=sys.stderr)
+
+
+def _generate_key() -> str:
+    # 32 bytes == 64 hex chars == 256 bits of entropy. SearXNG itself uses
+    # token_hex(32) so this matches its recommended size.
+    return secrets.token_hex(32)
+
+
+def main() -> int:
+    _ensure_settings_file()
+
+    existing = _read_key(SECRET_KEY_PATH)
+    if existing and len(existing) >= MIN_KEY_LEN:
+        key = existing
+    else:
+        key = _generate_key()
+        if not _write_key(SECRET_KEY_PATH, key):
+            return 1
+        if existing is None:
+            print(f"[INFO] Generated secret_key in {SECRET_KEY_PATH}", file=sys.stderr)
+        else:
+            print(
+                f"[INFO] Replaced short/invalid secret_key in {SECRET_KEY_PATH}",
+                file=sys.stderr,
+            )
+
+    # The launcher parses this single line via `for /f`. Keep the format
+    # stable; downstream code (and the tests) depend on it.
+    print(f"{KEY_LINE_PREFIX}{key}")
     return 0
 
 

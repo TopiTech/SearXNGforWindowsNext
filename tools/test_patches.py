@@ -6,9 +6,13 @@ they can be exercised without a live searx install or any network access.
 Usage:
     python tools/test_patches.py
 """
+import io
 import os
+import shutil
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -29,40 +33,156 @@ ensure_secret_key = _load("ensure_secret_key", os.path.join(HERE, "ensure-secret
 
 
 class TestEnsureSecretKey(unittest.TestCase):
-    """Tests for the secret_key detection helper."""
+    """Tests for the per-install secret_key provider.
+
+    The script used to rotate secret_key inside config/settings.yml on every
+    run, polluting git history. It now writes the key to a gitignored file
+    (config/secret.key) and only prints a single ``set SEARXNG_SECRET=...``
+    line on stdout that the launcher captures.
+    """
 
     def setUp(self):
         self.fn = ensure_secret_key  # alias for readability
+        self._tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self._tmpdir, ignore_errors=True)
 
-    def test_get_current_secret_handles_quoted_and_unquoted(self):
-        self.assertEqual(
-            self.fn.get_current_secret('secret_key: "abc123"'),
-            "abc123",
+    def _make_paths(self, with_key=None, with_settings=True):
+        config_dir = os.path.join(self._tmpdir, "config")
+        os.makedirs(config_dir, exist_ok=True)
+        secret_path = os.path.join(config_dir, "secret.key")
+        settings_path = os.path.join(config_dir, "settings.yml")
+        example_path = os.path.join(config_dir, "settings.yml.example")
+        if with_settings:
+            with open(settings_path, "w", encoding="utf-8") as f:
+                f.write("secret_key: 'ultrasecretkey'\n")
+        with open(example_path, "w", encoding="utf-8") as f:
+            f.write("secret_key: 'ultrasecretkey'\n")
+        if with_key is not None:
+            with open(secret_path, "w", encoding="utf-8") as f:
+                f.write(with_key + "\n")
+        return secret_path, settings_path, example_path
+
+    def test_read_key_returns_none_when_missing(self):
+        secret_path, _, _ = self._make_paths(with_key=None)
+        self.assertIsNone(self.fn._read_key(secret_path))
+
+    def test_read_key_strips_whitespace(self):
+        secret_path, _, _ = self._make_paths(with_key="  abc123  \n")
+        self.assertEqual(self.fn._read_key(secret_path), "abc123")
+
+    def test_read_key_treats_empty_file_as_missing(self):
+        secret_path, _, _ = self._make_paths(with_key="   \n")
+        self.assertIsNone(self.fn._read_key(secret_path))
+
+    def test_write_key_creates_file_with_key(self):
+        secret_path, _, _ = self._make_paths()
+        ok = self.fn._write_key(secret_path, "deadbeef" * 8)
+        self.assertTrue(ok)
+        with open(secret_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), "deadbeef" * 8)
+        self.assertFalse(os.path.exists(secret_path + ".tmp"))
+
+    def test_write_key_is_atomic_when_target_locked(self):
+        # Simulate a previous run that left a stale .tmp behind; _write_key
+        # must still succeed and leave only the final file.
+        secret_path, _, _ = self._make_paths()
+        with open(secret_path + ".tmp", "w", encoding="utf-8") as f:
+            f.write("stale")
+        ok = self.fn._write_key(secret_path, "feca" * 16)
+        self.assertTrue(ok)
+        with open(secret_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), "feca" * 16)
+        self.assertFalse(os.path.exists(secret_path + ".tmp"))
+
+    def test_generate_key_has_sufficient_entropy(self):
+        self.assertGreaterEqual(len(self.fn._generate_key()), 64)
+        # token_hex(32) only emits [0-9a-f]
+        self.assertRegex(self.fn._generate_key(), r"^[0-9a-f]{64}$")
+        # Two draws must differ.
+        self.assertNotEqual(self.fn._generate_key(), self.fn._generate_key())
+
+    def test_ensure_settings_seeds_when_missing(self):
+        secret_path, settings_path, example_path = self._make_paths()
+        os.remove(settings_path)
+        # Patch the module-level paths to point at our tempdir.
+        with mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
+             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
+            self.fn._ensure_settings_file()
+        self.assertTrue(os.path.exists(settings_path))
+        with open(settings_path, "r", encoding="utf-8") as f:
+            self.assertIn("ultrasecretkey", f.read())
+
+    def test_ensure_settings_preserves_existing(self):
+        secret_path, settings_path, example_path = self._make_paths()
+        sentinel = "# user-custom-marker\n"
+        with open(settings_path, "w", encoding="utf-8") as f:
+            f.write(sentinel)
+        with mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
+             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
+            self.fn._ensure_settings_file()
+        with open(settings_path, "r", encoding="utf-8") as f:
+            self.assertIn(sentinel, f.read())
+
+    def test_main_reuses_existing_valid_key(self):
+        secret_path, settings_path, example_path = self._make_paths(
+            with_key="a" * 64
         )
-        self.assertEqual(
-            self.fn.get_current_secret("secret_key: 'xyz'"),
-            "xyz",
+        with mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path), \
+             mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
+             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
+            with mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out:
+                rc = self.fn.main()
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.getvalue().strip(), f"set SEARXNG_SECRET={'a' * 64}")
+        # The file must be untouched (no rewrite).
+        with open(secret_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), "a" * 64)
+
+    def test_main_generates_when_secret_file_missing(self):
+        secret_path, settings_path, example_path = self._make_paths()
+        self.assertFalse(os.path.exists(secret_path))
+        with mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path), \
+             mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
+             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
+            with mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out:
+                rc = self.fn.main()
+        self.assertEqual(rc, 0)
+        line = out.getvalue().strip()
+        self.assertTrue(line.startswith("set SEARXNG_SECRET="))
+        key = line.split("=", 1)[1]
+        self.assertGreaterEqual(len(key), 64)
+        self.assertTrue(os.path.exists(secret_path))
+
+    def test_main_rotates_short_existing_key(self):
+        # A key shorter than MIN_KEY_LEN is treated as invalid and replaced.
+        secret_path, settings_path, example_path = self._make_paths(
+            with_key="short"
         )
-        self.assertIsNone(self.fn.get_current_secret("# nothing here"))
-        self.assertIsNone(self.fn.get_current_secret(""))
+        with mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path), \
+             mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
+             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
+            with mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out:
+                rc = self.fn.main()
+        self.assertEqual(rc, 0)
+        line = out.getvalue().strip()
+        self.assertTrue(line.startswith("set SEARXNG_SECRET="))
+        new_key = line.split("=", 1)[1]
+        self.assertNotEqual(new_key, "short")
+        with open(secret_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), new_key)
 
-    def test_rotate_secret_replaces_known_value(self):
-        content = 'secret_key: "old-value"\n'
-        new_content, rotated = self.fn.rotate_secret(content, "old-value", reason="test")
-        self.assertTrue(rotated)
-        self.assertNotIn("old-value", new_content)
-        self.assertIn("secret_key:", new_content)
-
-    def test_rotate_secret_no_match_returns_unchanged(self):
-        content = 'secret_key: "current"\n'
-        new_content, rotated = self.fn.rotate_secret(content, "different", reason="test")
-        self.assertFalse(rotated)
-        self.assertEqual(new_content, content)
-
-    def test_get_committed_secrets_handles_no_git(self):
-        # Should not raise even when .git is missing.
-        secrets = self.fn.get_committed_secrets_from_git()
-        self.assertIsInstance(secrets, set)
+    def test_main_does_not_touch_settings_yml(self):
+        # Regression: the old design wrote to config/settings.yml, which is
+        # git-tracked. The new design must leave the settings file alone.
+        secret_path, settings_path, example_path = self._make_paths(
+            with_key="a" * 64
+        )
+        original_mtime = os.path.getmtime(settings_path)
+        with mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path), \
+             mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
+             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
+            self.fn.main()
+        self.assertEqual(os.path.getmtime(settings_path), original_mtime)
 
 
 class TestPatchValKeyDB(unittest.TestCase):

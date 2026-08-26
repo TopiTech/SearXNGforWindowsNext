@@ -172,9 +172,13 @@ class Tools:
 ##  構成ファイル
 
 - **`SearXNG for Windows.bat`**: メインの起動スクリプト。
-- **`config/settings.yml`**: ユーザー設定（エンジン、ポート、フォーマットなど）。
+- **`config/settings.yml.example`**: 追跡されるテンプレート。初回起動時に `config/settings.yml` へコピーされる。
+- **`config/settings.yml`**: ユーザー設定（エンジン、ポート、フォーマットなど）。`.gitignore` 対象のため自由に編集可能。
+- **`config/secret.key`**: Flask の `secret_key` のみを保存するローカルファイル。`.gitignore` 対象。削除すると次回起動時に新しいキーが生成される。
 - **`tools/sync-upstream.ps1`**: 本家リポジトリとの同期およびパッチ適用。
 - **`python/`**: ポータブルな組み込みPython環境。
+
+> 🔐 **セキュリティメモ**: `secret_key` は `config/secret.key` に保存され、起動時に `SEARXNG_SECRET` 環境変数として Granian に渡されます。`config/settings.yml` 内の `secret_key` 行はプレースホルダであり、実際には使用されません。これにより、ローテーションのたびに `settings.yml` をコミットする必要がなくなり、誤って秘密鍵をリポジトリに含めてしまうことを防ぎます。
 
 ---
 
@@ -228,3 +232,43 @@ GitHub Actions（`.github/workflows/upstream-sync.yml`）により、本家の�
 
 このプロジェクトはフォーク元に準じ **GNU Affero General Public License v3 (AGPL-3.0)** の下で公開されています。
 詳細は [LICENSE](LICENSE) ファイルを参照してください。
+
+---
+
+## 🔒 過去の漏えい secret_key の履歴パージ（任意・破壊的操作）
+
+git の履歴には、本機能追加より前のローテーションでコミットされた実 secret_key 値が複数含まれています（`654eba279a…`, `4d7e7376…`, `c131e23e…`, `7daba020…`, `cbe7de3a…`, `190c2fa5…`, `5634bc6d…`, `abd85945…` など）。**これらは既にリポジトリを clone できる全員に見えており**、本変更は将来のコミットに実 key が入らないようにするものに過ぎません。過去の履歴を完全に消すには **force-push を伴う破壊的な履歴書き換え**が必要で、協調的な作業が要求されます。
+
+実施する場合の手順（管理者向け）:
+
+```bash
+# 1. メンテナのフレッシュな clone で実行する（filter-repo は fresh clone を要求する）
+git clone <this-repo> searxng-purge
+cd searxng-purge
+git fetch --tags --unshallow   # 必要なら
+
+# 2. 置換ファイル（scratch/replacements.txt と同じ内容）
+cat > /tmp/replacements.txt <<'EOF'
+9f2e5f8b6f1c4a8da1e4e9d5f0b2c7a49b1f9e2d3c4a5b6d7e8f9a0b1c2d3e4==>REDACTED-LEAKED-SECRET-KEY
+654eba279ae3354410f8c36f11535af7b1d6f893482cccad86268bdd50a047c1==>REDACTED-LEAKED-SECRET-KEY
+4d7e7376e13c5de05bd915d4e270928abf72686db55a58b27ae3d5c14cf387d4==>REDACTED-LEAKED-SECRET-KEY
+c131e23ee31e69e1f16c712e6e1b3e1a7b20b976bf75f10d2a45da807201ba70==>REDACTED-LEAKED-SECRET-KEY
+7daba0202efb9448f5bcd68e7e4897d046346b1cdcf2804a72cd60039944442e==>REDACTED-LEAKED-SECRET-KEY
+5634bc6dbe3b4ea589c6895333e911a15e1e089031ba6080008fdc5b548fae95==>REDACTED-LEAKED-SECRET-KEY
+190c2fa54e6ae2ab4fea0f2eb21365321b658f3029f1fb40de754a40d9f5da62==>REDACTED-LEAKED-SECRET-KEY
+cbe7de3a7f6a7572353f0e492466d739c517ce6d516c369bd893605cae8da17b==>REDACTED-LEAKED-SECRET-KEY
+abd85945bf0253faba5a3594c83236bdf73270d838ffa1e5a3a174d665fccb4d==>REDACTED-LEAKED-SECRET-KEY
+EOF
+
+# 3. 履歴を書き換える
+git-filter-repo --force --replace-text /tmp/replacements.txt
+
+# 4. 検証: 上記の key 値がコミット中に残っていないこと
+git log -p -- config/settings.yml | grep -E "secret_key:" | grep -vE "REDACTED|ultrasecretkey|CHANGE_ME" || echo "OK: no leaked keys in history"
+
+# 5. 強制 push（リポジトリの全 clone に対して周知が必要）
+git remote add origin <this-repo>
+git push --force --tags --all
+```
+
+> ⚠️ force-push 後は、旧 SHA を保持している全 clone が `main` の upstream から分岐した状態になります。共同作業者は `git fetch origin && git reset --hard origin/main` で再同期する必要があります。

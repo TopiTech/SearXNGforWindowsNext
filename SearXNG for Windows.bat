@@ -23,21 +23,17 @@ if not exist ".\python\Lib\site-packages\searx\webapp.py" (
   exit /b 1
 )
 
-if not exist ".\config\settings.yml" (
-  echo [ERROR] Configuration missing: .\config\settings.yml
-  echo.
-  echo Copy config\settings.yml.bak to config\settings.yml and customize as needed.
-  echo Refer to README.md for more detail on configuration.
-  pause
-  exit /b 1
-)
-
 REM === Configure environment ===
 set "SEARXNG_SETTINGS_PATH=%CD%\config\settings.yml"
 
-REM === Automated security: generate secret_key if default ===
+REM === Automated security: provision a per-install secret_key ===
+REM The Python tool seeds config\settings.yml from the tracked example if it
+REM is missing, generates (or reuses) a random key in config\secret.key, and
+REM prints a single `set SEARXNG_SECRET=<key>` line that we capture below.
+REM The real key never lives in any tracked file, so rotating it produces
+REM no git diff.
 echo Checking security settings...
-".\python\python.exe" "tools\ensure-secret-key.py"
+for /f "delims=" %%K in ('".\python\python.exe" "tools\ensure-secret-key.py"') do set "SEARXNG_SECRET=%%K"
 
 REM === Start server ===
 echo.

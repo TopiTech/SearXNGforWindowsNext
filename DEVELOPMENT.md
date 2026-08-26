@@ -14,7 +14,9 @@ workspace/
 │   └── Lib/site-packages/   # Pre-installed packages (required)
 │
 ├── config/                   # Configuration & upstream metadata
-│   ├── settings.yml         # Main SearXNG config (user-customizable)
+│   ├── settings.yml.example # Tracked template (placeholder secret_key)
+│   ├── settings.yml         # Local user config (gitignored, seeded from .example)
+│   ├── secret.key           # Per-install Flask secret_key (gitignored)
 │   ├── requirements.txt      # Main Python dependencies
 │   ├── requirements-server.upstream.txt  # Server-specific deps
 │   └── *.upstream.txt       # Cached upstream files (reference only)
@@ -33,8 +35,12 @@ workspace/
 ### Launch Flow
 
 1. **SearXNG for Windows.bat** → Entry point (Windows native)
-   - Validates embedded Python, webapp, config presence
-   - Sets `SEARXNG_SETTINGS_PATH` environment variable
+   - Validates embedded Python and webapp presence
+   - Seeds `config\settings.yml` from `config\settings.yml.example` if missing
+   - Runs `tools\ensure-secret-key.py`, which writes/reads `config\secret.key`
+     and emits `set SEARXNG_SECRET=<key>` on stdout; the launcher captures
+     this into the local environment
+   - Sets `SEARXNG_SETTINGS_PATH` and `SEARXNG_SECRET` environment variables
    - Launches `python\Lib\site-packages\searx\webapp.py`
 
 2. **webapp.py** → Flask server
@@ -325,7 +331,8 @@ If `apply-windows-patches.ps1` fails with `ERROR: anchor not found`:
 | `python/Lib/site-packages/searx/` | **Overwritten** | Upstream code (patched immediately after) |
 | `python/Lib/site-packages/searxng_extra/` | **Overwritten** | If present upstream |
 | `config/requirements.txt` | **User-editable** (not sync'd) | Merged from upstream manually if needed |
-| `config/settings.yml` | **User-customizable** | Not touched by sync |
+| `config/settings.yml` | **User-customizable** (gitignored) | Not touched by sync |
+| `config/secret.key` | **Per-install** (gitignored) | Holds Flask secret_key; delete to rotate |
 | `config/*.upstream.txt` | **Overwritten** | Reference copies for auditing |
 | `tools/*.ps1` | **User-controlled** | Never overwritten by sync |
 | `UPSTREAM_VERSION.txt` | **Updated** | Metadata only |
