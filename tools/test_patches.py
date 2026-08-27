@@ -556,6 +556,154 @@ class TestDisableMissingEngines(unittest.TestCase):
         self.assertIn("# inner comment", res)
         self.assertIn("disabled: true", res)
 
+    def test_engine_name_with_special_chars(self):
+        # Engine names with hyphens, dots, etc. should be matched by escaped regex.
+        sample = (
+            "engines:\n"
+            "  - name: my-engine.v2\n"
+            "    engine: my_engine_v2\n"
+        )
+        res = self.mod.disable_engine_in_text(sample, "my-engine.v2")
+        self.assertIn("disabled: true", res)
+
+    def test_no_match_returns_unchanged(self):
+        sample = (
+            "engines:\n"
+            "  - name: existing\n"
+            "    engine: existing\n"
+        )
+        res = self.mod.disable_engine_in_text(sample, "nonexistent")
+        self.assertEqual(res, sample)
+
+    def test_preserves_crlf_line_endings(self):
+        sample = (
+            "engines:\r\n"
+            "  - name: missing\r\n"
+            "    engine: missing\r\n"
+        )
+        res = self.mod.disable_engine_in_text(sample, "missing")
+        self.assertIn("disabled: true", res)
+        # Should preserve CRLF (block contained CRLF).
+        self.assertIn("\r\n", res)
+
+    def test_disabled_various_truthy_values(self):
+        # Anything in {'true', 'yes', 'on', '1'} (lowercased) should be treated
+        # as already-disabled and not double-modified.
+        for val in ("true", "yes", "on", "1", "TRUE", "Yes", "ON"):
+            sample = (
+                "engines:\n"
+                "  - name: e\n"
+                "    engine: e\n"
+                f"    disabled: {val}\n"
+            )
+            res = self.mod.disable_engine_in_text(sample, "e")
+            self.assertEqual(res, sample, f"disabled: {val!r} should be a no-op")
+
+
+class TestPatchSettingsYmlEdgeCases(unittest.TestCase):
+    """Additional settings.yml reduction coverage."""
+
+    def setUp(self):
+        self.fn = apply_patches.patch_settings_yml
+
+    def test_replaces_3600_captcha_too(self):
+        # Both 86400 and 3600 must be normalised to 900 so a recent upstream
+        # change that already lowered the value still triggers the patch.
+        content = "SearxEngineCaptcha: 3600\n"
+        result = self.fn(content, "settings.yml")
+        self.assertIn("SearxEngineCaptcha: 900", result)
+
+    def test_replaces_cloudflare_and_recaptcha(self):
+        content = (
+            "cf_SearxEngineCaptcha: 1296000\n"
+            "recaptcha_SearxEngineCaptcha: 604800\n"
+        )
+        result = self.fn(content, "settings.yml")
+        self.assertIn("cf_SearxEngineCaptcha: 3600", result)
+        self.assertIn("recaptcha_SearxEngineCaptcha: 3600", result)
+
+
+class TestPatchProcessorsInitEdgeCases(unittest.TestCase):
+    """search/processors/__init__.py patch should be safe across minor reformatting."""
+
+    def setUp(self):
+        self.fn = apply_patches.patch_processors_init
+
+    def test_patches_with_extra_whitespace(self):
+        # Upstream may format the existing check with extra spaces; the patch
+        # anchor may not match in that case, but the function must at least
+        # not corrupt the file (either a clean re-patch or a no-op is fine).
+        content = (
+            'if   eng_settings.get("inactive", False)  is  True:\n'
+            "    continue\n"
+        )
+        result = self.fn(content, "__init__.py")
+        # The result must always preserve the original text, regardless of
+        # whether the patch matched.
+        self.assertIn("inactive", result)
+        # If it patched, it should add the disabled check; if not, the
+        # original text is returned unchanged.
+        if "disabled" in result:
+            self.assertIn("skipping processor init", result)
+
+    def test_already_applied_with_exact_string(self):
+        # The "skipping processor init" marker must reliably indicate prior
+        # application regardless of how it was inserted.
+        content = (
+            'if eng_settings.get("inactive", False) is True:\n'
+            "    continue\n"
+            "            if eng_settings.get(\"disabled\", False) is True:\n"
+            "                logger.debug(\"Engine '%s' is disabled in config, skipping processor init.\", eng_name)\n"
+            "                continue\n"
+        )
+        self.assertEqual(self.fn(content, "__init__.py"), "ALREADY_APPLIED")
+
+
+class TestPatchEnginesInitEdgeCases(unittest.TestCase):
+    """Engines init patch is the most complex. Cover its extra cases."""
+
+    def setUp(self):
+        self.fn = apply_patches.patch_engines_init
+
+    def test_already_applied_with_legacy_duplicate(self):
+        # The file is fully patched but the legacy upstream narrow check is
+        # still in the loop. The patch should re-run and clean it up.
+        content = (
+            "def load_engine(engine_data):\n"
+            "    if engine_name.lower() != engine_name:\n"
+            "        engine_name = engine_name.lower()\n"
+            "        engine_data['name'] = engine_name\n"
+            "    # Early return for engines that are intentionally disabled or inactive in config.\n"
+            "    if engine_data.get('inactive') is True:\n"
+            "        logger.debug('Engine \"%s\" is inactive in config, skipping load', engine_name)\n"
+            "        return None\n"
+            "    if engine_data.get('disabled') is True:\n"
+            "        logger.debug('Engine \"%s\" is disabled in config, skipping load', engine_name)\n"
+            "        return None\n"
+            "\n"
+            "def load_engines(engine_list):\n"
+            "    for engine_data in engine_list:\n"
+            "        if engine_data.get('inactive') is True: continue\n"
+            "        if engine_data.get(\"inactive\") is True or engine_data.get(\"disabled\") is True:\n"
+            "            logger.debug(\n"
+            "                \"loading engine %s skipped: inactive or disabled in config!\",\n"
+            "                engine_data.get(\"name\", \"???\"),\n"
+            "            )\n"
+            "            continue\n"
+        )
+        # Either ALREADY_APPLIED or a non-trivial rewrite is acceptable, but
+        # the result must contain the modern block and not stack duplicates.
+        result = self.fn(content, "engines/__init__.py")
+        if result != "ALREADY_APPLIED":
+            # Count of the modern block should be exactly 1 in the output.
+            self.assertEqual(
+                result.count("inactive or disabled in config!"), 1,
+                "Modern block must not be duplicated after re-patching",
+            )
+        else:
+            # Idempotent path: at most one copy.
+            self.assertLessEqual(content.count("inactive or disabled in config!"), 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

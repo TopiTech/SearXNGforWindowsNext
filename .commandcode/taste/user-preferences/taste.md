@@ -16,3 +16,8 @@
 - Values precision in prompts — provides explicit constraints, definitions, and output templates. Confidence: 0.9
 - Prefers exhaustive, multi-angle fixes for errors ("可能な限りの対策を実装") rather than minimal single fixes, and expects all site-packages/config changes to be codified as durable patches in tools/apply-patches.py to survive upstream sync. Confidence: 0.95
 - Primarily communicates in Japanese for this SearXNGforWindows workspace and expects implementation summaries/explanations in Japanese. Confidence: 0.9
+- Uses a `scratch/` directory for throwaway exploration/verification scripts (gitignored), deleting them after use rather than committing them. Confidence: 0.85
+- Prefers verifying patch idempotency against the actual installed site-packages/config files, not just unit-test fixtures, by importing the patch module and running each patch function against real files. Confidence: 0.85
+- Runs `python -m py_compile` across all modified Python files (patch system + patched site-packages) as a standard syntax sanity check during review/fix work. Confidence: 0.85
+- Expects multi-step review/fix work to be tracked via a todo list (todo_write) with status transitions (in_progress → completed) and concise per-step confirmation output ("All N tests pass", "Idempotency verified", etc.) between commands. Confidence: 0.8
+- Prefers final review/fix reports structured with Japanese section headers (## レビュー結果, ### 検証済み事項, ### 変更内容, ### テスト結果, ### 検出されたが修正しなかった事項, ### 未解決事項) for consistent review deliverable format. Confidence: 0.85
