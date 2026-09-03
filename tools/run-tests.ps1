@@ -1,3 +1,7 @@
+param(
+    [switch]$SkipInstall
+)
+
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 $ErrorActionPreference = "Stop"
@@ -16,10 +20,14 @@ try {
     Write-Host ""
 
     # 1. Install dependencies
-    Write-Host "[1/6] Installing Python dependencies..." -ForegroundColor Green
-    & .\tools\install-requirements.ps1
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to install dependencies via install-requirements.ps1"
+    if ($SkipInstall) {
+        Write-Host "[1/6] Skipping Python dependency installation (-SkipInstall requested)..." -ForegroundColor Yellow
+    } else {
+        Write-Host "[1/6] Installing Python dependencies..." -ForegroundColor Green
+        & .\tools\install-requirements.ps1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install dependencies via install-requirements.ps1"
+        }
     }
 
     # 2. Ensure settings.yml is present. The Python tool seeds it from the

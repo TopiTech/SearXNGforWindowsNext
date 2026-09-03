@@ -162,9 +162,10 @@ try {
     }
     Write-Host ""
 
-    # Test 18: Scrape validation - missing URL
-    Write-Host "Test 18: /scrape error handling (missing URL)..." -ForegroundColor Cyan
+    # Test 18: Scrape validation - missing URL & invalid URL type
+    Write-Host "Test 18: /scrape error handling (missing URL & invalid URL type)..." -ForegroundColor Cyan
     Assert-HttpStatusCode -Uri "$base/scrape" -ExpectedStatusCode 400 -Label "Scrape missing URL"
+    Assert-HttpStatusCode -Uri "$base/scrape" -Method Post -Body '{"url": 12345}' -ContentType "application/json" -ExpectedStatusCode 400 -Label "Scrape invalid URL type"
     Write-Host ""
 
     # Test 19: json_lite with empty query (server should reject with 400 "No query")

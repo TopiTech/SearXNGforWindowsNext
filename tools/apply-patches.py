@@ -249,7 +249,7 @@ def patch_webapp_scrape_route(content, path):
         "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')", # default should be true
         "max_keepalive_connections=20",
         "_searxng_original_getaddrinfo",
-        "v11-bulletproof-scrape-fix",
+        "v12-bulletproof-scrape-fix",
         "import re",
         "class _ScrapeBlockedError",
     ]
@@ -305,26 +305,43 @@ _original_getaddrinfo = socket._searxng_original_getaddrinfo
 
 def _safe_getaddrinfo(h, p, *args, **kwargs):
     pin = getattr(_thread_local_dns, 'pin', None)
-    if pin and h == pin.get('host'):
-        pin_port = pin.get('port')
-        port_matches = (
-            p is None
-            or p == pin_port
-            or str(p) == str(pin_port)
-            or (pin_port == 443 and p == 'https')
-            or (pin_port == 80 and p == 'http')
-        )
-        if port_matches:
-            try:
-                ip_obj = ipaddress.ip_address(pin['ip'])
-                port_num = int(pin_port or (443 if p in (443, 'https') else 80))
-                req_family = args[0] if len(args) > 0 else kwargs.get('family', 0)
-                ip_family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
-                if req_family in (0, ip_family):
-                    sockaddr = (pin['ip'], port_num, 0, 0) if ip_obj.version == 6 else (pin['ip'], port_num)
-                    return [(ip_family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', sockaddr)]
-            except Exception:
-                pass
+    if pin:
+        pin_host = pin.get('host')
+        host_matches = False
+        if pin_host:
+            h_clean = (h or '').rstrip('.').lower()
+            pin_clean = pin_host.rstrip('.').lower()
+            if h_clean == pin_clean:
+                host_matches = True
+            else:
+                try:
+                    import idna
+                    host_matches = (
+                        idna.encode(h_clean).decode('ascii') == idna.encode(pin_clean).decode('ascii')
+                    )
+                except Exception:
+                    pass
+
+        if host_matches:
+            pin_port = pin.get('port')
+            port_matches = (
+                p is None
+                or p == pin_port
+                or str(p) == str(pin_port)
+                or (pin_port == 443 and p == 'https')
+                or (pin_port == 80 and p == 'http')
+            )
+            if port_matches:
+                try:
+                    ip_obj = ipaddress.ip_address(pin['ip'])
+                    port_num = int(pin_port or (443 if p in (443, 'https') else 80))
+                    req_family = args[0] if len(args) > 0 else kwargs.get('family', 0)
+                    ip_family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
+                    if req_family in (0, ip_family):
+                        sockaddr = (pin['ip'], port_num, 0, 0) if ip_obj.version == 6 else (pin['ip'], port_num)
+                        return [(ip_family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', sockaddr)]
+                except Exception:
+                    pass
     return _original_getaddrinfo(h, p, *args, **kwargs)
 
 socket.getaddrinfo = _safe_getaddrinfo
@@ -346,7 +363,7 @@ def pinned_dns(host, ip, port):
 @app.route('/scrape', methods=['GET', 'POST'])
 def scrape():
     """Extract main text content from URL (GenAI friendly, SSRF-protected).
-    # v11-bulletproof-scrape-fix
+    # v12-bulletproof-scrape-fix
 
     SECURITY: Blocks loopback, private/reserved IP ranges, link-local, and
     file:// scheme to prevent SSRF attacks and internal resource exposure.
@@ -360,8 +377,9 @@ def scrape():
         json_data = sxng_request.get_json(silent=True)
         if json_data and isinstance(json_data, dict):
             url = json_data.get('url')
-    if not url:
+    if not url or not isinstance(url, str) or not url.strip():
         return jsonify({'error': 'No URL provided'}), 400
+    url = url.strip()
 
     def _is_blocked_scrape_host(host):
         host = (host or '').strip().rstrip('.').lower()
@@ -738,18 +756,24 @@ def patch_online_captcha(content, path):
 def patch_settings_yml(content, path):
     if "SearxEngineCaptcha: 900" in content:
         return "ALREADY_APPLIED"
-    content = content.replace("SearxEngineCaptcha: 86400", "SearxEngineCaptcha: 900")
-    content = content.replace("SearxEngineCaptcha: 3600", "SearxEngineCaptcha: 900")
-    content = content.replace("SearxEngineAccessDenied: 86400", "SearxEngineAccessDenied: 900")
-    content = content.replace("SearxEngineTooManyRequests: 3600", "SearxEngineTooManyRequests: 600")
-    content = content.replace("cf_SearxEngineCaptcha: 1296000", "cf_SearxEngineCaptcha: 3600")
-    content = content.replace("recaptcha_SearxEngineCaptcha: 604800", "recaptcha_SearxEngineCaptcha: 3600")
+    content = re.sub(r'SearxEngineCaptcha:\s*\d+', 'SearxEngineCaptcha: 900', content)
+    content = re.sub(r'SearxEngineAccessDenied:\s*\d+', 'SearxEngineAccessDenied: 900', content)
+    content = re.sub(r'SearxEngineTooManyRequests:\s*\d+', 'SearxEngineTooManyRequests: 600', content)
+    content = re.sub(r'cf_SearxEngineCaptcha:\s*\d+', 'cf_SearxEngineCaptcha: 3600', content)
+    content = re.sub(r'recaptcha_SearxEngineCaptcha:\s*\d+', 'recaptcha_SearxEngineCaptcha: 3600', content)
     return content
 
 def patch_config_settings_yml(content, path):
     if "SearxEngineCaptcha: 900" in content:
         return "ALREADY_APPLIED"
-    return patch_settings_yml(content, path)
+    # If user has custom SearxEngineCaptcha (not legacy 86400/3600), or if absent, preserve user customization
+    if re.search(r'SearxEngineCaptcha:\s*(?!86400|3600)\d+', content) or "SearxEngineCaptcha" not in content:
+        return "ALREADY_APPLIED"
+    patched = patch_settings_yml(content, path)
+    if patched == content:
+        # Preserve user customization without raising RuntimeError in update_file
+        return "ALREADY_APPLIED"
+    return patched
 
 def main():
     logger.info("Applying Windows compatibility and feature patches...")

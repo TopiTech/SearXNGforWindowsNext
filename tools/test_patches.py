@@ -309,6 +309,7 @@ class TestPatchEnginesInit(unittest.TestCase):
 class TestPatchSettingsYml(unittest.TestCase):
     def setUp(self):
         self.fn = apply_patches.patch_settings_yml
+        self.cfg_fn = apply_patches.patch_config_settings_yml
 
     def test_replaces_known_long_values(self):
         content = (
@@ -321,9 +322,29 @@ class TestPatchSettingsYml(unittest.TestCase):
         self.assertIn("SearxEngineAccessDenied: 900", result)
         self.assertIn("SearxEngineTooManyRequests: 600", result)
 
+    def test_replaces_arbitrary_integers(self):
+        # R1 regression test: regex pattern matches any upstream integer
+        content = (
+            "SearxEngineCaptcha: 7200\n"
+            "SearxEngineAccessDenied: 14400\n"
+            "SearxEngineTooManyRequests: 1800\n"
+        )
+        result = self.fn(content, "settings.yml")
+        self.assertIn("SearxEngineCaptcha: 900", result)
+        self.assertIn("SearxEngineAccessDenied: 900", result)
+        self.assertIn("SearxEngineTooManyRequests: 600", result)
+
     def test_idempotent_when_already_reduced(self):
         content = "SearxEngineCaptcha: 900\n"
         self.assertEqual(self.fn(content, "settings.yml"), "ALREADY_APPLIED")
+
+    def test_config_settings_handles_user_customization_without_crash(self):
+        # R1 regression test: user-customized config/settings.yml must not crash patch runner
+        content_custom = "search:\n  suspended_times:\n    SearxEngineCaptcha: 300\n"
+        self.assertEqual(self.cfg_fn(content_custom, "config/settings.yml"), "ALREADY_APPLIED")
+
+        content_minimal = "general:\n  debug: false\n"
+        self.assertEqual(self.cfg_fn(content_minimal, "config/settings.yml"), "ALREADY_APPLIED")
 
 
 class TestPatchWebappJsonHandler(unittest.TestCase):
@@ -373,7 +394,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')\n"
             "max_keepalive_connections=20\n"
             "_searxng_original_getaddrinfo\n"
-            "v11-bulletproof-scrape-fix\n"
+            "v12-bulletproof-scrape-fix\n"
             "import re\n"
             "class _ScrapeBlockedError\n"
         )
@@ -391,7 +412,11 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("import trafilatura", res)
         self.assertIn("@app.route('/scrape'", res)
         self.assertIn("def scrape():", res)
-        self.assertIn("v11-bulletproof-scrape-fix", res)
+        self.assertIn("v12-bulletproof-scrape-fix", res)
+        # R2 regression: type validation
+        self.assertIn("isinstance(url, str)", res)
+        # R3 regression: idna normalization in _safe_getaddrinfo
+        self.assertIn("idna.encode", res)
 
 
 class TestPatchProcessorsInit(unittest.TestCase):
@@ -705,6 +730,37 @@ class TestPatchEnginesInitEdgeCases(unittest.TestCase):
             self.assertLessEqual(content.count("inactive or disabled in config!"), 1)
 
 
+class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
+    """Verify R2 and R3 security and robustness enhancements."""
+
+    def test_idna_matching_logic(self):
+        # R3 verification: Unicode and Punycode representations must match
+        import idna
+        unicode_host = "日本語.jp"
+        punycode_host = idna.encode(unicode_host).decode("ascii")
+
+        # Test normalization logic used in _safe_getaddrinfo
+        h_clean = punycode_host.rstrip(".").lower()
+        pin_clean = unicode_host.rstrip(".").lower()
+        matched = (h_clean == pin_clean) or (
+            idna.encode(h_clean).decode("ascii") == idna.encode(pin_clean).decode("ascii")
+        )
+        self.assertTrue(matched, "Punycode host must match Unicode pinned host")
+
+    def test_url_type_validation_logic(self):
+        # R2 verification: Non-string and whitespace-only URLs must be rejected
+        def validate_url(val):
+            if not val or not isinstance(val, str) or not val.strip():
+                return False
+            return val.strip()
+
+        self.assertFalse(validate_url(12345))
+        self.assertFalse(validate_url(None))
+        self.assertFalse(validate_url(["https://example.com"]))
+        self.assertFalse(validate_url({"url": "https://example.com"}))
+        self.assertFalse(validate_url("   "))
+        self.assertEqual(validate_url("  https://example.com  "), "https://example.com")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-

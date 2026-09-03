@@ -144,24 +144,31 @@ try {
     Sync-MirrorItem -Src $srcSearx -Dst (Join-Path $sitePackages "searx")
     Write-Host "  -> searx/"
 
-    # Validate engines referenced in config\settings.yml: if an upstream sync removed
+    # Validate engines referenced in configuration files: if an upstream sync removed
     # an engine module, mark the corresponding engine entry as disabled to avoid
     # runtime module-not-found errors.
-    Write-Host "Validating engine modules referenced in config\settings.yml..." -ForegroundColor Green
-    $settingsPath = Join-Path $repoRoot "config\settings.yml"
+    # Check both the tracked template (config\settings.yml.example) and the local
+    # config (config\settings.yml, if present).
+    Write-Host "Validating engine modules referenced in configuration files..." -ForegroundColor Green
     $enginesDir = Join-Path $sitePackages "searx\engines"
     $pythonExe = Join-Path $repoRoot "python\python.exe"
     $disableScript = Join-Path $repoRoot "tools\disable-missing-engines.py"
-    if (Test-Path $settingsPath) {
-        try {
-            if (Test-Path $pythonExe) {
-                & $pythonExe $disableScript $settingsPath $enginesDir
-            } else {
-                throw "Embedded Python not found at: $pythonExe"
+    $targetSettingsFiles = @(
+        (Join-Path $repoRoot "config\settings.yml.example"),
+        (Join-Path $repoRoot "config\settings.yml")
+    )
+    foreach ($cfgPath in $targetSettingsFiles) {
+        if (Test-Path $cfgPath) {
+            try {
+                if (Test-Path $pythonExe) {
+                    & $pythonExe $disableScript $cfgPath $enginesDir
+                } else {
+                    throw "Embedded Python not found at: $pythonExe"
+                }
             }
-        }
-        catch {
-            Write-Host "[WARN] Could not validate settings.yml: $_" -ForegroundColor Yellow
+            catch {
+                Write-Host "[WARN] Could not validate $cfgPath : $_" -ForegroundColor Yellow
+            }
         }
     }
 
