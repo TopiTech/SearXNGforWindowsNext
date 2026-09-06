@@ -389,6 +389,10 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "_scrape_client_lock\n"
             "_scrape_client_verify_ssl\n"
             "_thread_local_dns\n"
+            "def _parse_scrape_url\n"
+            "def _read_scrape_response\n"
+            "_SCRAPE_MAX_RESPONSE_BYTES\n"
+            "Fetched response exceeds size limit\n"
             "Blocked invalid scheme\n"
             "Redirect without Location header\n"
             "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')\n"
@@ -413,6 +417,9 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("@app.route('/scrape'", res)
         self.assertIn("def scrape():", res)
         self.assertIn("v12-bulletproof-scrape-fix", res)
+        self.assertIn("def _parse_scrape_url", res)
+        self.assertIn("def _read_scrape_response", res)
+        self.assertIn("_SCRAPE_MAX_RESPONSE_BYTES", res)
         # R2 regression: type validation
         self.assertIn("isinstance(url, str)", res)
         # R3 regression: idna normalization in _safe_getaddrinfo
@@ -599,6 +606,31 @@ class TestDisableMissingEngines(unittest.TestCase):
         )
         res = self.mod.disable_engine_in_text(sample, "nonexistent")
         self.assertEqual(res, sample)
+
+    def test_only_target_engine_is_disabled(self):
+        # Regression: a preceding disabled field must not be changed while the
+        # missing target remains enabled.
+        sample = (
+            "engines:\n"
+            "  - name: first\n"
+            "    engine: first\n"
+            "    disabled: false\n"
+            "  - name: missing_target\n"
+            "    engine: missing_target\n"
+            "    categories: general\n"
+            "  - name: third\n"
+            "    engine: third\n"
+        )
+        result = self.mod.disable_engine_in_text(sample, "missing_target")
+        self.assertIn("    disabled: false\n", result)
+        self.assertIn(
+            "  - name: missing_target\n"
+            "    engine: missing_target\n"
+            "    categories: general\n"
+            "    disabled: true\n",
+            result,
+        )
+        self.assertEqual(result.count("disabled: true"), 1)
 
     def test_preserves_crlf_line_endings(self):
         sample = (

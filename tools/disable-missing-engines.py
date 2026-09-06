@@ -4,46 +4,70 @@ import yaml
 import re
 
 def disable_engine_in_text(yaml_content, engine_name):
-    # Match any list item block starting with "  - " containing "name: engine_name"
-    pattern = r"(?m)^([ \t]*-\s+[^\r\n]*\r?\n(?:[ \t]+[^\r\n]*\r?\n)*)"
-    for match in re.finditer(pattern, yaml_content):
-        block = match.group(1)
-        if (re.search(rf"^[ \t]*-\s*name:\s*[\"']?{re.escape(engine_name)}[\"']?(?:\s|$)", block, re.M) or
-                re.search(rf"^[ \t]+name:\s*[\"']?{re.escape(engine_name)}[\"']?(?:\s|$)", block, re.M)):
+    # Locate exactly one YAML sequence item at a time.  The previous pattern
+    # treated every indented line as part of the first item, so a list of engine
+    # entries became one giant block and the first ``disabled`` field could be
+    # changed instead of the missing engine's field.
+    lines = yaml_content.splitlines(keepends=True)
+    item_pattern = re.compile(r"^(?P<indent>[ \t]*)-\s+name:\s*(?P<name>.*?)(?:\r?\n)?$")
 
-            # Check if disabled is already defined in this block
-            disabled_match = re.search(r'(?m)^([ \t]+)disabled:\s*([^\r\n]*)', block)
-            if disabled_match:
-                val = disabled_match.group(2).strip().lower()
-                if val in ('true', 'yes', 'on', '1'):
-                    return yaml_content
-                # Replace the existing disabled line with disabled: true
-                new_block = (
-                    block[:disabled_match.start()]
-                    + f"{disabled_match.group(1)}disabled: true"
-                    + block[disabled_match.end():]
-                )
-                return yaml_content[:match.start()] + new_block + yaml_content[match.end():]
+    for start, line in enumerate(lines):
+        item_match = item_pattern.match(line)
+        if not item_match:
+            continue
 
-            # Determine child indentation from the second line of the block
-            lines = block.splitlines()
-            child_indent = "    "
-            for line in lines[1:]:
-                if line.strip():
-                    child_indent = line[:len(line) - len(line.lstrip())]
+        try:
+            parsed_name = yaml.safe_load(item_match.group('name').strip())
+        except Exception:
+            parsed_name = item_match.group('name').strip().strip("\"'")
+        if parsed_name != engine_name:
+            continue
+
+        item_indent = item_match.group('indent')
+        end = start + 1
+        while end < len(lines):
+            candidate = lines[end]
+            if re.match(rf"^{re.escape(item_indent)}-\s+", candidate):
+                break
+            if candidate.strip() and not candidate.lstrip().startswith('#'):
+                candidate_indent = candidate[:len(candidate) - len(candidate.lstrip(' \t'))]
+                if len(candidate_indent) <= len(item_indent):
                     break
+            end += 1
 
-            # Insert disabled: true at the end of the block before any trailing empty lines
-            last_valid_idx = len(lines) - 1
-            while last_valid_idx >= 0 and not lines[last_valid_idx].strip():
-                last_valid_idx -= 1
+        block = ''.join(lines[start:end])
+        block_lines = block.splitlines(keepends=True)
+        child_indent = None
+        for child_line in block_lines[1:]:
+            if child_line.strip() and not child_line.lstrip().startswith('#'):
+                child_indent = child_line[:len(child_line) - len(child_line.lstrip(' \t'))]
+                if len(child_indent) > len(item_indent):
+                    break
+        if child_indent is None or len(child_indent) <= len(item_indent):
+            child_indent = item_indent + '  '
 
-            if last_valid_idx >= 0:
-                lines.insert(last_valid_idx + 1, f"{child_indent}disabled: true")
+        disabled_match = re.search(
+            rf'(?m)^{re.escape(child_indent)}disabled:\s*([^\r\n]*)', block
+        )
+        if disabled_match:
+            val = disabled_match.group(1).strip().lower()
+            if val in ('true', 'yes', 'on', '1'):
+                return yaml_content
+            line_end = '\r\n' if block[disabled_match.end():].startswith('\r\n') else '\n' if block[disabled_match.end():].startswith('\n') else ''
+            replacement = f"{child_indent}disabled: true{line_end}"
+            new_block = block[:disabled_match.start()] + replacement + block[disabled_match.end() + len(line_end):]
+        else:
+            nl = '\r\n' if '\r\n' in block else '\n'
+            insert_at = len(block_lines)
+            while insert_at > 0 and not block_lines[insert_at - 1].strip():
+                insert_at -= 1
+            prefix = ''.join(block_lines[:insert_at])
+            suffix = ''.join(block_lines[insert_at:])
+            if prefix and not prefix.endswith(('\n', '\r')):
+                prefix += nl
+            new_block = prefix + f"{child_indent}disabled: true{nl}" + suffix
 
-            nl = "\r\n" if "\r\n" in block else "\n"
-            new_block = nl.join(lines) + nl
-            return yaml_content[:match.start()] + new_block + yaml_content[match.end():]
+        return ''.join(lines[:start]) + new_block + ''.join(lines[end:])
 
     return yaml_content
 

@@ -121,13 +121,26 @@ finally {
         Write-Host ""
         Write-Host "Cleaning up: Terminating background SearXNG server..." -ForegroundColor Cyan
         try {
-            if (-not $serverProcess.HasExited) {
-                # Stop the process tree to ensure all workers are terminated
-                Stop-Process -Id $serverProcess.Id -Force -ErrorAction Stop
-                Write-Host "  [OK] SearXNG server process stopped successfully." -ForegroundColor Green
-            } else {
-                Write-Host "  -> Server process was already stopped." -ForegroundColor Gray
+            # Granian may spawn Python worker processes.  Stop-Process only
+            # terminates the root process, so an exited root can otherwise
+            # leave workers listening on port 8888 after the test run.
+            $processIds = @([int]$serverProcess.Id)
+            do {
+                $previousCount = $processIds.Count
+                $processTable = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+                foreach ($candidate in $processTable) {
+                    $candidateId = [int]$candidate.ProcessId
+                    $parentId = [int]$candidate.ParentProcessId
+                    if (($processIds -contains $parentId) -and -not ($processIds -contains $candidateId)) {
+                        $processIds += $candidateId
+                    }
+                }
+            } while ($processIds.Count -gt $previousCount)
+
+            for ($index = $processIds.Count - 1; $index -ge 0; $index--) {
+                Stop-Process -Id $processIds[$index] -Force -ErrorAction SilentlyContinue
             }
+            Write-Host "  [OK] SearXNG server process tree stopped successfully." -ForegroundColor Green
         }
         catch {
             Write-Host "  [WARN] Failed to stop background server: $_" -ForegroundColor Yellow
