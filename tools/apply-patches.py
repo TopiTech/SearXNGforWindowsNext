@@ -116,7 +116,7 @@ def patch_settings_defaults(content, path):
 
 # --- Patch 3: webutils.py (add get_json_lite_response, optimised) ---
 def patch_webutils(content, path):
-    if "def get_json_lite_response" in content and "'score': d.get('score', 0)" in content and "_get_box" in content:
+    if "def get_json_lite_response" in content and "'score': d.get('score', 0)" in content and "_get_box" in content and "d.get('engines')" in content:
         return "ALREADY_APPLIED"
 
     lite_func = '''
@@ -130,7 +130,7 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
             'title': d.get('title', ''),
             'url': d.get('url', ''),
             'content': d.get('content', ''),
-            'source': d.get('engine', ''),
+            'source': d.get('engine', '') or (', '.join(sorted(d.get('engines', []))) if d.get('engines') else ''),
             'score': d.get('score', 0),
             'published_date': d.get('pubdate') or d.get('publishedDate'),
             'author': d.get('author', ''),
@@ -239,6 +239,7 @@ def patch_webapp_scrape_route(content, path):
     required_anchors = [
         "def scrape()",
         "_is_blocked_scrape_host",
+        "_RESERVED_TLDS",
         "pinned_dns",
         "_scrape_client",
         "_scrape_client_lock",
@@ -253,20 +254,22 @@ def patch_webapp_scrape_route(content, path):
         "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')", # default should be true
         "max_keepalive_connections=20",
         "_searxng_original_getaddrinfo",
-        "v12-bulletproof-scrape-fix",
+        "v13-bulletproof-scrape-fix",
         "import re",
+        "import html",
         "class _ScrapeBlockedError",
     ]
     if all(anchor in content for anchor in required_anchors):
         return "ALREADY_APPLIED"
 
-    # 1. Add imports at module level (ensure re is present for scrape fallback)
-    if 'import re' not in content:
-        content, count = re.subn(r'(import warnings\n)', r'import re\n\1', content, count=1)
-        if count == 0:
-            content, count = re.subn(r'(import httpx\n)', r'\1import re\n', content, count=1)
-        if count == 0:
-            raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for re.")
+    # 1. Add imports at module level (ensure re and html are present)
+    for mod in ('re', 'html'):
+        if f'import {mod}' not in content:
+            content, count = re.subn(r'(import warnings\n)', f'import {mod}\n\\1', content, count=1)
+            if count == 0:
+                content, count = re.subn(r'(import httpx\n)', f'import {mod}\n\\1', content, count=1)
+            if count == 0:
+                raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for {mod}.")
     if 'import trafilatura' not in content:
         content, count = re.subn(r'(import flask\b|from flask import\b)', r'import trafilatura\nimport socket\nimport contextlib\nimport threading\n\1', content, count=1)
         if count == 0:
@@ -320,7 +323,11 @@ def _read_scrape_response(response):
         chunks.append(chunk)
 
     body = b''.join(chunks)
-    return body.decode(response.encoding or 'utf-8', errors='replace')
+    encoding = response.encoding or 'utf-8'
+    try:
+        return body.decode(encoding, errors='replace')
+    except (LookupError, ValueError):
+        return body.decode('utf-8', errors='replace')
 
 
 _scrape_client = None
@@ -368,6 +375,10 @@ def _safe_getaddrinfo(h, p, *args, **kwargs):
                     if req_family in (0, ip_family):
                         sockaddr = (pin['ip'], port_num, 0, 0) if ip_obj.version == 6 else (pin['ip'], port_num)
                         return [(ip_family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', sockaddr)]
+                    else:
+                        raise socket.gaierror(socket.EAI_NONAME, f'Address family not supported for pinned host {pin_host}')
+                except socket.gaierror:
+                    raise
                 except Exception:
                     pass
     return _original_getaddrinfo(h, p, *args, **kwargs)
@@ -388,10 +399,37 @@ def pinned_dns(host, ip, port):
         _thread_local_dns.pin = None
 
 
+_RESERVED_TLDS = (
+    '.localhost', '.local', '.internal', '.lan', '.home.arpa',
+    '.invalid', '.test', '.example', '.onion', '.corp', '.home',
+)
+
+
+def _is_blocked_scrape_host(host):
+    host = (host or '').strip().rstrip('.').lower()
+    if not host or host == 'localhost' or any(host.endswith(tld) for tld in _RESERVED_TLDS):
+        return True
+    if '%' in host:
+        host = host.split('%', 1)[0]
+    try:
+        ip = ipaddress.ip_address(host)
+        return not ip.is_global
+    except ValueError:
+        pass
+
+    try:
+        for res in socket.getaddrinfo(host, None):
+            if not ipaddress.ip_address(res[4][0]).is_global:
+                return True
+    except (socket.gaierror, ValueError):
+        pass
+    return False
+
+
 @app.route('/scrape', methods=['GET', 'POST'])
 def scrape():
     """Extract main text content from URL (GenAI friendly, SSRF-protected).
-    # v12-bulletproof-scrape-fix
+    # v13-bulletproof-scrape-fix
 
     SECURITY: Blocks loopback, private/reserved IP ranges, link-local, and
     file:// scheme to prevent SSRF attacks and internal resource exposure.
@@ -418,27 +456,6 @@ def scrape():
         except ValueError as exc:
             raise _ScrapeBlockedError('Invalid URL') from exc
 
-    def _is_blocked_scrape_host(host):
-        host = (host or '').strip().rstrip('.').lower()
-        if not host or host == 'localhost' or host.endswith('.localhost'):
-            return True
-        if '%' in host:
-            host = host.split('%', 1)[0]
-        try:
-            ip = ipaddress.ip_address(host)
-            if not ip.is_global:
-                return True
-        except ValueError:
-            pass
-
-        try:
-            for res in socket.getaddrinfo(host, None):
-                if not ipaddress.ip_address(res[4][0]).is_global:
-                    return True
-        except (socket.gaierror, ValueError):
-            pass
-        return False
-
     def _fetch_scrape_url(request_url):
         global _scrape_client, _scrape_client_verify_ssl
         verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')
@@ -463,20 +480,42 @@ def scrape():
                 raise _ScrapeBlockedError(f'Blocked invalid scheme: {parsed.scheme}')
 
             host = parsed.hostname
-            if _is_blocked_scrape_host(host):
+            if not host:
+                raise _ScrapeBlockedError('Empty hostname')
+
+            host_clean = host.strip().rstrip('.').lower()
+            if host_clean == 'localhost' or any(host_clean.endswith(tld) for tld in _RESERVED_TLDS):
                 raise _ScrapeBlockedError(f'Blocked: {host} is a private/reserved host')
+
+            if '%' in host_clean:
+                host_clean = host_clean.split('%', 1)[0]
+
+            try:
+                ip_direct = ipaddress.ip_address(host_clean)
+                if not ip_direct.is_global:
+                    raise _ScrapeBlockedError(f'Blocked: {host} is a private/reserved IP')
+            except ValueError:
+                pass
 
             try:
                 port = parsed.port or (443 if parsed.scheme == 'https' else 80)
                 addr_info = socket.getaddrinfo(host, port)
+                if not addr_info:
+                    raise _ScrapeBlockedError(f'Could not resolve host: {host}')
+                valid_ips = []
                 for res in addr_info:
                     ip_raw = res[4][0]
                     ip_obj = ipaddress.ip_address(ip_raw)
-                    if ip_obj.is_global:
-                        return ip_raw, host, port
-                raise _ScrapeBlockedError(f'Could not find a global IP for {host}')
+                    if not ip_obj.is_global:
+                        raise _ScrapeBlockedError(f'Blocked: {host} resolves to a private/reserved IP: {ip_raw}')
+                    valid_ips.append(ip_raw)
+                if not valid_ips:
+                    raise _ScrapeBlockedError(f'Could not find a global IP for {host}')
+                return valid_ips[0], host, port
             except _ScrapeBlockedError:
                 raise
+            except socket.gaierror as e:
+                raise _ScrapeBlockedError(f'DNS resolution failed for {host}: {e}')
             except Exception as e:
                 raise RuntimeError(f'DNS resolution failed for {host}: {e}')
 
@@ -522,6 +561,7 @@ def scrape():
             raw_text = re.sub(r'(?s)<script.*?>.*?</script>', ' ', downloaded)
             raw_text = re.sub(r'(?s)<style.*?>.*?</style>', ' ', raw_text)
             raw_text = re.sub(r'<[^>]+>', ' ', raw_text)
+            raw_text = html.unescape(raw_text)
             raw_text = re.sub(r'\s+', ' ', raw_text).strip()
             if raw_text:
                 content_text = raw_text[:5000]

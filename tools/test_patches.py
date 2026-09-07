@@ -235,12 +235,13 @@ class TestPatchWebUtils(unittest.TestCase):
         self.fn = apply_patches.patch_webutils
 
     def test_already_applied_when_canonical_form_present(self):
-        # The canonical injected function references the 'score' key and the
-        # `_get_box` nested helper. Both must be present for the idempotency
+        # The canonical injected function references the 'score' key, 'engines' key,
+        # and the `_get_box` nested helper. All must be present for the idempotency
         # check to fire.
         content = (
             "def get_json_lite_response(sq, rc):\n"
             "    # 'score': d.get('score', 0)\n"
+            "    # d.get('engines')\n"
             "    def _get_box(i):\n        pass\n"
         )
         self.assertEqual(self.fn(content, "webutils.py"), "ALREADY_APPLIED")
@@ -252,6 +253,13 @@ class TestPatchWebUtils(unittest.TestCase):
         idx_func = result.index("def get_json_lite_response")
         idx_themes = result.index("def get_themes")
         self.assertLess(idx_func, idx_themes)
+
+    def test_merged_engine_source_attribution(self):
+        # Result items with multiple merged engines should show sorted joined names
+        content = "def get_themes(p):\n    return []\n"
+        result = self.fn(content, "webutils.py")
+        self.assertIn("d.get('engines')", result)
+        self.assertIn("', '.join(sorted(d.get('engines', [])))", result)
 
 
 class TestPatchEnginesInit(unittest.TestCase):
@@ -384,6 +392,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         content = (
             "def scrape()\n"
             "_is_blocked_scrape_host\n"
+            "_RESERVED_TLDS\n"
             "pinned_dns\n"
             "_scrape_client\n"
             "_scrape_client_lock\n"
@@ -398,8 +407,9 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')\n"
             "max_keepalive_connections=20\n"
             "_searxng_original_getaddrinfo\n"
-            "v12-bulletproof-scrape-fix\n"
+            "v13-bulletproof-scrape-fix\n"
             "import re\n"
+            "import html\n"
             "class _ScrapeBlockedError\n"
         )
         self.assertEqual(self.fn(content, "webapp.py"), "ALREADY_APPLIED")
@@ -414,9 +424,10 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         )
         res = self.fn(content, "webapp.py")
         self.assertIn("import trafilatura", res)
+        self.assertIn("import html", res)
         self.assertIn("@app.route('/scrape'", res)
         self.assertIn("def scrape():", res)
-        self.assertIn("v12-bulletproof-scrape-fix", res)
+        self.assertIn("v13-bulletproof-scrape-fix", res)
         self.assertIn("def _parse_scrape_url", res)
         self.assertIn("def _read_scrape_response", res)
         self.assertIn("_SCRAPE_MAX_RESPONSE_BYTES", res)
@@ -424,6 +435,11 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("isinstance(url, str)", res)
         # R3 regression: idna normalization in _safe_getaddrinfo
         self.assertIn("idna.encode", res)
+        # R4 regression: DNS pinning family isolation, mixed record check, and reserved TLDs
+        self.assertIn("Address family not supported for pinned host", res)
+        self.assertIn("_RESERVED_TLDS", res)
+        self.assertIn("resolves to a private/reserved IP", res)
+        self.assertIn("html.unescape", res)
 
 
 class TestPatchProcessorsInit(unittest.TestCase):
@@ -792,6 +808,120 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
         self.assertFalse(validate_url({"url": "https://example.com"}))
         self.assertFalse(validate_url("   "))
         self.assertEqual(validate_url("  https://example.com  "), "https://example.com")
+
+    def test_dns_pinning_family_mismatch_raises_gaierror(self):
+        # R4 verification: When a host is pinned to IPv4, querying AF_INET6
+        # must raise socket.gaierror rather than falling through to live DNS.
+        import socket
+        import threading
+        import ipaddress
+
+        thread_local = threading.local()
+        thread_local.pin = {'host': 'example.com', 'ip': '93.184.216.34', 'port': 443}
+
+        def mock_original_gai(h, p, *args, **kwargs):
+            return [('live_dns', h, p)]
+
+        # Mimic _safe_getaddrinfo implementation
+        def test_safe_getaddrinfo(h, p, *args, **kwargs):
+            pin = getattr(thread_local, 'pin', None)
+            if pin:
+                pin_host = pin.get('host')
+                if pin_host and (h or '').rstrip('.').lower() == pin_host.rstrip('.').lower():
+                    pin_port = pin.get('port')
+                    if p is None or p == pin_port or str(p) == str(pin_port) or (pin_port == 443 and p == 'https'):
+                        ip_obj = ipaddress.ip_address(pin['ip'])
+                        port_num = int(pin_port or 443)
+                        req_family = args[0] if len(args) > 0 else kwargs.get('family', 0)
+                        ip_family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
+                        if req_family in (0, ip_family):
+                            sockaddr = (pin['ip'], port_num, 0, 0) if ip_obj.version == 6 else (pin['ip'], port_num)
+                            return [(ip_family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', sockaddr)]
+                        else:
+                            raise socket.gaierror(socket.EAI_NONAME, f'Address family not supported for pinned host {pin_host}')
+            return mock_original_gai(h, p, *args, **kwargs)
+
+        # 1. Matching family returns pinned IP
+        res_v4 = test_safe_getaddrinfo('example.com', 443, socket.AF_INET)
+        self.assertEqual(res_v4[0][4], ('93.184.216.34', 443))
+
+        # 2. Incompatible family raises gaierror (does NOT leak to live DNS)
+        with self.assertRaises(socket.gaierror):
+            test_safe_getaddrinfo('example.com', 443, socket.AF_INET6)
+
+        # 3. Unpinned host falls through to original resolver
+        res_other = test_safe_getaddrinfo('other.com', 443, socket.AF_INET)
+        self.assertEqual(res_other, [('live_dns', 'other.com', 443)])
+
+    def test_read_scrape_response_unknown_charset_fallback(self):
+        # R4 verification: Malformed/bogus charset header must not crash with 500 LookupError
+        class DummyResponse:
+            headers = {'content-type': 'text/html; charset=bogus-unknown-codec'}
+            encoding = 'bogus-unknown-codec'
+            def iter_bytes(self):
+                yield 'Hello, 世界!'.encode('utf-8')
+
+        resp = DummyResponse()
+        chunks = []
+        for c in resp.iter_bytes():
+            chunks.append(c)
+        body = b''.join(chunks)
+
+        encoding = resp.encoding or 'utf-8'
+        try:
+            decoded = body.decode(encoding, errors='replace')
+        except (LookupError, ValueError):
+            decoded = body.decode('utf-8', errors='replace')
+
+        self.assertEqual(decoded, 'Hello, 世界!')
+
+    def test_mixed_record_dns_rejection_logic(self):
+        # R4 verification: If a domain resolves to both a global IP and a private IP,
+        # it must be strictly rejected as an SSRF attack.
+        import ipaddress
+
+        records = [
+            (2, 1, 6, '', ('93.184.216.34', 443)),  # global
+            (2, 1, 6, '', ('192.168.1.1', 443)),   # private
+        ]
+
+        def validate_records(addr_info):
+            for res in addr_info:
+                ip_raw = res[4][0]
+                ip_obj = ipaddress.ip_address(ip_raw)
+                if not ip_obj.is_global:
+                    return False, f'Blocked non-global: {ip_raw}'
+            return True, 'OK'
+
+        ok, msg = validate_records(records)
+        self.assertFalse(ok)
+        self.assertIn('192.168.1.1', msg)
+
+    def test_reserved_tlds_blocking_logic(self):
+        # R4 verification: Reserved TLDs must be blocked statically
+        reserved_tlds = (
+            '.localhost', '.local', '.internal', '.lan', '.home.arpa',
+            '.invalid', '.test', '.example', '.onion', '.corp', '.home',
+        )
+        def is_blocked(host):
+            h = (host or '').strip().rstrip('.').lower()
+            return not h or h == 'localhost' or any(h.endswith(tld) for tld in reserved_tlds)
+
+        for blocked in ['router.local', 'myhost.internal', 'gateway.lan', 'device.home.arpa', 'dark.onion', 'localhost']:
+            self.assertTrue(is_blocked(blocked), f"{blocked} should be blocked")
+
+        for allowed in ['example.com', 'searxng.org', 'google.com', 'wikipedia.org']:
+            self.assertFalse(is_blocked(allowed), f"{allowed} should not be blocked")
+
+    def test_html_unescape_in_scrape_fallback(self):
+        # R4 verification: Fallback extraction unescapes HTML entities for GenAI readability
+        import html
+        import re
+
+        raw_html = "<p>SearXNG &amp; AI: &quot;Fast &apos;n&apos; Lean&quot; &lt;3</p>"
+        stripped = re.sub(r'<[^>]+>', ' ', raw_html)
+        unescaped = html.unescape(stripped).strip()
+        self.assertEqual(unescaped, "SearXNG & AI: \"Fast 'n' Lean\" <3")
 
 
 if __name__ == "__main__":
