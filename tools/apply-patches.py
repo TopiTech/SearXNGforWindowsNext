@@ -209,9 +209,7 @@ def patch_webapp_json_handler(content, path):
         content = re.sub(r'^\s+import ipaddress\n', '', content, flags=re.M)
         content, count = re.subn(r'(import warnings\n)', r'\1import ipaddress\n', content)
         if count == 0:
-            content, count = re.subn(r'(import httpx\n)', r'import ipaddress\n\1', content)
-        if count == 0:
-            content, count = re.subn(r'(from flask import\b)', r'import ipaddress\n\1', content)
+            content, count = re.subn(r'(from flask import\b|import flask\b)', r'import ipaddress\n\1', content)
         if count == 0:
             raise RuntimeError(f"Patch failed for {path}: Could not find insertion point for 'import ipaddress'.")
 
@@ -254,26 +252,27 @@ def patch_webapp_scrape_route(content, path):
         "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')", # default should be true
         "max_keepalive_connections=20",
         "_searxng_original_getaddrinfo",
-        "v13-bulletproof-scrape-fix",
+        "v14-bulletproof-scrape-fix",
         "import re",
         "import html",
+        "import httpx",
         "class _ScrapeBlockedError",
     ]
     if all(anchor in content for anchor in required_anchors):
         return "ALREADY_APPLIED"
 
-    # 1. Add imports at module level (ensure re and html are present)
-    for mod in ('re', 'html'):
+    # 1. Add imports at module level (ensure re, html, and httpx are present)
+    for mod in ('re', 'html', 'httpx'):
         if f'import {mod}' not in content:
             content, count = re.subn(r'(import warnings\n)', f'import {mod}\n\\1', content, count=1)
             if count == 0:
-                content, count = re.subn(r'(import httpx\n)', f'import {mod}\n\\1', content, count=1)
+                content, count = re.subn(r'(from flask import\b|import flask\b)', f'import {mod}\n\\1', content, count=1)
             if count == 0:
                 raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for {mod}.")
     if 'import trafilatura' not in content:
         content, count = re.subn(r'(import flask\b|from flask import\b)', r'import trafilatura\nimport socket\nimport contextlib\nimport threading\n\1', content, count=1)
         if count == 0:
-            content, count = re.subn(r'(import httpx\n)', r'\1import trafilatura\nimport socket\nimport contextlib\nimport threading\n', content, count=1)
+            content, count = re.subn(r'(import warnings\n)', r'import trafilatura\nimport socket\nimport contextlib\nimport threading\n\1', content, count=1)
         if count == 0:
             raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for trafilatura.")
     else:
@@ -282,7 +281,7 @@ def patch_webapp_scrape_route(content, path):
             if f'import {mod}' not in content:
                 content, count = re.subn(r'(import trafilatura\n)', f'\\1import {mod}\n', content)
                 if count == 0:
-                    content, count = re.subn(r'(import flask\b|from flask import\b)', f'import {mod}\n\\1', content, count=1)
+                    content, count = re.subn(r'(from flask import\b|import flask\b)', f'import {mod}\n\\1', content, count=1)
                 if count == 0:
                     raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for {mod}.")
 
@@ -350,10 +349,14 @@ def _safe_getaddrinfo(h, p, *args, **kwargs):
                 host_matches = True
             else:
                 try:
-                    import idna
-                    host_matches = (
-                        idna.encode(h_clean).decode('ascii') == idna.encode(pin_clean).decode('ascii')
-                    )
+                    try:
+                        import idna
+                        enc_h = idna.encode(h_clean).decode('ascii')
+                        enc_pin = idna.encode(pin_clean).decode('ascii')
+                    except ImportError:
+                        enc_h = h_clean.encode('idna').decode('ascii')
+                        enc_pin = pin_clean.encode('idna').decode('ascii')
+                    host_matches = (enc_h == enc_pin)
                 except Exception:
                     pass
 
@@ -429,7 +432,7 @@ def _is_blocked_scrape_host(host):
 @app.route('/scrape', methods=['GET', 'POST'])
 def scrape():
     """Extract main text content from URL (GenAI friendly, SSRF-protected).
-    # v13-bulletproof-scrape-fix
+    # v14-bulletproof-scrape-fix
 
     SECURITY: Blocks loopback, private/reserved IP ranges, link-local, and
     file:// scheme to prevent SSRF attacks and internal resource exposure.

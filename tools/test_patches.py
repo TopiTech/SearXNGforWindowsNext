@@ -407,9 +407,10 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')\n"
             "max_keepalive_connections=20\n"
             "_searxng_original_getaddrinfo\n"
-            "v13-bulletproof-scrape-fix\n"
+            "v14-bulletproof-scrape-fix\n"
             "import re\n"
             "import html\n"
+            "import httpx\n"
             "class _ScrapeBlockedError\n"
         )
         self.assertEqual(self.fn(content, "webapp.py"), "ALREADY_APPLIED")
@@ -425,9 +426,10 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         res = self.fn(content, "webapp.py")
         self.assertIn("import trafilatura", res)
         self.assertIn("import html", res)
+        self.assertIn("import httpx", res)
         self.assertIn("@app.route('/scrape'", res)
         self.assertIn("def scrape():", res)
-        self.assertIn("v13-bulletproof-scrape-fix", res)
+        self.assertIn("v14-bulletproof-scrape-fix", res)
         self.assertIn("def _parse_scrape_url", res)
         self.assertIn("def _read_scrape_response", res)
         self.assertIn("_SCRAPE_MAX_RESPONSE_BYTES", res)
@@ -783,16 +785,27 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
 
     def test_idna_matching_logic(self):
         # R3 verification: Unicode and Punycode representations must match
-        import idna
+        try:
+            import idna
+            punycode_host = idna.encode("日本語.jp").decode("ascii")
+        except ImportError:
+            punycode_host = "日本語.jp".encode("idna").decode("ascii")
+
         unicode_host = "日本語.jp"
-        punycode_host = idna.encode(unicode_host).decode("ascii")
 
         # Test normalization logic used in _safe_getaddrinfo
         h_clean = punycode_host.rstrip(".").lower()
         pin_clean = unicode_host.rstrip(".").lower()
-        matched = (h_clean == pin_clean) or (
-            idna.encode(h_clean).decode("ascii") == idna.encode(pin_clean).decode("ascii")
-        )
+
+        try:
+            import idna
+            enc_h = idna.encode(h_clean).decode("ascii")
+            enc_pin = idna.encode(pin_clean).decode("ascii")
+        except ImportError:
+            enc_h = h_clean.encode("idna").decode("ascii")
+            enc_pin = pin_clean.encode("idna").decode("ascii")
+
+        matched = (h_clean == pin_clean) or (enc_h == enc_pin)
         self.assertTrue(matched, "Punycode host must match Unicode pinned host")
 
     def test_url_type_validation_logic(self):
