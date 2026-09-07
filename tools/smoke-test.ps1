@@ -83,7 +83,14 @@ function Assert-In {
 try {
     # Test 1: Root page
     Write-Host "Test 1: Root page..." -ForegroundColor Cyan
-    Assert-HttpStatusCode -Uri $base -ExpectedStatusCode 200 -Label "Root page"
+    $rootResponse = Invoke-WebRequest -Uri $base -UseBasicParsing -ErrorAction Stop
+    if ($rootResponse.StatusCode -ne 200) {
+        throw "[FAIL] Root page expected 200, got $($rootResponse.StatusCode)"
+    }
+    if ($rootResponse.Content -notmatch 'id="q"[^>]*aria-label="[^"]+"') {
+        throw "[FAIL] Root page search input has no accessible name"
+    }
+    Write-Host "  [OK] Root page returned 200 with an accessible search input" -ForegroundColor Green
     Write-Host ""
 
     # Test 2: Standard JSON API

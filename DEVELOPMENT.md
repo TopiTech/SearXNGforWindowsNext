@@ -56,7 +56,7 @@ workspace/
 
 This project **stays synchronized with upstream SearXNG** while maintaining Windows compatibility via **idempotent patches**. Patches are applied after every upstream sync and are safe to run multiple times.
 
-### Patch Targets (13 Patch Steps across 8 Files)
+### Patch Targets (14 Patch Steps across 14 Target Files)
 
 | # | File | Patch | Purpose |
 |---|------|-------|---------|
@@ -64,14 +64,15 @@ This project **stays synchronized with upstream SearXNG** while maintaining Wind
 | 2 | `settings_defaults.py` | Register `json_lite` format | Output format registration |
 | 3 | `webutils.py` | `get_json_lite_response()` function | Lightweight GenAI-friendly responses |
 | 3b | `webutils.py` | Normalize Windows paths for URL lookups | Static assets and result templates |
+| 3c | `templates/simple/{search,simple_search}.html` | Localized accessible name for search input | Keyboard/screen-reader usability |
 | 4 | `webapp.py` (pt 1) | `json_lite` handler + `ipaddress` import | Route handler + SSRF libs |
 | 5 | `webapp.py` (pt 2) | `/scrape` endpoint (SSRF-protected) | Content extraction API |
-| 6 | `engines/__init__.py` | Early return for disabled engines | Performance + skip noise |
-| 7 | `search/processors/__init__.py` | Skip disabled engines in init | Performance + skip noise |
+| 6 | `engines/__init__.py` | Remove legacy `disabled` short-circuit | Preserve SearXNG preference semantics |
+| 7 | `search/processors/__init__.py` | Remove legacy `disabled` processor skip | Allow manual activation from Preferences |
 | 8 | `engines/google.py` | CAPTCHA false-positive fix | Reduce spurious suspensions |
 | 9 | `engines/sogou.py` | Robust CAPTCHA detection | Reduce spurious suspensions |
-| 10 | `search/processors/abstract.py` | Cap CAPTCHA suspend, quick retry | 15m max / first-fail 2m |
-| 11 | `search/processors/online.py` | Retry-After + CAPTCHA cap, logging | Respect Retry-After header |
+| 10 | `search/processors/abstract.py` | Remove legacy global suspension cap | Honor `search.suspended_times` |
+| 11 | `search/processors/online.py` | Retry-After + CAPTCHA logging | Respect retry hints |
 | 12 | `settings.yml` + `config/settings.yml` | Reduce suspended_times defaults | Auto-recovery on single-user instance |
 
 ### Patch Execution Flow
@@ -83,11 +84,12 @@ sync-upstream.ps1
   ├─ Sync searx/ and searxng_extra/ packages
   ├─ Copy requirements.txt, setup.py, LICENSE
   ├─ Update UPSTREAM_VERSION.txt (metadata)
-  └─ apply-windows-patches.ps1 (13 patch steps, idempotent)
+  └─ apply-windows-patches.ps1 (14 patch steps, idempotent)
        ├─ Patch 1: valkeydb.py ✓
        ├─ Patch 2: settings_defaults.py ✓
        ├─ Patch 3: webutils.py ✓
        ├─ Patch 3b: webutils.py (Windows path normalization) ✓
+       ├─ Patch 3c: simple search templates (accessible input name) ✓
        ├─ Patch 4a: webapp.py (json_lite handler) ✓
        ├─ Patch 4b: webapp.py (/scrape route) ✓
        ├─ Patch 6: engines/__init__.py ✓
@@ -107,11 +109,13 @@ Each patch:
 3. **Reports errors explicitly** → all Python patches output `ERROR: {reason}` on failure.
 4. **Cleans stale code** → removes old duplicate patches before re-inserting (where applicable).
 5. **Pre-flight Check** (New) → Supports `Assert-Anchor` to verify injection points before modification.
+6. **Staging-path containment** → `-TempDir` must be relative to, and resolve
+   inside, the workspace before any recursive cleanup is attempted.
 
 Example (engines/__init__.py):
 ```python
-# Idempotency check: look for our debug message
-if "skipping load" in content or "inactive or disabled in config!" in content:
+# Idempotency check: look for the complete scrape-route marker
+if "v15-bulletproof-scrape-fix" in content:
     print("ALREADY_APPLIED")
     sys.exit(0)
 ```
@@ -207,6 +211,8 @@ except ValueError:
 ### ✓ What's Protected
 
 - **SSRF attacks**: `/scrape` endpoint strictly validates URLs
+- **Proxy bypasses**: `/scrape` ignores HTTPX proxy and CA environment variables,
+  so DNS validation and pinning are not delegated to an ambient proxy
 - **HTTP spoofing**: User-Agent realistic but transparent (legitimate UX enhancement)
 - **Script injection**: `trafilatura.extract()` sanitizes comments/scripts
 - **Exposure mitigation**: Error messages truncated to 100 chars
@@ -224,7 +230,7 @@ except ValueError:
 3. **SSL Verification (httpx for /scrape)**
     ```python
     verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')
-    httpx.Client(..., verify=verify_ssl)
+    httpx.Client(..., verify=verify_ssl, trust_env=False)
     ```
     - Default is `true` (certificates verified); set `SEARXNG_SCRAPE_VERIFY_SSL=false` for localhost-only without CA issues.
 

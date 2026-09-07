@@ -14,6 +14,8 @@ This document outlines security considerations and best practices for deploying 
 - Blocks all loopback addresses (127.0.0.0/8)
 - Blocks all private/reserved ranges (RFC 1918, link-local, etc.)
 - Rejects `file://` and other non-web schemes
+- Ignores HTTPX proxy and CA environment variables so validated DNS resolution
+  and pinning cannot be delegated to an ambient proxy
 - Returns HTTP 400 for blocked requests
 
 **Content Sanitization** in extracted HTML:

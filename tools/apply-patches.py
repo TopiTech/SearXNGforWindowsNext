@@ -205,6 +205,24 @@ def patch_webutils_windows_paths(content, path):
             patched = patched.replace(old, new, 1)
     return patched
 
+
+# --- Patch 3c: simple search templates (accessible search-field name) ---
+def patch_simple_search_accessibility(content, path):
+    """Give the primary search field an accessible, localized name.
+
+    A placeholder is not a label and disappears once a query is entered.  The
+    simple theme has icon-only controls already labelled with ``aria-label``;
+    use the same localized text for its primary text input.
+    """
+    search_input = 'id="q" name="q" type="text"'
+    accessible_search_input = 'id="q" name="q" type="text" aria-label="{{ _(\'Search for...\') }}"'
+    if accessible_search_input in content:
+        return "ALREADY_APPLIED"
+    if search_input not in content:
+        return content
+    return content.replace(search_input, accessible_search_input, 1)
+
+
 # --- Patch 4: webapp.py (json_lite handler + ipaddress import) ---
 def patch_webapp_json_handler(content, path):
     checks = [
@@ -273,10 +291,11 @@ def patch_webapp_scrape_route(content, path):
         "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')", # default should be true
         "max_keepalive_connections=20",
         "_searxng_original_getaddrinfo",
-        "v14-bulletproof-scrape-fix",
+        "v15-bulletproof-scrape-fix",
         "import re",
         "import html",
         "import httpx",
+        "trust_env=False",
         "class _ScrapeBlockedError",
     ]
     if all(anchor in content for anchor in required_anchors):
@@ -453,7 +472,7 @@ def _is_blocked_scrape_host(host):
 @app.route('/scrape', methods=['GET', 'POST'])
 def scrape():
     """Extract main text content from URL (GenAI friendly, SSRF-protected).
-    # v14-bulletproof-scrape-fix
+    # v15-bulletproof-scrape-fix
 
     SECURITY: Blocks loopback, private/reserved IP ranges, link-local, and
     file:// scheme to prevent SSRF attacks and internal resource exposure.
@@ -495,7 +514,17 @@ def scrape():
                         _scrape_client.close()
                     except Exception:
                         pass
-                _scrape_client = httpx.Client(timeout=10.0, follow_redirects=False, verify=verify_ssl, limits=scrape_limits)
+                # Do not inherit proxy or CA settings from the process environment.
+                # In particular, routing through HTTP(S)_PROXY would make the
+                # proxy resolve the user-controlled hostname and bypass the DNS
+                # validation and pinning performed below.
+                _scrape_client = httpx.Client(
+                    timeout=10.0,
+                    follow_redirects=False,
+                    verify=verify_ssl,
+                    limits=scrape_limits,
+                    trust_env=False,
+                )
                 _scrape_client_verify_ssl = verify_ssl
 
         def _get_safe_ip_url(url_to_resolve):
@@ -617,106 +646,48 @@ def scrape():
 
 
 
-# --- Patch 6: engines/__init__.py (check disabled flag BEFORE loading module) ---
+# --- Patch 6: engines/__init__.py (restore upstream disabled-engine semantics) ---
 def patch_engines_init(content, path):
-    # Idempotency: if both our load_engine block and our load_engines block
-    # are already present, treat the patch as applied. We also detect a
-    # previous run that left a redundant `inactive is True: continue` line
-    # in the loop body and re-run so we can clean it up.
-    has_engine_block = "skipping load" in content
-    has_engines_block = "inactive or disabled in config!" in content
-    has_legacy_duplicate = re.search(
-        r"""(?m)^[ \t]*if engine_data\.get\(\s*['"]inactive['"]\s*\) is True:\n[ \t]*continue\n""",
-        content[content.find("for engine_data in engine_list:"):] if "for engine_data in engine_list:" in content else "",
-    ) is not None
-    has_legacy_engine_duplicate = content.count("intentionally disabled or inactive in config.") > 1
-    if has_engine_block and has_engines_block and not has_legacy_duplicate and not has_legacy_engine_duplicate:
-        return "ALREADY_APPLIED"
+    """Undo legacy patches that made ``disabled`` act like ``inactive``.
 
-    # 1. Patch load_engine (singular) - add early return for disabled/inactive.
-    # Strip any pre-existing copies of our injection so re-running the patch
-    # does not stack duplicate early-return blocks.
-    inject_code = """
+    SearXNG keeps disabled engines loaded so users can enable them in
+    preferences or invoke them with a bang.  Only ``inactive`` means removed.
+    This cleanup is retained so existing installations are repaired on the
+    next patch run; pristine upstream files are left unchanged.
+    """
+    early_return_block = """
     # Early return for engines that are intentionally disabled or inactive in config.
     if engine_data.get('inactive') is True:
-        logger.debug('Engine "%s" is inactive in config, skipping load', engine_name)
+        logger.debug('Engine \"%s\" is inactive in config, skipping load', engine_name)
         return None
     if engine_data.get('disabled') is True:
-        logger.debug('Engine "%s" is disabled in config, skipping load', engine_name)
+        logger.debug('Engine \"%s\" is disabled in config, skipping load', engine_name)
         return None
 """
-    # Idempotency cleanup: remove any existing copies of the inject_code block
-    # (covers legacy duplicates and self-re-application).
-    content = re.sub(
-        r'(?ms)^    # Early return for engines that are intentionally disabled or inactive in config\.\n'
-        r'    if engine_data\.get\(\'inactive\'\) is True:\n'
-        r'        logger\.debug\(\'Engine "%s" is inactive in config, skipping load\', engine_name\)\n'
-        r'        return None\n'
-        r'    if engine_data\.get\(\'disabled\'\) is True:\n'
-        r'        logger\.debug\(\'Engine "%s" is disabled in config, skipping load\', engine_name\)\n'
-        r'        return None\n',
-        "",
-        content,
-    )
-    pattern = r"(if engine_name\.lower\(\) != engine_name:.*?engine_data\['name'\] = engine_name\n)"
-    content, count = re.subn(pattern, r"\1" + inject_code, content, flags=re.S)
-    if count == 0:
-        return content
-
-    # 2. Patch load_engines (plural) - skip loading disabled engines to avoid noise.
-    # This widens the existing upstream check (which only handles `inactive`) so
-    # `disabled: true` engines are also short-circuited before module load.
-    # It also removes any duplicated narrow `inactive`-only check left over from
-    # previous patch runs so the loop body is not re-injected on each sync.
-    inject_loop = """        if engine_data.get("inactive") is True or engine_data.get("disabled") is True:
+    combined_loop_block = """        if engine_data.get(\"inactive\") is True or engine_data.get(\"disabled\") is True:
             logger.debug(
-                "loading engine %s skipped: inactive or disabled in config!",
-                engine_data.get("name", "???"),
+                \"loading engine %s skipped: inactive or disabled in config!\",
+                engine_data.get(\"name\", \"???\"),
             )
             continue
 """
 
-    # Remove any previous copy of our injection (idempotency cleanup) so re-running
-    # the patch does not stack duplicate checks.
-    if "inactive or disabled in config!" in content:
-        content = re.sub(
-            r'(?ms)^[ \t]*if engine_data\.get\("inactive"\) is True or engine_data\.get\("disabled"\) is True:.*?\n[ \t]*continue\n',
-            "",
-            content,
-        )
-
-    # Remove the now-redundant narrow `inactive`-only `continue` that upstream
-    # SearXNG has at the top of the loop body. Our combined check subsumes it.
-    # Match both single- and double-quoted forms to be robust to formatting drift.
-    content = re.sub(
-        r"""(?ms)^[ \t]*if engine_data\.get\(\s*['"]inactive['"]\s*\) is True:\n[ \t]*continue\n""",
-        "",
-        content,
+    patched = content.replace(early_return_block, "")
+    patched = patched.replace(
+        combined_loop_block,
+        '        if engine_data.get("inactive") is True:\n            continue\n',
     )
+    return "ALREADY_APPLIED" if patched == content else patched
 
-    pattern = r"(def load_engines\(engine_list:.*?for engine_data in engine_list:)"
-    content, count = re.subn(pattern, r"\1\n" + inject_loop, content, flags=re.S)
-    if count == 0:
-        content, count = re.subn(r"(for engine_data in engine_list:)", r"\1\n" + inject_loop, content, count=1)
 
-    if count == 0:
-        return content
-
-    return content
-
-# --- Patch 7: search/processors/__init__.py (skip intentionally disabled engines) ---
+# --- Patch 7: search/processors/__init__.py (restore upstream disabled-engine semantics) ---
 def patch_processors_init(content, path):
-    if "skipping processor init" in content:
-        return "ALREADY_APPLIED"
-
-    pattern = r"(if eng_settings\.get\(\"inactive\", False\) is True:\s+continue)"
-    inject_code = """
-            if eng_settings.get("disabled", False) is True:
+    injected_block = """            if eng_settings.get("disabled", False) is True:
                 logger.debug("Engine '%s' is disabled in config, skipping processor init.", eng_name)
-                continue"""
-
-    content, count = re.subn(pattern, r"\1" + inject_code, content)
-    return content
+                continue
+"""
+    patched = content.replace(injected_block, "")
+    return "ALREADY_APPLIED" if patched == content else patched
 
 # --- Patch 8: engines/google.py (fix CAPTCHA false positives) ---
 def patch_google_captcha(content, path):
@@ -776,16 +747,15 @@ def patch_sogou_captcha(content, path):
         return content.replace(old, new)
     return content
 
-# --- Patch 10: search/processors/abstract.py (cap CAPTCHA suspend, quick retry) ---
+# --- Patch 10: search/processors/abstract.py (restore configured suspension times) ---
 def patch_abstract_suspend(content, path):
-    if "captcha" in content.lower() and "SearxEngineCaptcha" in content and "suspended_time = min(suspended_time, 900)" in content:
-        return "ALREADY_APPLIED"
-    old = (
-        "            self.suspend_end_time = default_timer() + suspended_time\n"
-        "            self.suspend_reason = suspend_reason\n"
-        "            logger.debug(\"Suspend for %i seconds\", suspended_time)"
-    )
-    new = (
+    """Undo the legacy global cap that overrode ``suspended_times``.
+
+    ``max_ban_time_on_fail`` applies to ordinary engine failures.  Explicit
+    SearXNG access-denied and CAPTCHA exceptions carry their own values from
+    ``search.suspended_times`` and must retain those configured values.
+    """
+    legacy = (
         "            suspended_time = min(suspended_time, get_setting(\"search.max_ban_time_on_fail\"))\n"
         "            if \"captcha\" in suspend_reason.lower() or \"SearxEngineCaptcha\" in suspend_reason:\n"
         "                suspended_time = min(suspended_time, 900)\n"
@@ -796,14 +766,19 @@ def patch_abstract_suspend(content, path):
         "            self.suspend_reason = suspend_reason\n"
         "            logger.debug(\"Suspend for %i seconds\", suspended_time)"
     )
-    if old in content:
-        return content.replace(old, new)
-    return content
+    upstream = (
+        "            self.suspend_end_time = default_timer() + suspended_time\n"
+        "            self.suspend_reason = suspend_reason\n"
+        "            logger.debug(\"Suspend for %i seconds\", suspended_time)"
+    )
+    patched = content.replace(legacy, upstream)
+    return "ALREADY_APPLIED" if patched == content else patched
 
-# --- Patch 11: search/processors/online.py (Retry-After + 15min cap, proper logging) ---
+# --- Patch 11: search/processors/online.py (Retry-After + CAPTCHA logging) ---
 def patch_online_captcha(content, path):
     if "_parse_retry_after_header" in content:
-        return "ALREADY_APPLIED"
+        patched = content.replace("            e.suspended_time = min(e.suspended_time, 900)\n", "")
+        return "ALREADY_APPLIED" if patched == content else patched
     old_import = "from searx.metrics.error_recorder import count_error\nfrom .abstract import EngineProcessor, RequestParams"
     new_import = (
         "from searx.metrics.error_recorder import count_error\n"
@@ -843,7 +818,6 @@ def patch_online_captcha(content, path):
         "            retry_after = _parse_retry_after_header(getattr(e, 'response', None))\n"
         "            if retry_after is not None:\n"
         "                e.suspended_time = min(e.suspended_time, retry_after)\n"
-        "            e.suspended_time = min(e.suspended_time, 900)\n"
         "            self.handle_exception(result_container, e, suspend=True)\n"
         "            self.logger.warning(\"CAPTCHA %s suspended for %ss: %s\", self.engine.name, e.suspended_time, e.message)\n"
         "        except (\n"
@@ -905,6 +879,16 @@ def main():
         patch_webutils_windows_paths
     )
     update_file(
+        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "search.html"),
+        "templates/simple/search.html (accessible search label)",
+        patch_simple_search_accessibility
+    )
+    update_file(
+        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "simple_search.html"),
+        "templates/simple/simple_search.html (accessible search label)",
+        patch_simple_search_accessibility
+    )
+    update_file(
         os.path.join(SITE_PACKAGES, "searx", "webapp.py"),
         "webapp.py (json_lite handler)",
         patch_webapp_json_handler
@@ -916,12 +900,12 @@ def main():
     )
     update_file(
         os.path.join(SITE_PACKAGES, "searx", "engines", "__init__.py"),
-        "engines/__init__.py (check disabled before module load)",
+        "engines/__init__.py (restore disabled-engine behavior)",
         patch_engines_init
     )
     update_file(
         os.path.join(SITE_PACKAGES, "searx", "search", "processors", "__init__.py"),
-        "search/processors/__init__.py (skip disabled engines)",
+        "search/processors/__init__.py (restore disabled-engine behavior)",
         patch_processors_init
     )
     update_file(
@@ -936,12 +920,12 @@ def main():
     )
     update_file(
         os.path.join(SITE_PACKAGES, "searx", "search", "processors", "abstract.py"),
-        "search/processors/abstract.py (cap CAPTCHA suspend to 15m, first-fail 2m)",
+        "search/processors/abstract.py (restore configured suspension times)",
         patch_abstract_suspend
     )
     update_file(
         os.path.join(SITE_PACKAGES, "searx", "search", "processors", "online.py"),
-        "search/processors/online.py (Retry-After + CAPTCHA cap)",
+        "search/processors/online.py (Retry-After + CAPTCHA logging)",
         patch_online_captcha
     )
     update_file(

@@ -23,6 +23,29 @@ function Initialize-Directory {
     }
 }
 
+function Resolve-WorkspaceChildPath {
+    param(
+        [string]$Root,
+        [string]$RelativePath,
+        [string]$Label
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RelativePath)) {
+        throw "$Label must not be empty."
+    }
+    if ([System.IO.Path]::IsPathRooted($RelativePath)) {
+        throw "$Label must be a path relative to the workspace: $RelativePath"
+    }
+
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $candidate = [System.IO.Path]::GetFullPath((Join-Path $rootFull $RelativePath))
+    $rootPrefix = $rootFull + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $candidate.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label must stay inside the workspace: $RelativePath"
+    }
+    return $candidate
+}
+
 function Write-Section {
     param([string]$Message)
     Write-Host ""
@@ -86,7 +109,7 @@ Write-Host "[OK] All required commands found" -ForegroundColor Green
 Write-Host ""
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$tempRoot = Join-Path $repoRoot $TempDir
+$tempRoot = Resolve-WorkspaceChildPath -Root $repoRoot -RelativePath $TempDir -Label "TempDir"
 
 try {
     Write-Host "Workspace configuration:" -ForegroundColor Cyan

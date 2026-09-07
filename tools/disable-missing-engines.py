@@ -4,6 +4,13 @@ import yaml
 import re
 
 def disable_engine_in_text(yaml_content, engine_name):
+    """Mark an engine as inactive without changing its user preference state.
+
+    ``disabled`` means "off by default" in SearXNG and users may enable such
+    an engine from Preferences.  A missing implementation module must instead
+    be ``inactive`` so it is removed from the available engine list and cannot
+    cause a startup failure.
+    """
     # Locate exactly one YAML sequence item at a time.  The previous pattern
     # treated every indented line as part of the first item, so a list of engine
     # entries became one giant block and the first ``disabled`` field could be
@@ -46,16 +53,16 @@ def disable_engine_in_text(yaml_content, engine_name):
         if child_indent is None or len(child_indent) <= len(item_indent):
             child_indent = item_indent + '  '
 
-        disabled_match = re.search(
-            rf'(?m)^{re.escape(child_indent)}disabled:\s*([^\r\n]*)', block
+        inactive_match = re.search(
+            rf'(?m)^{re.escape(child_indent)}inactive:\s*([^\r\n]*)', block
         )
-        if disabled_match:
-            val = disabled_match.group(1).strip().lower()
+        if inactive_match:
+            val = inactive_match.group(1).strip().lower()
             if val in ('true', 'yes', 'on', '1'):
                 return yaml_content
-            line_end = '\r\n' if block[disabled_match.end():].startswith('\r\n') else '\n' if block[disabled_match.end():].startswith('\n') else ''
-            replacement = f"{child_indent}disabled: true{line_end}"
-            new_block = block[:disabled_match.start()] + replacement + block[disabled_match.end() + len(line_end):]
+            line_end = '\r\n' if block[inactive_match.end():].startswith('\r\n') else '\n' if block[inactive_match.end():].startswith('\n') else ''
+            replacement = f"{child_indent}inactive: true{line_end}"
+            new_block = block[:inactive_match.start()] + replacement + block[inactive_match.end() + len(line_end):]
         else:
             nl = '\r\n' if '\r\n' in block else '\n'
             insert_at = len(block_lines)
@@ -65,7 +72,7 @@ def disable_engine_in_text(yaml_content, engine_name):
             suffix = ''.join(block_lines[insert_at:])
             if prefix and not prefix.endswith(('\n', '\r')):
                 prefix += nl
-            new_block = prefix + f"{child_indent}disabled: true{nl}" + suffix
+            new_block = prefix + f"{child_indent}inactive: true{nl}" + suffix
 
         return ''.join(lines[:start]) + new_block + ''.join(lines[end:])
 
@@ -111,8 +118,9 @@ def main():
         if engine_mod and re.match(r'^[a-z0-9_-]+$', engine_mod):
             mod_file = os.path.join(engines_dir, f"{engine_mod}.py")
             if not os.path.exists(mod_file):
-                # If module is missing and not already disabled
-                if not engine_entry.get('disabled'):
+                # If a module is missing, it must be removed rather than merely
+                # disabled: disabled engines are intentionally still loadable.
+                if not engine_entry.get('inactive'):
                     missing_engines.append((name, engine_mod))
 
     if not missing_engines:
@@ -121,7 +129,7 @@ def main():
 
     modified_content = yaml_content
     for name, engine_mod in missing_engines:
-        print(f"Engine module missing: {engine_mod} (name: {name}) - marking disabled in settings.yml")
+        print(f"Engine module missing: {engine_mod} (name: {name}) - marking inactive in settings.yml")
         modified_content = disable_engine_in_text(modified_content, name)
 
     if modified_content != yaml_content:
