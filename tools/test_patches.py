@@ -262,6 +262,29 @@ class TestPatchWebUtils(unittest.TestCase):
         self.assertIn("', '.join(sorted(d.get('engines', [])))", result)
 
 
+class TestPatchWebUtilsWindowsPaths(unittest.TestCase):
+    """Verify URL-facing paths are normalized on Windows."""
+
+    def setUp(self):
+        self.fn = apply_patches.patch_webutils_windows_paths
+
+    def test_normalizes_static_and_result_template_paths(self):
+        content = (
+            "file_list.append(str(f.relative_to(static_path)))\n"
+            "result_templates.add(f)\n"
+        )
+        result = self.fn(content, "webutils.py")
+        self.assertIn("str(f.relative_to(static_path)).replace(os.sep, '/')", result)
+        self.assertIn("result_templates.add(f.replace(os.sep, '/'))", result)
+
+    def test_already_applied(self):
+        content = (
+            "file_list.append(str(f.relative_to(static_path)).replace(os.sep, '/'))\n"
+            "result_templates.add(f.replace(os.sep, '/'))\n"
+        )
+        self.assertEqual(self.fn(content, "webutils.py"), "ALREADY_APPLIED")
+
+
 class TestPatchEnginesInit(unittest.TestCase):
     """Verify engines/__init__.py patching logic."""
 

@@ -184,6 +184,27 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
     )
     return content
 
+# --- Patch 3b: webutils.py (normalize Windows paths used in URL lookups) ---
+def patch_webutils_windows_paths(content, path):
+    required = (
+        "file_list.append(str(f.relative_to(static_path)).replace(os.sep, '/'))",
+        "result_templates.add(f.replace(os.sep, '/'))",
+    )
+    if all(anchor in content for anchor in required):
+        return "ALREADY_APPLIED"
+
+    replacements = {
+        "file_list.append(str(f.relative_to(static_path)))":
+            "file_list.append(str(f.relative_to(static_path)).replace(os.sep, '/'))",
+        "result_templates.add(f)":
+            "result_templates.add(f.replace(os.sep, '/'))",
+    }
+    patched = content
+    for old, new in replacements.items():
+        if old in patched:
+            patched = patched.replace(old, new, 1)
+    return patched
+
 # --- Patch 4: webapp.py (json_lite handler + ipaddress import) ---
 def patch_webapp_json_handler(content, path):
     checks = [
@@ -877,6 +898,11 @@ def main():
         os.path.join(SITE_PACKAGES, "searx", "webutils.py"),
         "webutils.py (get_json_lite_response)",
         patch_webutils
+    )
+    update_file(
+        os.path.join(SITE_PACKAGES, "searx", "webutils.py"),
+        "webutils.py (normalize Windows paths)",
+        patch_webutils_windows_paths
     )
     update_file(
         os.path.join(SITE_PACKAGES, "searx", "webapp.py"),

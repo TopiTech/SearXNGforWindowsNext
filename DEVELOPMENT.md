@@ -56,13 +56,14 @@ workspace/
 
 This project **stays synchronized with upstream SearXNG** while maintaining Windows compatibility via **idempotent patches**. Patches are applied after every upstream sync and are safe to run multiple times.
 
-### Patch Targets (12 Patches across 8 Files)
+### Patch Targets (13 Patch Steps across 8 Files)
 
 | # | File | Patch | Purpose |
 |---|------|-------|---------|
 | 1 | `valkeydb.py` | Windows `pwd` module fallback | Cache system compatibility |
 | 2 | `settings_defaults.py` | Register `json_lite` format | Output format registration |
 | 3 | `webutils.py` | `get_json_lite_response()` function | Lightweight GenAI-friendly responses |
+| 3b | `webutils.py` | Normalize Windows paths for URL lookups | Static assets and result templates |
 | 4 | `webapp.py` (pt 1) | `json_lite` handler + `ipaddress` import | Route handler + SSRF libs |
 | 5 | `webapp.py` (pt 2) | `/scrape` endpoint (SSRF-protected) | Content extraction API |
 | 6 | `engines/__init__.py` | Early return for disabled engines | Performance + skip noise |
@@ -82,10 +83,11 @@ sync-upstream.ps1
   ├─ Sync searx/ and searxng_extra/ packages
   ├─ Copy requirements.txt, setup.py, LICENSE
   ├─ Update UPSTREAM_VERSION.txt (metadata)
-  └─ apply-windows-patches.ps1 (12 patches, idempotent)
+  └─ apply-windows-patches.ps1 (13 patch steps, idempotent)
        ├─ Patch 1: valkeydb.py ✓
        ├─ Patch 2: settings_defaults.py ✓
        ├─ Patch 3: webutils.py ✓
+       ├─ Patch 3b: webutils.py (Windows path normalization) ✓
        ├─ Patch 4a: webapp.py (json_lite handler) ✓
        ├─ Patch 4b: webapp.py (/scrape route) ✓
        ├─ Patch 6: engines/__init__.py ✓
