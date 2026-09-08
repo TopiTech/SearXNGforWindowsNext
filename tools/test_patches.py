@@ -488,6 +488,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "import re\n"
             "import html\n"
             "import httpx\n"
+            "import idna\n"
             "trust_env=False\n"
             "class _ScrapeBlockedError\n"
         )
@@ -505,6 +506,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("import trafilatura", res)
         self.assertIn("import html", res)
         self.assertIn("import httpx", res)
+        self.assertIn("import idna", res)
         self.assertIn("@app.route('/scrape'", res)
         self.assertIn("def scrape():", res)
         self.assertIn("v15-bulletproof-scrape-fix", res)
@@ -513,8 +515,10 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("_SCRAPE_MAX_RESPONSE_BYTES", res)
         # R2 regression: type validation
         self.assertIn("isinstance(url, str)", res)
-        # R3 regression: idna normalization in _safe_getaddrinfo
+        # R3 regression: idna normalization in _safe_getaddrinfo (module-level import)
         self.assertIn("idna.encode", res)
+        # Verify idna is imported at module level, not inside _safe_getaddrinfo
+        self.assertNotIn("import idna\n                        enc_h", res)
         # R4 regression: DNS pinning family isolation, mixed record check, and reserved TLDs
         self.assertIn("Address family not supported for pinned host", res)
         self.assertIn("_RESERVED_TLDS", res)

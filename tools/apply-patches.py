@@ -297,14 +297,15 @@ def patch_webapp_scrape_route(content, path):
         "import re",
         "import html",
         "import httpx",
+        "import idna",
         "trust_env=False",
         "class _ScrapeBlockedError",
     ]
     if all(anchor in content for anchor in required_anchors):
         return "ALREADY_APPLIED"
 
-    # 1. Add imports at module level (ensure re, html, and httpx are present)
-    for mod in ('re', 'html', 'httpx'):
+    # 1. Add imports at module level (ensure re, html, httpx, and idna are present)
+    for mod in ('re', 'html', 'httpx', 'idna'):
         if f'import {mod}' not in content:
             content, count = re.subn(r'(import warnings\n)', f'import {mod}\n\\1', content, count=1)
             if count == 0:
@@ -391,13 +392,8 @@ def _safe_getaddrinfo(h, p, *args, **kwargs):
                 host_matches = True
             else:
                 try:
-                    try:
-                        import idna
-                        enc_h = idna.encode(h_clean).decode('ascii')
-                        enc_pin = idna.encode(pin_clean).decode('ascii')
-                    except ImportError:
-                        enc_h = h_clean.encode('idna').decode('ascii')
-                        enc_pin = pin_clean.encode('idna').decode('ascii')
+                    enc_h = idna.encode(h_clean).decode('ascii')
+                    enc_pin = idna.encode(pin_clean).decode('ascii')
                     host_matches = (enc_h == enc_pin)
                 except Exception:
                     pass

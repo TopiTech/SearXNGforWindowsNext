@@ -54,7 +54,7 @@ The SearXNG for Windows project is a **high-quality, well-architected project** 
 **What was fixed:**
 - Hardcoded `verify=False` is now environment variable controlled
 - Added `SEARXNG_SCRAPE_VERIFY_SSL` environment variable
-- Default remains secure (disabled for localhost, can be enabled for production)
+- Default is `true` (SSL verification enabled); set to `false` only for localhost without CA
 - Improved documentation of security implications
 
 **Files modified**: `tools/apply-windows-patches.ps1` (patches 4b)
