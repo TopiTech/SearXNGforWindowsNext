@@ -263,6 +263,14 @@ class TestPatchSettingsDefaults(unittest.TestCase):
         result = self.fn(content, "settings_defaults.py")
         self.assertIn("'json_lite'", result)
 
+    def test_handles_empty_list(self):
+        # Edge case: empty OUTPUT_FORMATS list should still get json_lite added
+        content = "OUTPUT_FORMATS = []\n"
+        result = self.fn(content, "settings_defaults.py")
+        self.assertIn("'json_lite'", result)
+        # Verify the result is valid Python syntax
+        self.assertIn("OUTPUT_FORMATS = [", result)
+
 
 class TestPatchWebUtils(unittest.TestCase):
     """Verify webutils.py get_json_lite_response insertion."""

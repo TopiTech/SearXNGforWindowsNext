@@ -127,7 +127,12 @@ def patch_settings_defaults(content, path):
             body += ","
         body += "\n    'json_lite'"
     else:
-        body = body.rstrip() + ", 'json_lite'"
+        # Handle empty list case: avoid leading comma in "[, 'json_lite']"
+        body = body.rstrip()
+        if body:
+            body += ", 'json_lite'"
+        else:
+            body = "'json_lite'"
 
     return content[:match.start()] + match.group(1) + body + match.group(3) + content[match.end():]
 
