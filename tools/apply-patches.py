@@ -307,9 +307,9 @@ def patch_webapp_scrape_route(content, path):
     # 1. Add imports at module level (ensure re, html, httpx, and idna are present)
     for mod in ('re', 'html', 'httpx', 'idna'):
         if f'import {mod}' not in content:
-            content, count = re.subn(r'(import warnings\n)', f'import {mod}\n\\1', content, count=1)
+            content, count = re.subn(r'(import warnings\n)', f'import {mod}\n' + r'\1', content, count=1)
             if count == 0:
-                content, count = re.subn(r'(from flask import\b|import flask\b)', f'import {mod}\n\\1', content, count=1)
+                content, count = re.subn(r'(from flask import\b|import flask\b)', f'import {mod}\n' + r'\1', content, count=1)
             if count == 0:
                 raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for {mod}.")
     if 'import trafilatura' not in content:
@@ -322,9 +322,9 @@ def patch_webapp_scrape_route(content, path):
         # ensure socket, contextlib, and threading exist
         for mod in ('socket', 'contextlib', 'threading'):
             if f'import {mod}' not in content:
-                content, count = re.subn(r'(import trafilatura\n)', f'\\1import {mod}\n', content)
+                content, count = re.subn(r'(import trafilatura\n)', r'\1' + f'import {mod}\n', content)
                 if count == 0:
-                    content, count = re.subn(r'(from flask import\b|import flask\b)', f'import {mod}\n\\1', content, count=1)
+                    content, count = re.subn(r'(from flask import\b|import flask\b)', f'import {mod}\n' + r'\1', content, count=1)
                 if count == 0:
                     raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for {mod}.")
 

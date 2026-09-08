@@ -1126,6 +1126,32 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
         unescaped = html.unescape(stripped).strip()
         self.assertEqual(unescaped, "SearXNG & AI: \"Fast 'n' Lean\" <3")
 
+    def test_import_injection_preserves_anchor_lines(self):
+        """Regression: f-string regex replacements must use backreferences, not literals.
+
+        Prior to the fix, f-string replacements like f'import {mod}\\n\\\\1'
+        produced a literal '\\1' in the output instead of preserving the captured
+        group text.  This test ensures that after patching, the original anchor
+        import lines ('import warnings', 'from flask import ...') are still
+        present in the output.
+        """
+        content = (
+            "import warnings\n"
+            "from flask import Flask\n\n"
+            "@app.route('/search')\n"
+            "def search():\n"
+            "    pass\n"
+        )
+        res = apply_patches.patch_webapp_scrape_route(content, "webapp.py")
+        # The anchor 'import warnings' must survive the import injection.
+        self.assertIn("import warnings", res)
+        # Literal backslash-1 must never appear in the output.
+        self.assertNotIn("\\1", res)
+        # All injected imports must be present.
+        for mod in ('re', 'html', 'httpx', 'idna', 'trafilatura',
+                     'socket', 'contextlib', 'threading'):
+            self.assertIn(f"import {mod}", res)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
