@@ -10,6 +10,18 @@ logger = logging.getLogger("apply-patches")
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SITE_PACKAGES = os.path.join(REPO_ROOT, "python", "Lib", "site-packages")
 
+def _is_noop_patch(patch_func, content):
+    """Whether an unchanged result from *patch_func* means 'nothing to do'.
+
+    Patch functions can opt in by setting the ``_noop_when_unchanged``
+    attribute.  This covers patches that are pure ``content.replace()``
+    rewrites of legacy code: if the legacy pattern is absent the file is
+    already in the desired state and an unchanged return is success, not a
+    lost anchor.
+    """
+    return getattr(patch_func, "_noop_when_unchanged", False)
+
+
 def update_file(file_path, description, patch_func, *, required=True):
     if not os.path.exists(file_path):
         if required:
@@ -26,6 +38,9 @@ def update_file(file_path, description, patch_func, *, required=True):
         logger.info(f"Already applied: {description}")
         return "ALREADY_APPLIED"
     elif result == content:
+        if _is_noop_patch(patch_func, content):
+            logger.info(f"Already applied: {description}")
+            return "ALREADY_APPLIED"
         raise RuntimeError(f"Patch failed for {description}: Upstream code may have changed, could not find injection point in {file_path}.")
     else:
         with open(file_path, 'w', encoding='utf-8', newline='\n') as f:
@@ -188,6 +203,8 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
 
 # --- Patch 3b: webutils.py (normalize Windows paths used in URL lookups) ---
 def patch_webutils_windows_paths(content, path):
+    # Pure replace() rewrite: unchanged output == anchors already normalized.
+    patch_webutils_windows_paths._noop_when_unchanged = True
     required = (
         "file_list.append(str(f.relative_to(static_path)).replace(os.sep, '/'))",
         "result_templates.add(f.replace(os.sep, '/'))",
@@ -681,6 +698,8 @@ def scrape():
 
 # --- Patch 6: engines/__init__.py (restore upstream disabled-engine semantics) ---
 def patch_engines_init(content, path):
+    # Pure replace() rewrite of legacy blocks; unchanged == already restored.
+    patch_engines_init._noop_when_unchanged = True
     """Undo legacy patches that made ``disabled`` act like ``inactive``.
 
     SearXNG keeps disabled engines loaded so users can enable them in
@@ -715,6 +734,8 @@ def patch_engines_init(content, path):
 
 # --- Patch 7: search/processors/__init__.py (restore upstream disabled-engine semantics) ---
 def patch_processors_init(content, path):
+    # Pure replace() rewrite of the legacy block; unchanged == already restored.
+    patch_processors_init._noop_when_unchanged = True
     injected_block = """            if eng_settings.get("disabled", False) is True:
                 logger.debug("Engine '%s' is disabled in config, skipping processor init.", eng_name)
                 continue
@@ -724,6 +745,9 @@ def patch_processors_init(content, path):
 
 # --- Patch 8: engines/google.py (fix CAPTCHA false positives) ---
 def patch_google_captcha(content, path):
+    # replace() rewrite; unchanged means upstream no longer has the old block
+    # (either fixed upstream or already patched). Nothing left to do.
+    patch_google_captcha._noop_when_unchanged = True
     if 'loc = (resp.headers.get("Location")' in content:
         return "ALREADY_APPLIED"
     old = (
@@ -748,6 +772,8 @@ def patch_google_captcha(content, path):
 
 # --- Patch 9: engines/sogou.py (robust CAPTCHA detection) ---
 def patch_sogou_captcha(content, path):
+    # replace() rewrite; unchanged == nothing to do (see patch_google_captcha).
+    patch_sogou_captcha._noop_when_unchanged = True
     if "antispider" in content and "captcha" in content.lower() and "resp.headers.get" in content:
         return "ALREADY_APPLIED"
     old = (
@@ -782,6 +808,8 @@ def patch_sogou_captcha(content, path):
 
 # --- Patch 10: search/processors/abstract.py (restore configured suspension times) ---
 def patch_abstract_suspend(content, path):
+    # Pure replace() rewrite of the legacy cap; unchanged == already restored.
+    patch_abstract_suspend._noop_when_unchanged = True
     """Undo the legacy global cap that overrode ``suspended_times``.
 
     ``max_ban_time_on_fail`` applies to ordinary engine failures.  Explicit
@@ -809,35 +837,41 @@ def patch_abstract_suspend(content, path):
 
 # --- Patch 11: search/processors/online.py (Retry-After + CAPTCHA logging) ---
 def patch_online_captcha(content, path):
-    if "_parse_retry_after_header" in content:
-        patched = content.replace("            e.suspended_time = min(e.suspended_time, 900)\n", "")
-        return "ALREADY_APPLIED" if patched == content else patched
-    old_import = "from searx.metrics.error_recorder import count_error\nfrom .abstract import EngineProcessor, RequestParams"
-    new_import = (
-        "from searx.metrics.error_recorder import count_error\n"
-        "from .abstract import EngineProcessor, RequestParams\n"
-        "\n"
-        "\n"
-        "def _parse_retry_after_header(resp) -> int | None:\n"
-        "    if resp is None:\n"
-        "        return None\n"
-        "    try:\n"
-        "        hdr = None\n"
-        "        if hasattr(resp, 'headers'):\n"
-        "            hdr = resp.headers.get('Retry-After') or resp.headers.get('retry-after')\n"
-        "        if hdr is None:\n"
-        "            return None\n"
-        "        hdr = hdr.strip()\n"
-        "        if hdr.isdigit():\n"
-        "            v = int(hdr)\n"
-        "            return max(5, min(v, 900))\n"
-        "    except Exception:\n"
-        "        pass\n"
-        "    return None"
-    )
-    if old_import in content:
-        content = content.replace(old_import, new_import)
-    old_block = (
+    original = content
+    helper_present = "_parse_retry_after_header" in content
+
+    if not helper_present:
+        old_import = "from searx.metrics.error_recorder import count_error\nfrom .abstract import EngineProcessor, RequestParams"
+        new_import = (
+            "from searx.metrics.error_recorder import count_error\n"
+            "from .abstract import EngineProcessor, RequestParams\n"
+            "\n"
+            "\n"
+            "def _parse_retry_after_header(resp) -> int | None:\n"
+            "    if resp is None:\n"
+            "        return None\n"
+            "    try:\n"
+            "        hdr = None\n"
+            "        if hasattr(resp, 'headers'):\n"
+            "            hdr = resp.headers.get('Retry-After') or resp.headers.get('retry-after')\n"
+            "        if hdr is None:\n"
+            "            return None\n"
+            "        hdr = hdr.strip()\n"
+            "        if hdr.isdigit():\n"
+            "            v = int(hdr)\n"
+            "            return max(5, min(v, 900))\n"
+            "    except Exception:\n"
+            "        pass\n"
+            "    return None"
+        )
+        if old_import in content:
+            content = content.replace(old_import, new_import, 1)
+            helper_present = True
+    else:
+        # Legacy hard-coded CAPTCHA cap from pre-patch-11 installs.
+        content = content.replace("            e.suspended_time = min(e.suspended_time, 900)\n", "")
+
+    old_combined = (
         "        except (\n"
         "            SearxEngineCaptchaException,\n"
         "            SearxEngineTooManyRequestsException,\n"
@@ -846,13 +880,24 @@ def patch_online_captcha(content, path):
         "            self.handle_exception(result_container, e, suspend=True)\n"
         "            self.logger.debug(e.message)"
     )
-    new_block = (
+    new_split = (
         "        except SearxEngineCaptchaException as e:\n"
         "            retry_after = _parse_retry_after_header(getattr(e, 'response', None))\n"
         "            if retry_after is not None:\n"
         "                e.suspended_time = min(e.suspended_time, retry_after)\n"
         "            self.handle_exception(result_container, e, suspend=True)\n"
         "            self.logger.warning(\"CAPTCHA %s suspended for %ss: %s\", self.engine.name, e.suspended_time, e.message)\n"
+        "        except SearxEngineTooManyRequestsException as e:\n"
+        "            retry_after = _parse_retry_after_header(getattr(e, 'response', None))\n"
+        "            if retry_after is not None:\n"
+        "                e.suspended_time = min(e.suspended_time, retry_after)\n"
+        "            self.handle_exception(result_container, e, suspend=True)\n"
+        "            self.logger.debug(e.message)\n"
+        "        except SearxEngineAccessDeniedException as e:\n"
+        "            self.handle_exception(result_container, e, suspend=True)\n"
+        "            self.logger.debug(e.message)"
+    )
+    tuple_block = (
         "        except (\n"
         "            SearxEngineTooManyRequestsException,\n"
         "            SearxEngineAccessDeniedException,\n"
@@ -860,9 +905,84 @@ def patch_online_captcha(content, path):
         "            self.handle_exception(result_container, e, suspend=True)\n"
         "            self.logger.debug(e.message)"
     )
-    if old_block in content:
-        content = content.replace(old_block, new_block)
-    return content
+    split_block = (
+        "        except SearxEngineTooManyRequestsException as e:\n"
+        "            retry_after = _parse_retry_after_header(getattr(e, 'response', None))\n"
+        "            if retry_after is not None:\n"
+        "                e.suspended_time = min(e.suspended_time, retry_after)\n"
+        "            self.handle_exception(result_container, e, suspend=True)\n"
+        "            self.logger.debug(e.message)\n"
+        "        except SearxEngineAccessDeniedException as e:\n"
+        "            self.handle_exception(result_container, e, suspend=True)\n"
+        "            self.logger.debug(e.message)"
+    )
+    # Only reference the helper from the handlers when it is actually defined.
+    if helper_present:
+        if old_combined in content:
+            content = content.replace(old_combined, new_split, 1)
+        elif tuple_block in content:
+            content = content.replace(tuple_block, split_block, 1)
+
+    return "ALREADY_APPLIED" if content == original else content
+
+
+# --- Patch 11b: network/raise_for_httperror.py (attach response to exceptions) ---
+def _attach_response_to_raises(content: str) -> tuple[str, bool]:
+    """Rewrite ``raise SearxEngine*Exception(...)`` to attach the response.
+
+    Returns the (possibly unchanged) content and whether any raise statement
+    was rewritten.  Each rewritten raise becomes::
+
+        _exc = SearxEngineFooException(<args>)
+        _exc.response = resp
+        raise _exc
+
+    The ``online.py`` handler reads ``e.response`` (via ``getattr(e,
+    'response', None)``) to honour the ``Retry-After`` header; without the
+    response being attached that lookup always returns ``None`` and the
+    Retry-After feature is a silent no-op.
+    """
+    pattern = re.compile(
+        r"^(?P<indent>[ ]*)raise (?P<cls>SearxEngine(?:Captcha|AccessDenied|TooManyRequests)Exception)(?P<open>\()",
+        re.M,
+    )
+    out = []
+    pos = 0
+    changed = False
+    for match in pattern.finditer(content):
+        # Find the matching close paren (args may contain nested parens).
+        depth = 1
+        i = match.end("open")
+        while i < len(content) and depth:
+            if content[i] == "(":
+                depth += 1
+            elif content[i] == ")":
+                depth -= 1
+            i += 1
+        if depth:
+            continue  # unbalanced; leave this raise untouched
+        args = content[match.end("open"):i - 1]
+        indent = match.group("indent")
+        cls = match.group("cls")
+        out.append(content[pos:match.start()])
+        out.append(f"{indent}_exc = {cls}({args})\n{indent}_exc.response = resp\n{indent}raise _exc")
+        pos = i
+        changed = True
+    out.append(content[pos:])
+    return "".join(out), changed
+
+
+def patch_raise_for_httperror(content, path):
+    """Attach the response to engine exceptions raised with a response in hand.
+
+    Without this, ``SearxEngine*Exception`` instances never carry a
+    ``response`` attribute, so the Retry-After handling in
+    ``search/processors/online.py`` can never fire.
+    """
+    if "_exc.response = resp" in content:
+        return "ALREADY_APPLIED"
+    content, _ = _attach_response_to_raises(content)
+    return content  # unchanged content => update_file reports "anchor not found"
 
 # --- Patch 12: settings.yml / settings_defaults.py (reduce suspended_times) ---
 def patch_settings_yml(content, path):
@@ -960,6 +1080,11 @@ def main():
         os.path.join(SITE_PACKAGES, "searx", "search", "processors", "online.py"),
         "search/processors/online.py (Retry-After + CAPTCHA logging)",
         patch_online_captcha
+    )
+    update_file(
+        os.path.join(SITE_PACKAGES, "searx", "network", "raise_for_httperror.py"),
+        "network/raise_for_httperror.py (attach response for Retry-After)",
+        patch_raise_for_httperror
     )
     update_file(
         os.path.join(SITE_PACKAGES, "searx", "settings.yml"),

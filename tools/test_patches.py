@@ -1259,5 +1259,150 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
             self.assertIn(f"import {mod}", res)
 
 
+class TestPatchRaiseForHttpError(unittest.TestCase):
+    """Regression: Retry-After handling needs the response attached to
+    engine exceptions, otherwise ``getattr(e, 'response', None)`` in
+    ``search/processors/online.py`` always returns None and the whole
+    Retry-After feature is a silent no-op.
+    """
+
+    def test_attaches_response_to_cloudflare_captcha_raise(self):
+        content = (
+            "def raise_for_cloudflare_captcha(resp):\n"
+            "    if is_cloudflare_challenge(resp):\n"
+            "        raise SearxEngineCaptchaException(\n"
+            "            message='Cloudflare CAPTCHA', suspended_time=get_setting('x')\n"
+            "        )\n"
+        )
+        res = apply_patches.patch_raise_for_httperror(content, "raise_for_httperror.py")
+        self.assertIn("_exc = SearxEngineCaptchaException(", res)
+        self.assertIn("_exc.response = resp", res)
+        self.assertIn("raise _exc", res)
+        # The arguments must survive the rewrite untouched.
+        self.assertIn("message='Cloudflare CAPTCHA'", res)
+        self.assertIn("get_setting('x')", res)
+
+    def test_attaches_response_to_plain_raises(self):
+        content = (
+            "        if resp.status_code in (402, 403):\n"
+            "            raise SearxEngineAccessDeniedException(message='HTTP error ' + str(resp.status_code))\n"
+            "        if resp.status_code == 429:\n"
+            "            raise SearxEngineTooManyRequestsException()\n"
+        )
+        res = apply_patches.patch_raise_for_httperror(content, "raise_for_httperror.py")
+        self.assertIn("_exc = SearxEngineAccessDeniedException(message='HTTP error ' + str(resp.status_code))", res)
+        self.assertIn("_exc = SearxEngineTooManyRequestsException()", res)
+        self.assertEqual(res.count("_exc.response = resp"), 2)
+        # Nested method calls in the arguments must not break paren matching.
+        self.assertIn("str(resp.status_code)", res)
+
+    def test_is_idempotent(self):
+        content = (
+            "_exc = SearxEngineCaptchaException(message='CAPTCHA')\n"
+            "_exc.response = resp\n"
+            "raise _exc\n"
+        )
+        self.assertEqual(
+            apply_patches.patch_raise_for_httperror(content, "raise_for_httperror.py"),
+            "ALREADY_APPLIED",
+        )
+
+
+class TestPatchOnlineCaptchaUpgrade(unittest.TestCase):
+    """Regression: an install patched with the first version of Patch 11 has
+    ``_parse_retry_after_header`` but still a combined except tuple for
+    CAPTCHA + 429 + 403. Re-running must split the tuple and apply Retry-After
+    to the 429 handler as well, without re-injecting the helper.
+    """
+
+    def test_upgrades_combined_tuple_and_honours_retry_after(self):
+        content = (
+            "def _parse_retry_after_header(resp):\n"
+            "    return None\n"
+            "        except (\n"
+            "            SearxEngineCaptchaException,\n"
+            "            SearxEngineTooManyRequestsException,\n"
+            "            SearxEngineAccessDeniedException,\n"
+            "        ) as e:\n"
+            "            self.handle_exception(result_container, e, suspend=True)\n"
+            "            self.logger.debug(e.message)\n"
+        )
+        res = apply_patches.patch_online_captcha(content, "online.py")
+        self.assertNotEqual(res, "ALREADY_APPLIED")
+        # The helper is defined exactly once (no duplicate injection).
+        self.assertEqual(res.count("def _parse_retry_after_header"), 1)
+        self.assertIn("except SearxEngineTooManyRequestsException as e:", res)
+        self.assertIn(
+            "retry_after = _parse_retry_after_header(getattr(e, 'response', None))",
+            res,
+        )
+        self.assertNotIn("except (\n            SearxEngineCaptchaException", res)
+
+    def test_already_final_state_is_noop(self):
+        content = (
+            "def _parse_retry_after_header(resp):\n"
+            "    return None\n"
+            "        except SearxEngineCaptchaException as e:\n"
+            "            self.handle_exception(result_container, e, suspend=True)\n"
+            "        except SearxEngineTooManyRequestsException as e:\n"
+            "            self.handle_exception(result_container, e, suspend=True)\n"
+            "        except SearxEngineAccessDeniedException as e:\n"
+            "            self.handle_exception(result_container, e, suspend=True)\n"
+        )
+        res = apply_patches.patch_online_captcha(content, "online.py")
+        self.assertEqual(res, "ALREADY_APPLIED")
+
+
+class TestUpdateFileNoopHandling(unittest.TestCase):
+    """Regression: update_file must not raise "anchor not found" for patches
+    that are pure rewrites and report an unchanged result because there is
+    nothing left to do.
+    """
+
+    def _cleanup(self, tmpdir):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_unchanged_result_from_noop_patch_is_already_applied(self):
+        tmpdir = tempfile.mkdtemp()
+        self.addCleanup(self._cleanup, tmpdir)
+        target = os.path.join(tmpdir, "sample.py")
+        with open(target, "w", encoding="utf-8") as f:
+            f.write("legacy = True\n")
+
+        def rewrite(content, path):
+            return content.replace("legacy = True", "")
+
+        # Without the opt-in flag, unchanged output still fails loudly.
+        self.assertNotIn("legacy = True", rewrite("pristine\n", "x"))
+
+        rewrite._noop_when_unchanged = True  # noqa: B010
+
+        # Never applied -> patched.
+        result = apply_patches.update_file(
+            target, "sample rewrite", rewrite
+        )
+        self.assertEqual(result, "PATCHED")
+
+        # Already applied -> unchanged output must be reported as already
+        # applied, not as a missing anchor.
+        result = apply_patches.update_file(
+            target, "sample rewrite", rewrite
+        )
+        self.assertEqual(result, "ALREADY_APPLIED")
+
+    def test_unchanged_result_without_flag_still_fails(self):
+        tmpdir = tempfile.mkdtemp()
+        self.addCleanup(self._cleanup, tmpdir)
+        target = os.path.join(tmpdir, "sample.py")
+        with open(target, "w", encoding="utf-8") as f:
+            f.write("nothing to do\n")
+
+        def stuck(content, path):
+            return content  # anchor missing in a rewrite patch
+
+        with self.assertRaisesRegex(RuntimeError, "injection point"):
+            apply_patches.update_file(target, "stuck rewrite", stuck)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

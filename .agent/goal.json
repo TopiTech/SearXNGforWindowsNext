@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "goal-20260908-code-review",
+  "status": "completed",
+  "objective": "Full code review of the SearXNG for Windows fork; fix significant correctness, security, maintainability, and config-integration issues with regression tests, and run the project's own verification suite.",
+  "completion_criteria": [
+    "All tracked project files (tools/, config templates, workflows, docs) reviewed",
+    "Identified critical/high issues fixed or explicitly reported as unresolved with rationale",
+    "Regression tests added for fixes where feasible",
+    "tools/test_patches.py passes",
+    "Patch application verified idempotent against the live embedded searx tree (python -m py_compile on patched files)",
+    "Final report covers scope, findings by severity, changes, compatibility, test results, unresolved items"
+  ],
+  "constraints": [
+    "No destructive git operations; leave untracked/modified user files untouched",
+    "Keep upstream-sync compatibility (patches must stay idempotent)",
+    "Do not commit unless asked"
+  ],
+  "non_goals": [
+    "Redesigning the patch system wholesale",
+    "Deploying or publishing anything",
+    "UI redesign beyond accessibility/correctness of templates patched by this repo"
+  ],
+  "verification": [
+    "python tools/test_patches.py -> 83 tests OK",
+    "ast.parse on all patched searx files -> OK",
+    "apply-patches.py run twice -> 17/17 ALREADY_APPLIED",
+    "live Flask test client: /scrape SSRF matrix, /search json_lite, / preferences /stats -> OK",
+    "end-to-end Retry-After: 429 + Retry-After:45 -> suspend 45s (was 600s)"
+  ],
+  "budget": {
+    "max_iterations": 20,
+    "max_elapsed_minutes": null
+  },
+  "progress": {
+    "iteration": 6,
+    "completed": [
+      "baseline",
+      "audit",
+      "fixes (patch 11 upgrade, patch 11b response attach, update_file noop handling)",
+      "regression tests (7 new)",
+      "verification"
+    ],
+    "remaining": [],
+    "last_action": "Final verification: unit tests, AST checks, idempotency, live endpoint probes",
+    "last_result": "All green"
+  },
+  "evidence": [
+    "tools/test_patches.py: Ran 83 tests - OK",
+    "apply-patches.py second run: 17x 'Already applied'",
+    "Flask test client: loopback/private/v6-loopback/file-scheme/hex/dec-IP SSRF probes all 400",
+    "raise_for_httperror: SearxEngineTooManyRequestsException carries .response; Retry-After honoured (45s)"
+  ],
+  "blockers": [],
+  "created_at": "2026-09-08T00:00:00Z",
+  "updated_at": "2026-09-08T00:00:00Z"
+}
