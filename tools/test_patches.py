@@ -33,6 +33,29 @@ ensure_secret_key = _load("ensure_secret_key", os.path.join(HERE, "ensure-secret
 disable_missing_engines = _load("disable_missing_engines", os.path.join(HERE, "disable-missing-engines.py"))
 
 
+class TestPatchRunner(unittest.TestCase):
+    def test_missing_required_target_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_path = os.path.join(tmpdir, "missing.py")
+            with self.assertRaisesRegex(RuntimeError, "Required patch target not found"):
+                apply_patches.update_file(
+                    missing_path,
+                    "required test target",
+                    lambda content, path: content,
+                )
+
+    def test_missing_optional_target_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_path = os.path.join(tmpdir, "missing.yml")
+            result = apply_patches.update_file(
+                missing_path,
+                "optional test target",
+                lambda content, path: content,
+                required=False,
+            )
+        self.assertEqual(result, "SKIPPED")
+
+
 class TestEnsureSecretKey(unittest.TestCase):
     """Tests for the per-install secret_key provider.
 
@@ -155,7 +178,7 @@ class TestEnsureSecretKey(unittest.TestCase):
         self.assertTrue(os.path.exists(secret_path))
 
     def test_main_rotates_short_existing_key(self):
-        # A key shorter than MIN_KEY_LEN is treated as invalid and replaced.
+        # A key that is too short is treated as invalid and replaced.
         secret_path, settings_path, example_path = self._make_paths(
             with_key="short"
         )
@@ -171,6 +194,19 @@ class TestEnsureSecretKey(unittest.TestCase):
         self.assertNotEqual(new_key, "short")
         with open(secret_path, "r", encoding="utf-8") as f:
             self.assertEqual(f.read().strip(), new_key)
+
+    def test_main_rotates_unsafe_existing_key(self):
+        secret_path, settings_path, example_path = self._make_paths(
+            with_key=("a" * 64) + " & echo INJECTED"
+        )
+        with mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path), \
+             mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
+             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
+            with mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out:
+                rc = self.fn.main()
+        self.assertEqual(rc, 0)
+        key = out.getvalue().strip().split("=", 1)[1]
+        self.assertRegex(key, r"^[0-9a-f]{64}$")
 
     def test_main_does_not_touch_settings_yml(self):
         # Regression: the old design wrote to config/settings.yml, which is

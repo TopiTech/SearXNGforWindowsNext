@@ -23,6 +23,22 @@ function Initialize-Directory {
     }
 }
 
+function Assert-UpstreamRef {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        throw "Upstream ref must not be empty."
+    }
+    if ($Value -match '[\x00-\x1F\x7F]') {
+        throw "Upstream ref contains control characters."
+    }
+
+    & git check-ref-format --branch $Value 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Invalid upstream ref: $Value"
+    }
+}
+
 function Resolve-WorkspaceChildPath {
     param(
         [string]$Root,
@@ -105,6 +121,7 @@ function Invoke-GitAction {
 # === PRE-FLIGHT CHECKS ===
 Write-Host "Performing pre-flight checks..." -ForegroundColor Cyan
 @("git") | ForEach-Object { Assert-Command $_ }
+Assert-UpstreamRef -Value $Ref
 Write-Host "[OK] All required commands found" -ForegroundColor Green
 Write-Host ""
 
@@ -185,12 +202,15 @@ try {
             try {
                 if (Test-Path $pythonExe) {
                     & $pythonExe $disableScript $cfgPath $enginesDir
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Engine validation failed for $cfgPath with exit code $LASTEXITCODE"
+                    }
                 } else {
                     throw "Embedded Python not found at: $pythonExe"
                 }
             }
             catch {
-                Write-Host "[WARN] Could not validate $cfgPath : $_" -ForegroundColor Yellow
+                throw "Could not validate $cfgPath : $_"
             }
         }
     }

@@ -10,9 +10,11 @@ logger = logging.getLogger("apply-patches")
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SITE_PACKAGES = os.path.join(REPO_ROOT, "python", "Lib", "site-packages")
 
-def update_file(file_path, description, patch_func):
+def update_file(file_path, description, patch_func, *, required=True):
     if not os.path.exists(file_path):
-        logger.warning(f"File not found, skipping {description}: {file_path}")
+        if required:
+            raise RuntimeError(f"Required patch target not found for {description}: {file_path}")
+        logger.warning(f"Optional file not found, skipping {description}: {file_path}")
         return "SKIPPED"
 
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -936,7 +938,8 @@ def main():
     update_file(
         os.path.join(REPO_ROOT, "config", "settings.yml"),
         "config/settings.yml (reduce suspended_times)",
-        patch_config_settings_yml
+        patch_config_settings_yml,
+        required=False
     )
 
     logger.info("All patches processed.")

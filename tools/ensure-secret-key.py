@@ -35,6 +35,7 @@ never used at runtime.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import stat
 import sys
@@ -53,7 +54,7 @@ SECRET_KEY_PATH = os.path.join(CONFIG_DIR, "secret.key")
 # shell can `eval` if it wishes.
 KEY_LINE_PREFIX = "set SEARXNG_SECRET="
 
-MIN_KEY_LEN = 32
+_SAFE_KEY_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 def _read_key(path: str) -> str | None:
@@ -137,7 +138,7 @@ def main() -> int:
     _ensure_settings_file()
 
     existing = _read_key(SECRET_KEY_PATH)
-    if existing and len(existing) >= MIN_KEY_LEN:
+    if existing and _SAFE_KEY_RE.fullmatch(existing):
         key = existing
     else:
         key = _generate_key()
@@ -147,7 +148,7 @@ def main() -> int:
             print(f"[INFO] Generated secret_key in {SECRET_KEY_PATH}", file=sys.stderr)
         else:
             print(
-                f"[INFO] Replaced short/invalid secret_key in {SECRET_KEY_PATH}",
+                f"[INFO] Replaced invalid or unsafe secret_key in {SECRET_KEY_PATH}",
                 file=sys.stderr,
             )
 

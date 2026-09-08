@@ -50,10 +50,15 @@ jobs:
       - name: Resolve requested ref
         id: ref
         shell: pwsh
+        env:
+          INPUT_REF: ${{ github.event.inputs.ref }}
         run: |
-          $ref = "${{ github.event.inputs.ref }}"
+          $ref = $env:INPUT_REF
           if ([string]::IsNullOrWhiteSpace($ref)) {
             $ref = "${{ env.DEFAULT_REF }}"
+          }
+          if ($ref -match '[\x00-\x1F\x7F]') {
+            throw "Requested ref contains control characters."
           }
           "requested_ref=$ref" >> $env:GITHUB_OUTPUT
 
@@ -61,8 +66,10 @@ jobs:
         id: sync
         continue-on-error: true
         shell: pwsh
+        env:
+          REQUESTED_REF: ${{ steps.ref.outputs.requested_ref }}
         run: |
-         .\tools\sync-upstream.ps1 -Ref "${{ steps.ref.outputs.requested_ref }}" -CleanTemp
+         .\tools\sync-upstream.ps1 -Ref $env:REQUESTED_REF -CleanTemp
 
       - name: Handle sync failure
         if: steps.sync.outcome == 'failure'

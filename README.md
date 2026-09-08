@@ -118,9 +118,12 @@ class Tools:
         :param query: 検索キーワード
         """
         # このフォーク専用の json_lite フォーマットを指定
-        url = f"http://localhost:8888/search?q={query}&format=json_lite"
         try:
-            response = requests.get(url, timeout=10)
+            response = requests.get(
+                "http://localhost:8888/search",
+                params={"q": query, "format": "json_lite"},
+                timeout=10,
+            )
             response.raise_for_status()
             response.json()  # Validate JSON format
             return response.text
@@ -140,9 +143,12 @@ class Tools:
         :param url: 取得したいウェブページのURL
         """
         # 今回実装した scrape エンドポイントを使用
-        scrape_api_url = f"http://localhost:8888/scrape?url={url}"
         try:
-            response = requests.get(scrape_api_url, timeout=15)
+            response = requests.get(
+                "http://localhost:8888/scrape",
+                params={"url": url},
+                timeout=15,
+            )
             response.raise_for_status()
             data = response.json()
             content = data.get("content", "本文の抽出に失敗しました。")
@@ -237,34 +243,28 @@ GitHub Actions（`.github/workflows/upstream-sync.yml`）により、本家の�
 
 ## 🔒 過去の漏えい secret_key の履歴パージ（任意・破壊的操作）
 
-git の履歴には、本機能追加より前のローテーションでコミットされた実 secret_key 値が複数含まれています（`654eba279a…`, `4d7e7376…`, `c131e23e…`, `7daba020…`, `cbe7de3a…`, `190c2fa5…`, `5634bc6d…`, `abd85945…` など）。**これらは既にリポジトリを clone できる全員に見えており**、本変更は将来のコミットに実 key が入らないようにするものに過ぎません。過去の履歴を完全に消すには **force-push を伴う破壊的な履歴書き換え**が必要で、協調的な作業が要求されます。
+このリポジトリの到達可能な履歴には、過去にコミットされた実 secret_key が含まれます。現在の起動処理は新しいキーを追跡対象外へ保存しますが、過去の履歴から既知のキーを完全に消すには、管理者による履歴書き換えと全利用者へのキー失効・再発行が必要です。
 
 実施する場合の手順（管理者向け）:
 
 ```bash
-# 1. メンテナのフレッシュな clone で実行する（filter-repo は fresh clone を要求する）
+# 1. メンテナのフレッシュな clone で実行する
 git clone <this-repo> searxng-purge
 cd searxng-purge
-git fetch --tags --unshallow   # 必要なら
 
-# 2. 置換ファイル（scratch/replacements.txt と同じ内容）
-cat > /tmp/replacements.txt <<'EOF'
-9f2e5f8b6f1c4a8da1e4e9d5f0b2c7a49b1f9e2d3c4a5b6d7e8f9a0b1c2d3e4==>REDACTED-LEAKED-SECRET-KEY
-654eba279ae3354410f8c36f11535af7b1d6f893482cccad86268bdd50a047c1==>REDACTED-LEAKED-SECRET-KEY
-4d7e7376e13c5de05bd915d4e270928abf72686db55a58b27ae3d5c14cf387d4==>REDACTED-LEAKED-SECRET-KEY
-c131e23ee31e69e1f16c712e6e1b3e1a7b20b976bf75f10d2a45da807201ba70==>REDACTED-LEAKED-SECRET-KEY
-7daba0202efb9448f5bcd68e7e4897d046346b1cdcf2804a72cd60039944442e==>REDACTED-LEAKED-SECRET-KEY
-5634bc6dbe3b4ea589c6895333e911a15e1e089031ba6080008fdc5b548fae95==>REDACTED-LEAKED-SECRET-KEY
-190c2fa54e6ae2ab4fea0f2eb21365321b658f3029f1fb40de754a40d9f5da62==>REDACTED-LEAKED-SECRET-KEY
-cbe7de3a7f6a7572353f0e492466d739c517ce6d516c369bd893605cae8da17b==>REDACTED-LEAKED-SECRET-KEY
-abd85945bf0253faba5a3594c83236bdf73270d838ffa1e5a3a174d665fccb4d==>REDACTED-LEAKED-SECRET-KEY
-EOF
+# 2. リポジトリ外の安全な場所に置いたインシデント記録から、
+#    OLD_SECRET==>REDACTED-LEAKED-SECRET-KEY 形式の置換ファイルを作る。
+#    実際の値はこの文書やリポジトリへ貼り付けない。
 
 # 3. 履歴を書き換える
-git-filter-repo --force --replace-text /tmp/replacements.txt
+git-filter-repo --force --replace-text /path/to/private/replacements.txt
 
-# 4. 検証: 上記の key 値がコミット中に残っていないこと
-git log -p -- config/settings.yml | grep -E "secret_key:" | grep -vE "REDACTED|ultrasecretkey|CHANGE_ME" || echo "OK: no leaked keys in history"
+# 4. 非プレースホルダの secret_key が履歴に残っていないことを、値を表示せず確認する
+if git log -p -- config/settings.yml | grep -E "^[+-][[:space:]]*secret_key:" | grep -qvE "REDACTED|ultrasecretkey|CHANGE_ME"; then
+  echo "ERROR: non-placeholder secret_key remains in history"
+else
+  echo "OK: no leaked keys in history"
+fi
 
 # 5. 強制 push（リポジトリの全 clone に対して周知が必要）
 git remote add origin <this-repo>
