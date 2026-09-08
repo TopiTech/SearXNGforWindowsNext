@@ -192,6 +192,12 @@ try {
     Write-Host "Validating engine modules referenced in configuration files..." -ForegroundColor Green
     $enginesDir = Join-Path $sitePackages "searx\engines"
     $pythonExe = Join-Path $repoRoot "python\python.exe"
+    if (-not (Test-Path $pythonExe)) {
+        $cmd = Get-Command "python" -ErrorAction SilentlyContinue
+        if ($cmd) {
+            $pythonExe = $cmd.Source
+        }
+    }
     $disableScript = Join-Path $repoRoot "tools\disable-missing-engines.py"
     $targetSettingsFiles = @(
         (Join-Path $repoRoot "config\settings.yml.example"),
@@ -206,7 +212,7 @@ try {
                         throw "Engine validation failed for $cfgPath with exit code $LASTEXITCODE"
                     }
                 } else {
-                    throw "Embedded Python not found at: $pythonExe"
+                    throw "Python executable not found at: $pythonExe"
                 }
             }
             catch {

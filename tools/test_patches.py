@@ -786,6 +786,98 @@ class TestDisableMissingEngines(unittest.TestCase):
             res = self.mod.disable_engine_in_text(sample, "e")
             self.assertEqual(res, sample, f"inactive: {val!r} should be a no-op")
 
+    def test_fallback_parser_basic(self):
+        sample = (
+            "engines:\n"
+            "  - name: google\n"
+            "    engine: google\n"
+            "    shortcut: go\n"
+            "  - name: duckduckgo\n"
+            "    disabled: false\n"
+            "  - name: removed\n"
+            "    engine: removed_mod\n"
+            "    inactive: true\n"
+        )
+        engines = self.mod.parse_engines_fallback(sample)
+        self.assertEqual(len(engines), 3)
+        self.assertEqual(engines[0]["name"], "google")
+        self.assertEqual(engines[0]["engine"], "google")
+        self.assertNotIn("inactive", engines[0])
+        self.assertEqual(engines[1]["name"], "duckduckgo")
+        self.assertEqual(engines[1]["engine"], "duckduckgo")
+        self.assertEqual(engines[2]["name"], "removed")
+        self.assertEqual(engines[2]["engine"], "removed_mod")
+        self.assertTrue(engines[2]["inactive"])
+
+    def test_fallback_parser_quotes_and_comments(self):
+        sample = (
+            "# Top comment\n"
+            "engines:\n"
+            "  # First engine\n"
+            "  - name: 'bing images'  # inline comment\n"
+            "    engine: \"bing_images\"\n"
+            "  - name: \"complex-engine\"\n"
+            "    engine: complex_engine\n"
+            "    inactive: yes  # comment\n"
+            "other_section:\n"
+            "  - not_an_engine\n"
+        )
+        engines = self.mod.parse_engines_fallback(sample)
+        self.assertEqual(len(engines), 2)
+        self.assertEqual(engines[0]["name"], "bing images")
+        self.assertEqual(engines[0]["engine"], "bing_images")
+        self.assertEqual(engines[1]["name"], "complex-engine")
+        self.assertEqual(engines[1]["engine"], "complex_engine")
+        self.assertTrue(engines[1]["inactive"])
+
+    def test_extract_engines_and_disable_without_yaml(self):
+        sample = (
+            "engines:\n"
+            "  - name: google\n"
+            "    engine: google\n"
+            "  - name: \"missing-engine\"\n"
+            "    engine: missing_engine\n"
+        )
+        with mock.patch.object(self.mod, "yaml", None):
+            # 1. extract_engines works without PyYAML
+            engines = self.mod.extract_engines(sample)
+            self.assertEqual(len(engines), 2)
+            self.assertEqual(engines[1]["name"], "missing-engine")
+
+            # 2. disable_engine_in_text works without PyYAML
+            res = self.mod.disable_engine_in_text(sample, "missing-engine")
+            self.assertIn("inactive: true", res)
+            self.assertIn("name: \"missing-engine\"", res)
+
+    def test_main_execution_without_yaml(self):
+        settings_file = os.path.join(self._tmpdir, "settings.yml")
+        engines_dir = os.path.join(self._tmpdir, "engines")
+        os.makedirs(engines_dir, exist_ok=True)
+
+        # Create one existing engine module and one missing engine
+        with open(os.path.join(engines_dir, "google.py"), "w") as f:
+            f.write("# google engine\n")
+
+        with open(settings_file, "w", encoding="utf-8") as f:
+            f.write(
+                "engines:\n"
+                "  - name: google\n"
+                "    engine: google\n"
+                "  - name: removed\n"
+                "    engine: removed\n"
+            )
+
+        with mock.patch.object(self.mod, "yaml", None):
+            with mock.patch.object(sys, "argv", ["disable-missing-engines.py", settings_file, engines_dir]):
+                self.mod.main()
+
+        with open(settings_file, "r", encoding="utf-8") as f:
+            updated = f.read()
+
+        self.assertIn("inactive: true", updated)
+        self.assertIn("- name: removed\n    engine: removed\n    inactive: true", updated)
+        self.assertNotIn("inactive: true\n  - name: google", updated)
+
 
 class TestPatchSettingsYmlEdgeCases(unittest.TestCase):
     """Additional settings.yml reduction coverage."""
