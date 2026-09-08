@@ -13,11 +13,31 @@ Push-Location $repoRoot
 $serverProcess = $null
 $testExitCode = 0
 
+function Stop-PortListeners {
+    param([int]$Port = 8888)
+    try {
+        $conns = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+        if ($conns) {
+            $pids = $conns.OwningProcess | Select-Object -Unique
+            foreach ($p in $pids) {
+                if ($p -gt 0) {
+                    Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    } catch {
+        # Fallback if Get-NetTCPConnection fails
+    }
+}
+
 try {
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "SearXNG Test Runner: Initializing Setup" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
+
+    # Ensure port 8888 is not held by a previous stale test run
+    Stop-PortListeners -Port 8888
 
     # 1. Install dependencies
     if ($SkipInstall) {
@@ -51,6 +71,13 @@ try {
         throw "tools\ensure-secret-key.py did not emit a SEARXNG_SECRET line. Got: $secretKeyLine"
     }
     $env:SEARXNG_SECRET = $Matches[1]
+
+    # 3.5 Ensure all patches are applied
+    Write-Host "  -> Applying Windows compatibility and feature patches..." -ForegroundColor Green
+    & ".\python\python.exe" "tools\apply-patches.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to apply patches via apply-patches.py"
+    }
 
     # 4. Run Unit Tests (patch idempotency, engine disabling, secret key generation)
     Write-Host "[4/6] Running unit tests..." -ForegroundColor Green
@@ -146,6 +173,8 @@ finally {
             Write-Host "  [WARN] Failed to stop background server: $_" -ForegroundColor Yellow
         }
     }
+    # Ensure any lingering listeners on 8888 are terminated
+    Stop-PortListeners -Port 8888
     Pop-Location
     
     # Exit with the test exit code

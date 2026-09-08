@@ -116,22 +116,11 @@ def disable_engine_in_text(yaml_content, engine_name):
     # entries became one giant block and the first ``disabled`` field could be
     # changed instead of the missing engine's field.
     lines = yaml_content.splitlines(keepends=True)
-    item_pattern = re.compile(r"^(?P<indent>[ \t]*)-\s+name:\s*(?P<name>.*?)(?:\r?\n)?$")
+    item_pattern = re.compile(r"^(?P<indent>[ \t]*)-\s+(?:name:\s*(?P<name>[^\r\n]*)|(?P<other>[^\r\n]*))(?:\r?\n)?$")
 
     for start, line in enumerate(lines):
         item_match = item_pattern.match(line)
         if not item_match:
-            continue
-
-        parsed_name = None
-        if yaml is not None:
-            try:
-                parsed_name = yaml.safe_load(item_match.group('name').strip())
-            except Exception:
-                pass
-        if parsed_name is None:
-            parsed_name = _unquote(item_match.group('name'))
-        if parsed_name != engine_name:
             continue
 
         item_indent = item_match.group('indent')
@@ -145,6 +134,27 @@ def disable_engine_in_text(yaml_content, engine_name):
                 if len(candidate_indent) <= len(item_indent):
                     break
             end += 1
+
+        raw_name = item_match.group('name')
+        if raw_name is None:
+            # Look for a nested `name:` within this list item block
+            name_m = re.search(r'(?m)^[ \t]+name:\s*([^\r\n#]*)', ''.join(lines[start:end]))
+            if name_m:
+                raw_name = name_m.group(1).strip()
+
+        if not raw_name:
+            continue
+
+        parsed_name = None
+        if yaml is not None:
+            try:
+                parsed_name = yaml.safe_load(raw_name.strip())
+            except Exception:
+                pass
+        if parsed_name is None:
+            parsed_name = _unquote(raw_name.strip())
+        if parsed_name != engine_name:
+            continue
 
         block = ''.join(lines[start:end])
         block_lines = block.splitlines(keepends=True)
@@ -218,7 +228,8 @@ def main():
         # Skip template or complex dynamic engines
         if engine_mod and re.match(r'^[a-z0-9_-]+$', engine_mod):
             mod_file = os.path.join(engines_dir, f"{engine_mod}.py")
-            if not os.path.exists(mod_file):
+            pkg_init = os.path.join(engines_dir, engine_mod, "__init__.py")
+            if not os.path.exists(mod_file) and not os.path.exists(pkg_init):
                 # If a module is missing, it must be removed rather than merely
                 # disabled: disabled engines are intentionally still loadable.
                 if not engine_entry.get('inactive'):

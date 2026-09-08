@@ -118,6 +118,7 @@ def _ensure_settings_file() -> None:
         )
         sys.exit(1)
     try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(SETTINGS_EXAMPLE_PATH, "r", encoding="utf-8") as src:
             content = src.read()
         with open(SETTINGS_PATH, "w", encoding="utf-8", newline="\n") as dst:
@@ -126,7 +127,6 @@ def _ensure_settings_file() -> None:
         print(f"[ERROR] Could not seed {SETTINGS_PATH}: {exc}", file=sys.stderr)
         sys.exit(1)
     print(f"[INFO] Seeded {SETTINGS_PATH} from settings.yml.example", file=sys.stderr)
-
 
 def _generate_key() -> str:
     # 32 bytes == 64 hex chars == 256 bits of entropy. SearXNG itself uses

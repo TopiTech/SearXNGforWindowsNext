@@ -300,6 +300,9 @@ def patch_webapp_scrape_route(content, path):
         "import idna",
         "trust_env=False",
         "class _ScrapeBlockedError",
+        "def _is_ip_blocked",
+        "def _is_reserved_scrape_host",
+        "ip_direct = ipaddress.ip_address(host_clean)",
     ]
     if all(anchor in content for anchor in required_anchors):
         return "ALREADY_APPLIED"
@@ -446,21 +449,54 @@ _RESERVED_TLDS = (
 )
 
 
-def _is_blocked_scrape_host(host):
-    host = (host or '').strip().rstrip('.').lower()
-    if not host or host == 'localhost' or any(host.endswith(tld) for tld in _RESERVED_TLDS):
+def _is_reserved_scrape_host(host):
+    h = (host or '').strip().rstrip('.').lower()
+    if not h or h == 'localhost':
         return True
-    if '%' in host:
-        host = host.split('%', 1)[0]
+    for tld in _RESERVED_TLDS:
+        bare = tld.lstrip('.')
+        if h == bare or h.endswith(tld):
+            return True
+    return False
+
+
+def _is_ip_blocked(ip):
+    if not isinstance(ip, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
+        try:
+            ip = ipaddress.ip_address(ip)
+        except ValueError:
+            return True
+    if (
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or not ip.is_global
+    ):
+        return True
+    mapped = getattr(ip, 'ipv4_mapped', None)
+    if mapped is not None:
+        return _is_ip_blocked(mapped)
+    return False
+
+
+def _is_blocked_scrape_host(host):
+    host_clean = (host or '').strip().rstrip('.').lower()
+    if _is_reserved_scrape_host(host_clean):
+        return True
+    if '%' in host_clean:
+        host_clean = host_clean.split('%', 1)[0]
     try:
-        ip = ipaddress.ip_address(host)
-        return not ip.is_global
+        ip = ipaddress.ip_address(host_clean)
+        return _is_ip_blocked(ip)
     except ValueError:
         pass
 
     try:
-        for res in socket.getaddrinfo(host, None):
-            if not ipaddress.ip_address(res[4][0]).is_global:
+        for res in socket.getaddrinfo(host_clean, None):
+            if _is_ip_blocked(res[4][0]):
                 return True
     except (socket.gaierror, ValueError):
         pass
@@ -535,7 +571,7 @@ def scrape():
                 raise _ScrapeBlockedError('Empty hostname')
 
             host_clean = host.strip().rstrip('.').lower()
-            if host_clean == 'localhost' or any(host_clean.endswith(tld) for tld in _RESERVED_TLDS):
+            if _is_reserved_scrape_host(host_clean):
                 raise _ScrapeBlockedError(f'Blocked: {host} is a private/reserved host')
 
             if '%' in host_clean:
@@ -543,7 +579,7 @@ def scrape():
 
             try:
                 ip_direct = ipaddress.ip_address(host_clean)
-                if not ip_direct.is_global:
+                if _is_ip_blocked(ip_direct):
                     raise _ScrapeBlockedError(f'Blocked: {host} is a private/reserved IP')
             except ValueError:
                 pass
@@ -556,8 +592,7 @@ def scrape():
                 valid_ips = []
                 for res in addr_info:
                     ip_raw = res[4][0]
-                    ip_obj = ipaddress.ip_address(ip_raw)
-                    if not ip_obj.is_global:
+                    if _is_ip_blocked(ip_raw):
                         raise _ScrapeBlockedError(f'Blocked: {host} resolves to a private/reserved IP: {ip_raw}')
                     valid_ips.append(ip_raw)
                 if not valid_ips:

@@ -491,6 +491,9 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "import idna\n"
             "trust_env=False\n"
             "class _ScrapeBlockedError\n"
+            "def _is_ip_blocked\n"
+            "def _is_reserved_scrape_host\n"
+            "ip_direct = ipaddress.ip_address(host_clean)\n"
         )
         self.assertEqual(self.fn(content, "webapp.py"), "ALREADY_APPLIED")
 
@@ -513,6 +516,8 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("def _parse_scrape_url", res)
         self.assertIn("def _read_scrape_response", res)
         self.assertIn("_SCRAPE_MAX_RESPONSE_BYTES", res)
+        self.assertIn("def _is_ip_blocked", res)
+        self.assertIn("def _is_reserved_scrape_host", res)
         # R2 regression: type validation
         self.assertIn("isinstance(url, str)", res)
         # R3 regression: idna normalization in _safe_getaddrinfo (module-level import)
@@ -882,6 +887,45 @@ class TestDisableMissingEngines(unittest.TestCase):
         self.assertIn("- name: removed\n    engine: removed\n    inactive: true", updated)
         self.assertNotIn("inactive: true\n  - name: google", updated)
 
+    def test_package_engine_not_disabled(self):
+        # Engines structured as packages (engines/<name>/__init__.py) must be recognized as present.
+        settings_file = os.path.join(self._tmpdir, "settings.yml")
+        engines_dir = os.path.join(self._tmpdir, "engines")
+        pkg_engine_dir = os.path.join(engines_dir, "pkg_engine")
+        os.makedirs(pkg_engine_dir, exist_ok=True)
+        with open(os.path.join(pkg_engine_dir, "__init__.py"), "w") as f:
+            f.write("# package engine\n")
+
+        with open(settings_file, "w", encoding="utf-8") as f:
+            f.write(
+                "engines:\n"
+                "  - name: pkg_engine\n"
+                "    engine: pkg_engine\n"
+            )
+
+        with mock.patch.object(self.mod, "yaml", None):
+            with mock.patch.object(sys, "argv", ["disable-missing-engines.py", settings_file, engines_dir]):
+                with self.assertRaises(SystemExit) as cm:
+                    self.mod.main()
+                self.assertEqual(cm.exception.code, 0)
+
+        with open(settings_file, "r", encoding="utf-8") as f:
+            updated = f.read()
+
+        self.assertNotIn("inactive: true", updated)
+
+    def test_engine_with_engine_key_first(self):
+        # Engine entries where `engine:` or another key precedes `name:` must still be parsed and inactivated properly.
+        sample = (
+            "engines:\n"
+            "  - engine: removed_mod\n"
+            "    name: removed_engine\n"
+            "    categories: general\n"
+        )
+        res = self.mod.disable_engine_in_text(sample, "removed_engine")
+        self.assertIn("inactive: true", res)
+        self.assertIn("categories: general", res)
+
 
 class TestPatchSettingsYmlEdgeCases(unittest.TestCase):
     """Additional settings.yml reduction coverage."""
@@ -1101,20 +1145,82 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
         self.assertIn('192.168.1.1', msg)
 
     def test_reserved_tlds_blocking_logic(self):
-        # R4 verification: Reserved TLDs must be blocked statically
+        # R4 verification: Reserved TLDs and bare names must be blocked statically
         reserved_tlds = (
             '.localhost', '.local', '.internal', '.lan', '.home.arpa',
             '.invalid', '.test', '.example', '.onion', '.corp', '.home',
         )
         def is_blocked(host):
             h = (host or '').strip().rstrip('.').lower()
-            return not h or h == 'localhost' or any(h.endswith(tld) for tld in reserved_tlds)
+            if not h or h == 'localhost':
+                return True
+            for tld in reserved_tlds:
+                bare = tld.lstrip('.')
+                if h == bare or h.endswith(tld):
+                    return True
+            return False
 
-        for blocked in ['router.local', 'myhost.internal', 'gateway.lan', 'device.home.arpa', 'dark.onion', 'localhost']:
+        for blocked in ['router.local', 'myhost.internal', 'gateway.lan', 'device.home.arpa', 'dark.onion', 'localhost', 'local', 'internal', 'lan', 'corp', 'home']:
             self.assertTrue(is_blocked(blocked), f"{blocked} should be blocked")
 
         for allowed in ['example.com', 'searxng.org', 'google.com', 'wikipedia.org']:
             self.assertFalse(is_blocked(allowed), f"{allowed} should not be blocked")
+
+    def test_multicast_and_mapped_ipv6_blocking_logic(self):
+        # R5 verification: Multicast addresses (which have is_global==True in Python 3.11)
+        # and IPv4-mapped IPv6 addresses must be strictly blocked.
+        import ipaddress
+
+        def is_ip_blocked(ip):
+            if not isinstance(ip, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
+                try:
+                    ip = ipaddress.ip_address(ip)
+                except ValueError:
+                    return True
+            if (
+                ip.is_loopback
+                or ip.is_private
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_reserved
+                or ip.is_unspecified
+                or not ip.is_global
+            ):
+                return True
+            mapped = getattr(ip, 'ipv4_mapped', None)
+            if mapped is not None:
+                return is_ip_blocked(mapped)
+            return False
+
+        # Blocked addresses
+        blocked_ips = [
+            '127.0.0.1',
+            '192.168.1.1',
+            '10.0.0.1',
+            '172.16.0.1',
+            '169.254.1.1',
+            '224.0.0.1',          # Multicast IPv4
+            '239.255.255.250',    # SSDP multicast
+            'ff02::1',            # Multicast IPv6
+            '::1',                # IPv6 loopback
+            'fe80::1',            # IPv6 link-local
+            '::',                 # IPv6 unspecified
+            '0.0.0.0',            # IPv4 unspecified
+            '::ffff:127.0.0.1',   # Mapped loopback
+            '::ffff:192.168.1.1', # Mapped private
+            '::ffff:224.0.0.1',   # Mapped multicast
+        ]
+        for ip_str in blocked_ips:
+            self.assertTrue(is_ip_blocked(ip_str), f"{ip_str} should be blocked")
+
+        # Allowed public unicast addresses
+        allowed_ips = [
+            '93.184.216.34',       # example.com
+            '8.8.8.8',             # Google DNS
+            '2606:2800:220:1:248:1893:25c8:1946', # IPv6 example.com
+        ]
+        for ip_str in allowed_ips:
+            self.assertFalse(is_ip_blocked(ip_str), f"{ip_str} should be allowed")
 
     def test_html_unescape_in_scrape_fallback(self):
         # R4 verification: Fallback extraction unescapes HTML entities for GenAI readability
