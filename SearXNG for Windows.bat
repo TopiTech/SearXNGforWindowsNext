@@ -51,6 +51,15 @@ if errorlevel 1 (
   exit /b 1
 )
 
+REM === Verify and apply Windows compatibility patches ===
+echo Verifying Windows compatibility patches...
+".\python\python.exe" "tools\apply-patches.py"
+if errorlevel 1 (
+  echo [ERROR] Failed to apply Windows compatibility patches.
+  pause
+  exit /b 1
+)
+
 REM === Start server ===
 echo.
 echo [INFO] Starting SearXNG for Windows...

@@ -56,7 +56,7 @@ workspace/
 
 This project **stays synchronized with upstream SearXNG** while maintaining Windows compatibility via **idempotent patches**. Patches are applied after every upstream sync and are safe to run multiple times.
 
-### Patch Targets (14 Patch Steps across 14 Target Files)
+### Patch Targets (15 Patch Steps across 15 Target Files)
 
 | # | File | Patch | Purpose |
 |---|------|-------|---------|
@@ -65,14 +65,15 @@ This project **stays synchronized with upstream SearXNG** while maintaining Wind
 | 3 | `webutils.py` | `get_json_lite_response()` function | Lightweight GenAI-friendly responses |
 | 3b | `webutils.py` | Normalize Windows paths for URL lookups | Static assets and result templates |
 | 3c | `templates/simple/{search,simple_search}.html` | Localized accessible name for search input | Keyboard/screen-reader usability |
-| 4 | `webapp.py` (pt 1) | `json_lite` handler + `ipaddress` import | Route handler + SSRF libs |
-| 5 | `webapp.py` (pt 2) | `/scrape` endpoint (SSRF-protected) | Content extraction API |
+| 4 | `webapp.py` (pt 1) | `json_lite` handler + `WindowsSelectorEventLoopPolicy` | Route handler, SSRF libs, curl_cffi compatibility |
+| 5 | `webapp.py` (pt 2) | `/scrape` endpoint (SSRF-protected, streaming timeout) | Content extraction API (blocks 6to4/Teredo, slowloris defense) |
 | 6 | `engines/__init__.py` | Remove legacy `disabled` short-circuit | Preserve SearXNG preference semantics |
 | 7 | `search/processors/__init__.py` | Remove legacy `disabled` processor skip | Allow manual activation from Preferences |
 | 8 | `engines/google.py` | CAPTCHA false-positive fix | Reduce spurious suspensions |
 | 9 | `engines/sogou.py` | Robust CAPTCHA detection | Reduce spurious suspensions |
 | 10 | `search/processors/abstract.py` | Remove legacy global suspension cap | Honor `search.suspended_times` |
 | 11 | `search/processors/online.py` | Retry-After + CAPTCHA logging | Respect retry hints |
+| 11b | `exceptions.py` | Attach HTTP response to `SearxEngineCaptchaException` | Preserve headers (e.g. Retry-After) for CAPTCHA handling |
 | 12 | `settings.yml` + `config/settings.yml` | Reduce suspended_times defaults | Auto-recovery on single-user instance |
 
 ### Patch Execution Flow
@@ -84,20 +85,21 @@ sync-upstream.ps1
   ├─ Sync searx/ and searxng_extra/ packages
   ├─ Copy requirements.txt, setup.py, LICENSE
   ├─ Update UPSTREAM_VERSION.txt (metadata)
-  └─ apply-windows-patches.ps1 (14 patch steps, idempotent)
+  └─ apply-patches.py (15 patch steps, idempotent)
        ├─ Patch 1: valkeydb.py ✓
        ├─ Patch 2: settings_defaults.py ✓
        ├─ Patch 3: webutils.py ✓
        ├─ Patch 3b: webutils.py (Windows path normalization) ✓
        ├─ Patch 3c: simple search templates (accessible input name) ✓
-       ├─ Patch 4a: webapp.py (json_lite handler) ✓
-       ├─ Patch 4b: webapp.py (/scrape route) ✓
+       ├─ Patch 4a: webapp.py (json_lite handler + WindowsSelectorEventLoopPolicy) ✓
+       ├─ Patch 4b: webapp.py (/scrape route + 6to4/Teredo SSRF guard + slowloris timeout) ✓
        ├─ Patch 6: engines/__init__.py ✓
        ├─ Patch 7: search/processors/__init__.py ✓
        ├─ Patch 8: engines/google.py ✓
        ├─ Patch 9: engines/sogou.py ✓
        ├─ Patch 10: search/processors/abstract.py ✓
        ├─ Patch 11: search/processors/online.py ✓
+       ├─ Patch 11b: exceptions.py ✓
        └─ Patch 12: settings.yml + config/settings.yml ✓
 ```
 
@@ -188,21 +190,17 @@ GET/POST /search?q=query&format=json_lite
 **Solution:** `POST/GET /scrape?url=<url>` with SSRF protection + content extraction.
 
 **SSRF Protection (Security-Critical):**
-- Blocks loopback (127.x.x.x)
-- Blocks private ranges (10.x, 172.16.x, 192.168.x, fc00::/7)
-- Blocks link-local (169.254.x, fe80::/10)
-- Blocks `file://` scheme
-- Returns HTTP 400 for blocked URLs
-
-**Implementation:**
-```python
-try:
-    ip = ipaddress.ip_address(host)
-    if ip.is_loopback or ip.is_private or ip.is_link_local:
-        return jsonify({'error': 'Blocked: private/reserved IP'}), 400
-except ValueError:
-    pass  # hostname, not IP — continue
-```
+- Blocks loopback (`127.0.0.0/8`, `::1`)
+- Blocks private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`)
+- Blocks link-local (`169.254.0.0/16`, `fe80::/10`)
+- Blocks multicast and reserved IP spaces (`224.0.0.0/4`, `ff00::/8`)
+- Blocks IPv4-mapped IPv6 (`::ffff:127.0.0.1`) and IPv4-compatible IPv6 (`::127.0.0.1`)
+- Blocks 6to4 tunneling (`2002::/16`) and Teredo tunneling (`2001:0000::/32`) embedding blocked IPs
+- Blocks non-HTTP(S) schemes (`file://`, `gopher://`, `ftp://`, `data:`, `javascript:`)
+- Blocks internal/reserved TLDs (`.local`, `.internal`, `.localhost`, `.arpa`, `.lan`, etc.)
+- Enforces DNS pinning to prevent DNS rebinding attacks (TOCTOU)
+- Stream deadline (`SEARXNG_SCRAPE_MAX_DURATION`) to defeat slowloris attacks
+- Returns HTTP 400 for blocked or invalid URLs
 
 ---
 

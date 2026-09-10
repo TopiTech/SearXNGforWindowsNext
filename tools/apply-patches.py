@@ -1,7 +1,6 @@
+import logging
 import os
 import re
-import sys
-import logging
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger("apply-patches")
@@ -58,7 +57,7 @@ def patch_valkeydb(content, path):
     content = re.sub(
         r'^import pwd$',
         "try:\n    import pwd  # Unix only\nexcept ImportError:\n    pwd = None",
-        content, flags=re.M
+        content, flags=re.MULTILINE
     )
 
     # 2. Inject Windows fallback function after logger (PEP 8: 2 blank lines)
@@ -85,7 +84,7 @@ def _windows_safe_current_user():
     if 'def _windows_safe_current_user():' in content:
         content = re.sub(
             r'\n{1,3}def _windows_safe_current_user\(\):.*?return username, -1',
-            helper.rstrip(), content, flags=re.S
+            helper.rstrip(), content, flags=re.DOTALL
         )
     else:
         content = re.sub(
@@ -97,14 +96,14 @@ def _windows_safe_current_user():
     content = re.sub(
         r'^(\s{1,8})_pw = pwd\.getpwuid\(os\.getuid\(\)\)',
         r'\1_user_name, _user_uid = _windows_safe_current_user()',
-        content, flags=re.M
+        content, flags=re.MULTILINE
     )
 
     # 4. Update logger.exception call with new variables
     content = re.sub(
         r'^(\s{1,8})logger\.exception\(".*?can\'t connect valkey DB \.\.\..*?\)',
         r'\1logger.exception("[%s (%s)] can\'t connect valkey DB ...", _user_name, _user_uid)',
-        content, flags=re.M
+        content, flags=re.MULTILINE
     )
     return content
 
@@ -199,7 +198,7 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
     # Insert before get_themes while preserving a single blank-line boundary.
     # Match the line start optionally so the patch works whether get_themes is
     # the first definition in the module or follows other top-level code.
-    content, count = re.subn(
+    content, _ = re.subn(
         r'(^|\n)(def get_themes\b)',
         lite_func + r'\1\2',
         content,
@@ -247,12 +246,13 @@ def patch_simple_search_accessibility(content, path):
     return content.replace(search_input, accessible_search_input, 1)
 
 
-# --- Patch 4: webapp.py (json_lite handler + ipaddress import) ---
+# --- Patch 4: webapp.py (json_lite handler + ipaddress import + event loop policy) ---
 def patch_webapp_json_handler(content, path):
     checks = [
         "output_format in ('json', 'json_lite')" in content,
         "output_format == 'json_lite'" in content,
-        bool(re.search(r'^import ipaddress', content, re.M))
+        bool(re.search(r'^import ipaddress', content, re.MULTILINE)),
+        "WindowsSelectorEventLoopPolicy" in content,
     ]
     if all(checks):
         return "ALREADY_APPLIED"
@@ -262,19 +262,35 @@ def patch_webapp_json_handler(content, path):
         content, n = re.subn(
             r"(def index_error\b.*?\n\s*)if\s+output_format\s*==\s*['\"]json['\"]:",
             r"\1if output_format in ('json', 'json_lite'):",
-            content, flags=re.S
+            content, flags=re.DOTALL
         )
         if n == 0 and "output_format in ('json', 'json_lite')" not in content:
             logger.warning("Could not patch index_error for json_lite, anchor not found.")
 
     # 2. Add top-level `import ipaddress` (remove any indented duplicates first)
-    if not re.search(r'^import ipaddress', content, re.M):
-        content = re.sub(r'^\s+import ipaddress\n', '', content, flags=re.M)
+    if not re.search(r'^import ipaddress', content, re.MULTILINE):
+        content = re.sub(r'^\s+import ipaddress\n', '', content, flags=re.MULTILINE)
         content, count = re.subn(r'(import warnings\n)', r'\1import ipaddress\n', content)
         if count == 0:
             content, count = re.subn(r'(from flask import\b|import flask\b)', r'import ipaddress\n\1', content)
         if count == 0:
             raise RuntimeError(f"Patch failed for {path}: Could not find insertion point for 'import ipaddress'.")
+
+    # 2b. Add Windows selector event loop policy to avoid curl_cffi warning on Windows
+    if "WindowsSelectorEventLoopPolicy" not in content:
+        loop_policy = (
+            "\nif sys.platform == 'win32':\n"
+            "    import asyncio\n"
+            "    try:\n"
+            "        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())\n"
+            "    except Exception:\n"
+            "        pass\n"
+        )
+        content, count = re.subn(r'(import sys\n)', r'\1' + loop_policy, content, count=1)
+        if count == 0:
+            content, count = re.subn(r'(import os\n)', r'\1' + loop_policy, content, count=1)
+        if count == 0:
+            logger.warning("Could not inject WindowsSelectorEventLoopPolicy, anchor not found.")
 
     # 3. Inject json_lite handler before json handler (stable anchor point)
     if "output_format == 'json_lite'" not in content:
@@ -320,17 +336,20 @@ def patch_webapp_scrape_route(content, path):
         "import html",
         "import httpx",
         "import idna",
+        "import time",
         "trust_env=False",
         "class _ScrapeBlockedError",
         "def _is_ip_blocked",
         "def _is_reserved_scrape_host",
         "ip_direct = ipaddress.ip_address(host_clean)",
+        "s6to4 = getattr(ip, 'sixtofour', None)",
+        "max_duration=15.0",
     ]
     if all(anchor in content for anchor in required_anchors):
         return "ALREADY_APPLIED"
 
-    # 1. Add imports at module level (ensure re, html, httpx, and idna are present)
-    for mod in ('re', 'html', 'httpx', 'idna'):
+    # 1. Add imports at module level (ensure re, html, httpx, idna, and time are present)
+    for mod in ('re', 'html', 'httpx', 'idna', 'time'):
         if f'import {mod}' not in content:
             content, count = re.subn(r'(import warnings\n)', f'import {mod}\n' + r'\1', content, count=1)
             if count == 0:
@@ -376,14 +395,19 @@ class _ScrapeResponseTooLargeError(Exception):
 _SCRAPE_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
 
-def _read_scrape_response(response):
+def _read_scrape_response(response, max_duration=15.0):
     content_length = response.headers.get('content-length')
-    if content_length and content_length.isdigit() and int(content_length) > _SCRAPE_MAX_RESPONSE_BYTES:
-        raise _ScrapeResponseTooLargeError()
+    if content_length:
+        cl_str = content_length.strip()
+        if cl_str.isdigit() and int(cl_str) > _SCRAPE_MAX_RESPONSE_BYTES:
+            raise _ScrapeResponseTooLargeError()
 
+    start_time = time.monotonic()
     chunks = []
     total = 0
     for chunk in response.iter_bytes():
+        if time.monotonic() - start_time > max_duration:
+            raise httpx.TimeoutException('Response read stream timed out')
         total += len(chunk)
         if total > _SCRAPE_MAX_RESPONSE_BYTES:
             raise _ScrapeResponseTooLargeError()
@@ -411,8 +435,8 @@ def _safe_getaddrinfo(h, p, *args, **kwargs):
         pin_host = pin.get('host')
         host_matches = False
         if pin_host:
-            h_clean = (h or '').rstrip('.').lower()
-            pin_clean = pin_host.rstrip('.').lower()
+            h_clean = (h or '').strip('[]').rstrip('.').lower()
+            pin_clean = pin_host.strip('[]').rstrip('.').lower()
             if h_clean == pin_clean:
                 host_matches = True
             else:
@@ -499,8 +523,14 @@ def _is_ip_blocked(ip):
     ):
         return True
     mapped = getattr(ip, 'ipv4_mapped', None)
-    if mapped is not None:
-        return _is_ip_blocked(mapped)
+    if mapped is not None and _is_ip_blocked(mapped):
+        return True
+    s6to4 = getattr(ip, 'sixtofour', None)
+    if s6to4 is not None and _is_ip_blocked(s6to4):
+        return True
+    teredo = getattr(ip, 'teredo', None)
+    if teredo is not None and (_is_ip_blocked(teredo[0]) or _is_ip_blocked(teredo[1])):
+        return True
     return False
 
 
@@ -670,7 +700,7 @@ def scrape():
             raw_text = re.sub(r'(?s)<style.*?>.*?</style>', ' ', raw_text)
             raw_text = re.sub(r'<[^>]+>', ' ', raw_text)
             raw_text = html.unescape(raw_text)
-            raw_text = re.sub(r'\s+', ' ', raw_text).strip()
+            raw_text = re.sub(r'\\s+', ' ', raw_text).strip()
             if raw_text:
                 content_text = raw_text[:5000]
 
@@ -949,7 +979,7 @@ def _attach_response_to_raises(content: str) -> tuple[str, bool]:
     """
     pattern = re.compile(
         r"^(?P<indent>[ ]*)raise (?P<cls>SearxEngine(?:Captcha|AccessDenied|TooManyRequests)Exception)(?P<open>\()",
-        re.M,
+        re.MULTILINE,
     )
     out = []
     pos = 0

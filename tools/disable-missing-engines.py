@@ -1,6 +1,6 @@
-import sys
 import os
 import re
+import sys
 
 try:
     import yaml
@@ -98,7 +98,7 @@ def extract_engines(yaml_content):
             config = yaml.safe_load(yaml_content)
             if config and isinstance(config, dict) and 'engines' in config:
                 return config.get('engines') or []
-        except Exception:
+        except (yaml.YAMLError, ValueError, TypeError, AttributeError):
             pass
     return parse_engines_fallback(yaml_content)
 
@@ -149,7 +149,7 @@ def disable_engine_in_text(yaml_content, engine_name):
         if yaml is not None:
             try:
                 parsed_name = yaml.safe_load(raw_name.strip())
-            except Exception:
+            except (yaml.YAMLError, ValueError, TypeError, AttributeError):
                 pass
         if parsed_name is None:
             parsed_name = _unquote(raw_name.strip())
@@ -229,11 +229,14 @@ def main():
         if engine_mod and re.match(r'^[a-z0-9_-]+$', engine_mod):
             mod_file = os.path.join(engines_dir, f"{engine_mod}.py")
             pkg_init = os.path.join(engines_dir, engine_mod, "__init__.py")
-            if not os.path.exists(mod_file) and not os.path.exists(pkg_init):
+            if (
+                not os.path.exists(mod_file)
+                and not os.path.exists(pkg_init)
+                and not engine_entry.get('inactive')
+            ):
                 # If a module is missing, it must be removed rather than merely
                 # disabled: disabled engines are intentionally still loadable.
-                if not engine_entry.get('inactive'):
-                    missing_engines.append((name, engine_mod))
+                missing_engines.append((name, engine_mod))
 
     if not missing_engines:
         print("No missing engines detected.")

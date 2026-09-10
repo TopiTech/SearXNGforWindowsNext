@@ -40,7 +40,6 @@ import secrets
 import stat
 import sys
 
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, ".."))
 CONFIG_DIR = os.path.join(REPO_ROOT, "config")

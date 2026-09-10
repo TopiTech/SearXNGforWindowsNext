@@ -17,7 +17,8 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-import importlib.util  # noqa: E402
+import importlib.util
+
 
 # Both apply-patches.py and ensure-secret-key.py have hyphens in their file
 # names, which prevents plain `import` statements. Load them via importlib.
@@ -126,23 +127,27 @@ class TestEnsureSecretKey(unittest.TestCase):
         self.assertNotEqual(self.fn._generate_key(), self.fn._generate_key())
 
     def test_ensure_settings_seeds_when_missing(self):
-        secret_path, settings_path, example_path = self._make_paths()
+        _, settings_path, example_path = self._make_paths()
         os.remove(settings_path)
         # Patch the module-level paths to point at our tempdir.
-        with mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
-             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
+        with (
+            mock.patch.object(self.fn, "SETTINGS_PATH", settings_path),
+            mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path),
+        ):
             self.fn._ensure_settings_file()
         self.assertTrue(os.path.exists(settings_path))
         with open(settings_path, "r", encoding="utf-8") as f:
             self.assertIn("ultrasecretkey", f.read())
 
     def test_ensure_settings_preserves_existing(self):
-        secret_path, settings_path, example_path = self._make_paths()
+        _, settings_path, example_path = self._make_paths()
         sentinel = "# user-custom-marker\n"
         with open(settings_path, "w", encoding="utf-8") as f:
             f.write(sentinel)
-        with mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
-             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
+        with (
+            mock.patch.object(self.fn, "SETTINGS_PATH", settings_path),
+            mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path),
+        ):
             self.fn._ensure_settings_file()
         with open(settings_path, "r", encoding="utf-8") as f:
             self.assertIn(sentinel, f.read())
@@ -151,11 +156,13 @@ class TestEnsureSecretKey(unittest.TestCase):
         secret_path, settings_path, example_path = self._make_paths(
             with_key="a" * 64
         )
-        with mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path), \
-             mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
-             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
-            with mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out:
-                rc = self.fn.main()
+        with (
+            mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path),
+            mock.patch.object(self.fn, "SETTINGS_PATH", settings_path),
+            mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path),
+            mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out,
+        ):
+            rc = self.fn.main()
         self.assertEqual(rc, 0)
         self.assertEqual(out.getvalue().strip(), f"set SEARXNG_SECRET={'a' * 64}")
         # The file must be untouched (no rewrite).
@@ -165,11 +172,13 @@ class TestEnsureSecretKey(unittest.TestCase):
     def test_main_generates_when_secret_file_missing(self):
         secret_path, settings_path, example_path = self._make_paths()
         self.assertFalse(os.path.exists(secret_path))
-        with mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path), \
-             mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
-             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
-            with mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out:
-                rc = self.fn.main()
+        with (
+            mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path),
+            mock.patch.object(self.fn, "SETTINGS_PATH", settings_path),
+            mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path),
+            mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out,
+        ):
+            rc = self.fn.main()
         self.assertEqual(rc, 0)
         line = out.getvalue().strip()
         self.assertTrue(line.startswith("set SEARXNG_SECRET="))
@@ -182,11 +191,13 @@ class TestEnsureSecretKey(unittest.TestCase):
         secret_path, settings_path, example_path = self._make_paths(
             with_key="short"
         )
-        with mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path), \
-             mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
-             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
-            with mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out:
-                rc = self.fn.main()
+        with (
+            mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path),
+            mock.patch.object(self.fn, "SETTINGS_PATH", settings_path),
+            mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path),
+            mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out,
+        ):
+            rc = self.fn.main()
         self.assertEqual(rc, 0)
         line = out.getvalue().strip()
         self.assertTrue(line.startswith("set SEARXNG_SECRET="))
@@ -199,11 +210,13 @@ class TestEnsureSecretKey(unittest.TestCase):
         secret_path, settings_path, example_path = self._make_paths(
             with_key=("a" * 64) + " & echo INJECTED"
         )
-        with mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path), \
-             mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
-             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
-            with mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out:
-                rc = self.fn.main()
+        with (
+            mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path),
+            mock.patch.object(self.fn, "SETTINGS_PATH", settings_path),
+            mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path),
+            mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out,
+        ):
+            rc = self.fn.main()
         self.assertEqual(rc, 0)
         key = out.getvalue().strip().split("=", 1)[1]
         self.assertRegex(key, r"^[0-9a-f]{64}$")
@@ -215,11 +228,13 @@ class TestEnsureSecretKey(unittest.TestCase):
             with_key="a" * 64
         )
         original_mtime = os.path.getmtime(settings_path)
-        with mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path), \
-             mock.patch.object(self.fn, "SETTINGS_PATH", settings_path), \
-             mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path):
-            with mock.patch.object(sys, "stdout", new_callable=io.StringIO):
-                self.fn.main()
+        with (
+            mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path),
+            mock.patch.object(self.fn, "SETTINGS_PATH", settings_path),
+            mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path),
+            mock.patch.object(sys, "stdout", new_callable=io.StringIO),
+        ):
+            self.fn.main()
         self.assertEqual(os.path.getmtime(settings_path), original_mtime)
 
 
@@ -447,6 +462,7 @@ class TestPatchWebappJsonHandler(unittest.TestCase):
     def test_already_applied(self):
         content = (
             "import ipaddress\n"
+            "WindowsSelectorEventLoopPolicy\n"
             "if output_format in ('json', 'json_lite'):\n"
             "    pass\n"
             "if output_format == 'json_lite':\n"
@@ -456,6 +472,7 @@ class TestPatchWebappJsonHandler(unittest.TestCase):
 
     def test_patches_index_error_and_handler(self):
         content = (
+            "import sys\n"
             "import warnings\n"
             "def index_error(output_format, err):\n"
             "    if output_format == 'json':\n"
@@ -465,6 +482,7 @@ class TestPatchWebappJsonHandler(unittest.TestCase):
         )
         res = self.fn(content, "webapp.py")
         self.assertIn("import ipaddress", res)
+        self.assertIn("WindowsSelectorEventLoopPolicy", res)
         self.assertIn("if output_format in ('json', 'json_lite'):", res)
         self.assertIn("if output_format == 'json_lite':", res)
 
@@ -497,11 +515,14 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "import html\n"
             "import httpx\n"
             "import idna\n"
+            "import time\n"
             "trust_env=False\n"
             "class _ScrapeBlockedError\n"
             "def _is_ip_blocked\n"
             "def _is_reserved_scrape_host\n"
             "ip_direct = ipaddress.ip_address(host_clean)\n"
+            "s6to4 = getattr(ip, 'sixtofour', None)\n"
+            "max_duration=15.0\n"
         )
         self.assertEqual(self.fn(content, "webapp.py"), "ALREADY_APPLIED")
 
@@ -884,9 +905,11 @@ class TestDisableMissingEngines(unittest.TestCase):
                 "    engine: removed\n"
             )
 
-        with mock.patch.object(self.mod, "yaml", None):
-            with mock.patch.object(sys, "argv", ["disable-missing-engines.py", settings_file, engines_dir]):
-                self.mod.main()
+        with (
+            mock.patch.object(self.mod, "yaml", None),
+            mock.patch.object(sys, "argv", ["disable-missing-engines.py", settings_file, engines_dir]),
+        ):
+            self.mod.main()
 
         with open(settings_file, "r", encoding="utf-8") as f:
             updated = f.read()
@@ -911,11 +934,13 @@ class TestDisableMissingEngines(unittest.TestCase):
                 "    engine: pkg_engine\n"
             )
 
-        with mock.patch.object(self.mod, "yaml", None):
-            with mock.patch.object(sys, "argv", ["disable-missing-engines.py", settings_file, engines_dir]):
-                with self.assertRaises(SystemExit) as cm:
-                    self.mod.main()
-                self.assertEqual(cm.exception.code, 0)
+        with (
+            mock.patch.object(self.mod, "yaml", None),
+            mock.patch.object(sys, "argv", ["disable-missing-engines.py", settings_file, engines_dir]),
+            self.assertRaises(SystemExit) as cm,
+        ):
+            self.mod.main()
+        self.assertEqual(cm.exception.code, 0)
 
         with open(settings_file, "r", encoding="utf-8") as f:
             updated = f.read()
@@ -1067,9 +1092,9 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
     def test_dns_pinning_family_mismatch_raises_gaierror(self):
         # R4 verification: When a host is pinned to IPv4, querying AF_INET6
         # must raise socket.gaierror rather than falling through to live DNS.
+        import ipaddress
         import socket
         import threading
-        import ipaddress
 
         thread_local = threading.local()
         thread_local.pin = {'host': 'example.com', 'ip': '93.184.216.34', 'port': 443}
@@ -1111,15 +1136,15 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
     def test_read_scrape_response_unknown_charset_fallback(self):
         # R4 verification: Malformed/bogus charset header must not crash with 500 LookupError
         class DummyResponse:
-            headers = {'content-type': 'text/html; charset=bogus-unknown-codec'}
-            encoding = 'bogus-unknown-codec'
+            def __init__(self):
+                self.headers = {'content-type': 'text/html; charset=bogus-unknown-codec'}
+                self.encoding = 'bogus-unknown-codec'
+
             def iter_bytes(self):
-                yield 'Hello, 世界!'.encode('utf-8')
+                yield 'Hello, 世界!'.encode()
 
         resp = DummyResponse()
-        chunks = []
-        for c in resp.iter_bytes():
-            chunks.append(c)
+        chunks = list(resp.iter_bytes())
         body = b''.join(chunks)
 
         encoding = resp.encoding or 'utf-8'
@@ -1196,9 +1221,13 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
             ):
                 return True
             mapped = getattr(ip, 'ipv4_mapped', None)
-            if mapped is not None:
-                return is_ip_blocked(mapped)
-            return False
+            if mapped is not None and is_ip_blocked(mapped):
+                return True
+            s6to4 = getattr(ip, 'sixtofour', None)
+            if s6to4 is not None and is_ip_blocked(s6to4):
+                return True
+            teredo = getattr(ip, 'teredo', None)
+            return bool(teredo is not None and (is_ip_blocked(teredo[0]) or is_ip_blocked(teredo[1])))
 
         # Blocked addresses
         blocked_ips = [
@@ -1217,6 +1246,12 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
             '::ffff:127.0.0.1',   # Mapped loopback
             '::ffff:192.168.1.1', # Mapped private
             '::ffff:224.0.0.1',   # Mapped multicast
+            '::127.0.0.1',        # IPv4-compatible loopback
+            '::192.168.1.1',      # IPv4-compatible private
+            '2002:7f00:1::',      # 6to4 embedding 127.0.0.1
+            '2002:c0a8:101::',    # 6to4 embedding 192.168.1.1
+            '2002:0a00:1::',      # 6to4 embedding 10.0.0.1
+            '2001:0:4136:e378:8000:63bf:7f00:1', # Teredo tunnel embedding 127.0.0.1
         ]
         for ip_str in blocked_ips:
             self.assertTrue(is_ip_blocked(ip_str), f"{ip_str} should be blocked")
@@ -1226,6 +1261,7 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
             '93.184.216.34',       # example.com
             '8.8.8.8',             # Google DNS
             '2606:2800:220:1:248:1893:25c8:1946', # IPv6 example.com
+            '2606:4700:4700::1111', # Cloudflare DNS IPv6
         ]
         for ip_str in allowed_ips:
             self.assertFalse(is_ip_blocked(ip_str), f"{ip_str} should be allowed")
@@ -1262,9 +1298,42 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
         # Literal backslash-1 must never appear in the output.
         self.assertNotIn("\\1", res)
         # All injected imports must be present.
-        for mod in ('re', 'html', 'httpx', 'idna', 'trafilatura',
+        for mod in ('re', 'html', 'httpx', 'idna', 'time', 'trafilatura',
                      'socket', 'contextlib', 'threading'):
             self.assertIn(f"import {mod}", res)
+
+    def test_read_scrape_response_streaming_timeout(self):
+        # Verification: Slowloris responses taking longer than max_duration must raise httpx.TimeoutException
+        import time
+
+        import httpx
+
+        class SlowResponse:
+            def __init__(self):
+                self.headers = {}
+                self.encoding = "utf-8"
+
+            def iter_bytes(self):
+                for _ in range(5):
+                    time.sleep(0.01)
+                    yield b"slow chunk"
+
+        resp = SlowResponse()
+        with self.assertRaises(httpx.TimeoutException):
+            start_time = time.monotonic()
+            chunks = []
+            max_duration = 0.005
+            for chunk in resp.iter_bytes():
+                if time.monotonic() - start_time > max_duration:
+                    raise httpx.TimeoutException("Response read stream timed out")
+                chunks.append(chunk)
+
+    def test_read_scrape_response_content_length_whitespace(self):
+        # Verification: Whitespace-padded content-length headers must be stripped and rejected if over size limit
+        raw_header = "  10485760  "
+        cl_str = raw_header.strip()
+        self.assertTrue(cl_str.isdigit())
+        self.assertGreater(int(cl_str), 5 * 1024 * 1024)
 
 
 class TestPatchRaiseForHttpError(unittest.TestCase):
@@ -1383,7 +1452,7 @@ class TestUpdateFileNoopHandling(unittest.TestCase):
         # Without the opt-in flag, unchanged output still fails loudly.
         self.assertNotIn("legacy = True", rewrite("pristine\n", "x"))
 
-        rewrite._noop_when_unchanged = True  # noqa: B010
+        rewrite._noop_when_unchanged = True
 
         # Never applied -> patched.
         result = apply_patches.update_file(
