@@ -294,18 +294,29 @@ server {
 2. Restart server: `SearXNG for Windows.bat`
 3. Run smoke tests: `.\tools\smoke-test.ps1`
 
-### Smoke Testing
+### Automated Testing & Linting
 
 ```powershell
+# Run Ruff lint checks
+ruff check .
+
+# Run unit tests (patch idempotency, edge cases, hardening regression tests)
+.\python\python.exe tools\test_patches.py
+
+# Run standalone smoke test (requires server running)
 .\tools\smoke-test.ps1
+
+# Run complete end-to-end test suite (unit tests + background server + all smoke tests)
+.\tools\run-tests.ps1 -SkipInstall
 ```
 
-Validates:
-- ✓ Root page accessible
-- ✓ JSON API responds
-- ✓ json_lite format produces results
-- ✓ /scrape extracts content
-- ✓ SSRF protection blocks loopback/private IPs
+Smoke tests validate:
+- ✓ Root page accessible with proper ARIA attributes
+- ✓ Standard JSON API responds
+- ✓ GenAI-optimized `json_lite` format produces valid token-efficient results
+- ✓ `/scrape` extracts web content safely (form, JSON, and GET params)
+- ✓ SSRF protection blocks loopback/private/multicast IPs and non-HTTP schemes
+- ✓ Autocomplete and healthcheck endpoints respond properly
 
 ### Patch Customization (If Upstream Changes)
 

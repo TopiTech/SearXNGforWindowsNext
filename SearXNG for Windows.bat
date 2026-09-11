@@ -17,7 +17,8 @@ if not exist ".\python\Lib\site-packages\searx\webapp.py" (
   echo [ERROR] SearXNG webapp not found: .\python\Lib\site-packages\searx\webapp.py
   echo.
   echo You need to sync from upstream and install requirements first.
-  echo Please run: PowerShell -File .\tools\install-requirements.ps1
+  echo Please run: Update-Upstream.bat
+  echo Then run:   PowerShell -File .\tools\install-requirements.ps1
   echo Refer to DEVELOPMENT.md for step-by-step setup guides.
   pause
   exit /b 1

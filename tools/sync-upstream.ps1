@@ -201,7 +201,8 @@ try {
     $disableScript = Join-Path $repoRoot "tools\disable-missing-engines.py"
     $targetSettingsFiles = @(
         (Join-Path $repoRoot "config\settings.yml.example"),
-        (Join-Path $repoRoot "config\settings.yml")
+        (Join-Path $repoRoot "config\settings.yml"),
+        (Join-Path $sitePackages "searx\settings.yml")
     )
     foreach ($cfgPath in $targetSettingsFiles) {
         if (Test-Path $cfgPath) {

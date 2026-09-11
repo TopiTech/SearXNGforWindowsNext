@@ -226,9 +226,10 @@ def main():
         engine_mod = engine_entry.get('engine', name)
 
         # Skip template or complex dynamic engines
-        if engine_mod and re.match(r'^[a-z0-9_-]+$', engine_mod):
-            mod_file = os.path.join(engines_dir, f"{engine_mod}.py")
-            pkg_init = os.path.join(engines_dir, engine_mod, "__init__.py")
+        if engine_mod and re.match(r'^[a-z0-9_.-]+$', engine_mod):
+            parts = engine_mod.split('.')
+            mod_file = os.path.join(engines_dir, *parts) + ".py"
+            pkg_init = os.path.join(engines_dir, *parts, "__init__.py")
             if (
                 not os.path.exists(mod_file)
                 and not os.path.exists(pkg_init)

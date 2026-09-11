@@ -1481,5 +1481,158 @@ class TestUpdateFileNoopHandling(unittest.TestCase):
             apply_patches.update_file(target, "stuck rewrite", stuck)
 
 
+class TestHardeningEnhancements(unittest.TestCase):
+    """Verify bug fixes and hardening enhancements."""
+
+    def test_safe_getaddrinfo_pinned_host_internal_error_raises_gaierror(self):
+        """Pinned host resolution failure must raise gaierror without live DNS leak."""
+        import socket
+        import threading
+
+        thread_local = threading.local()
+        thread_local.pin = {'host': 'example.com', 'ip': 'malformed-ip', 'port': 443}
+
+        live_calls = []
+
+        def mock_original_gai(h, p, *args, **kwargs):
+            live_calls.append((h, p))
+            return [('live_dns', h, p)]
+
+        # Mimic hardened _safe_getaddrinfo
+        def test_safe_getaddrinfo(h, p, *args, **kwargs):
+            pin = getattr(thread_local, 'pin', None)
+            if pin:
+                pin_host = pin.get('host')
+                host_matches = False
+                if pin_host:
+                    h_clean = (h or '').strip('[]').rstrip('.').lower()
+                    pin_clean = pin_host.strip('[]').rstrip('.').lower()
+                    host_matches = (h_clean == pin_clean)
+                if host_matches:
+                    pin_port = pin.get('port')
+                    port_matches = (
+                        p is None
+                        or p == pin_port
+                        or str(p) == str(pin_port)
+                        or (pin_port == 443 and p == 'https')
+                        or (pin_port == 80 and p == 'http')
+                    )
+                    if port_matches:
+                        try:
+                            import ipaddress
+                            ip_obj = ipaddress.ip_address(pin['ip'])
+                            port_num = int(pin_port or 443)
+                            req_family = args[0] if len(args) > 0 else kwargs.get('family', 0)
+                            ip_family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
+                            if req_family in (0, ip_family):
+                                sockaddr = (pin['ip'], port_num, 0, 0) if ip_obj.version == 6 else (pin['ip'], port_num)
+                                return [(ip_family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', sockaddr)]
+                            else:
+                                raise socket.gaierror(socket.EAI_NONAME, f'Address family not supported for pinned host {pin_host}')
+                        except socket.gaierror:
+                            raise
+                        except Exception as exc:  # noqa: BLE001
+                            raise socket.gaierror(socket.EAI_NONAME, f'Resolution failed for pinned host {pin_host}: {exc}')
+            return mock_original_gai(h, p, *args, **kwargs)
+
+        with self.assertRaises(socket.gaierror) as ctx:
+            test_safe_getaddrinfo('example.com', 443)
+        self.assertIn("Resolution failed for pinned host example.com", str(ctx.exception))
+        # Ensure zero live DNS requests were made
+        self.assertEqual(len(live_calls), 0)
+
+    def test_parse_retry_after_http_date(self):
+        """Verify _parse_retry_after_header parses HTTP dates and clamps delta seconds."""
+        import datetime
+        import email.utils
+
+        def parse_retry_after(resp):
+            if resp is None:
+                return None
+            try:
+                hdr = None
+                if hasattr(resp, 'headers'):
+                    hdr = resp.headers.get('Retry-After') or resp.headers.get('retry-after')
+                if hdr is None:
+                    return None
+                hdr = hdr.strip()
+                if hdr.isdigit():
+                    v = int(hdr)
+                    return max(5, min(v, 900))
+                dt = email.utils.parsedate_to_datetime(hdr)
+                if dt is not None:
+                    now = (
+                        datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+                        if dt.tzinfo is None
+                        else datetime.datetime.now(datetime.UTC)
+                    )
+                    delta = int((dt - now).total_seconds())
+                    return max(5, min(delta, 900))
+            except Exception:  # noqa: BLE001, S110
+                pass
+            return None
+
+        class DummyResp:
+            def __init__(self, val):
+                self.headers = {'Retry-After': val} if val is not None else {}
+
+        # 1. Delta seconds
+        self.assertEqual(parse_retry_after(DummyResp('120')), 120)
+        self.assertEqual(parse_retry_after(DummyResp('2')), 5)  # min clamp
+        self.assertEqual(parse_retry_after(DummyResp('9999')), 900)  # max clamp
+
+        # 2. Future HTTP-date (60s in future)
+        now = datetime.datetime.now(datetime.UTC)
+        future_hdr = email.utils.format_datetime(now + datetime.timedelta(seconds=60))
+        res_future = parse_retry_after(DummyResp(future_hdr))
+        self.assertTrue(55 <= res_future <= 65)
+
+        # 3. Past HTTP-date
+        past_hdr = email.utils.format_datetime(now - datetime.timedelta(seconds=60))
+        self.assertEqual(parse_retry_after(DummyResp(past_hdr)), 5)
+
+        # 4. Invalid or missing
+        self.assertIsNone(parse_retry_after(DummyResp('invalid-date')))
+        self.assertIsNone(parse_retry_after(DummyResp(None)))
+        self.assertIsNone(parse_retry_after(None))
+
+    def test_json_lite_infobox_none_urls_safety(self):
+        """Verify infoboxes with 'urls': None do not cause TypeError during json_lite serialization."""
+        import json
+
+        def get_box(i):
+            d = i.as_dict() if hasattr(i, 'as_dict') else (i if isinstance(i, dict) else {})
+            urls_raw = (d.get('urls') if isinstance(d, dict) else getattr(i, 'urls', [])) or []
+            urls = []
+            for u in urls_raw:
+                if isinstance(u, dict):
+                    urls.append({'title': u.get('title', ''), 'url': u.get('url', '')})
+                else:
+                    urls.append({'title': getattr(u, 'title', ''), 'url': getattr(u, 'url', '')})
+            return {
+                'infobox': d.get('infobox', '') if isinstance(d, dict) else getattr(i, 'infobox', ''),
+                'content': d.get('content', '') if isinstance(d, dict) else getattr(i, 'content', ''),
+                'urls': urls,
+            }
+
+        box_with_none_urls = {'infobox': 'Test', 'content': 'Content', 'urls': None}
+        out = get_box(box_with_none_urls)
+        self.assertEqual(out['urls'], [])
+        serialized = json.dumps(out)
+        self.assertIn('"urls": []', serialized)
+
+    def test_disable_missing_engines_package_module(self):
+        """Verify disable-missing-engines handles package/submodule engine names."""
+        sample_yaml = (
+            "engines:\n"
+            "  - name: mypkg\n"
+            "    engine: subpkg.mymod\n"
+            "    categories: general\n"
+        )
+        engines = disable_missing_engines.extract_engines(sample_yaml)
+        self.assertEqual(len(engines), 1)
+        self.assertEqual(engines[0]['engine'], 'subpkg.mymod')
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

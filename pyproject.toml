@@ -1,8 +1,14 @@
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+extend-exclude = [
+    "python",
+    "config/*.upstream.py",
+    "config/setup.upstream.py",
+]
 
 [tool.ruff.lint]
 ignore = [
     "N999",  # Hyphenated script filenames in tools/
 ]
+

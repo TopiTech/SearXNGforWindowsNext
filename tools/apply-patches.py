@@ -137,7 +137,13 @@ def patch_settings_defaults(content, path):
 
 # --- Patch 3: webutils.py (add get_json_lite_response, optimised) ---
 def patch_webutils(content, path):
-    if "def get_json_lite_response" in content and "'score': d.get('score', 0)" in content and "_get_box" in content and "d.get('engines')" in content:
+    if (
+        "def get_json_lite_response" in content
+        and "'score': d.get('score', 0)" in content
+        and "_get_box" in content
+        and "d.get('engines')" in content
+        and ("urls_raw = (d.get('urls')" in content or "urls_raw = d.get('urls', [])" not in content)
+    ):
         return "ALREADY_APPLIED"
 
     lite_func = '''
@@ -174,7 +180,7 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
     if rc.infoboxes:
         def _get_box(i):
             d = i.as_dict() if hasattr(i, 'as_dict') else (i if isinstance(i, dict) else {})
-            urls_raw = d.get('urls', []) if isinstance(d, dict) else getattr(i, 'urls', [])
+            urls_raw = (d.get('urls') if isinstance(d, dict) else getattr(i, 'urls', [])) or []
             urls = []
             for u in urls_raw:
                 if isinstance(u, dict):
@@ -188,9 +194,9 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
             }
         data['infoboxes'] = [_get_box(i) for i in rc.infoboxes]
     return json.dumps(data, cls=JSONEncoder)
-
-
 '''
+
+
     # If old version exists, remove it first
     if "def get_json_lite_response" in content:
         content = re.sub(r'(?s)\n+def get_json_lite_response.*?return json\.dumps\(data, cls=JSONEncoder\)\n+', "\n", content)
@@ -345,7 +351,10 @@ def patch_webapp_scrape_route(content, path):
         "s6to4 = getattr(ip, 'sixtofour', None)",
         "max_duration=15.0",
     ]
-    if all(anchor in content for anchor in required_anchors):
+    if (
+        all(anchor in content for anchor in required_anchors)
+        and ("Resolution failed for pinned host" in content or "except Exception:\n                    pass" not in content)
+    ):
         return "ALREADY_APPLIED"
 
     # 1. Add imports at module level (ensure re, html, httpx, idna, and time are present)
@@ -469,8 +478,8 @@ def _safe_getaddrinfo(h, p, *args, **kwargs):
                         raise socket.gaierror(socket.EAI_NONAME, f'Address family not supported for pinned host {pin_host}')
                 except socket.gaierror:
                     raise
-                except Exception:
-                    pass
+                except Exception as exc:
+                    raise socket.gaierror(socket.EAI_NONAME, f'Resolution failed for pinned host {pin_host}: {exc}')
     return _original_getaddrinfo(h, p, *args, **kwargs)
 
 socket.getaddrinfo = _safe_getaddrinfo
@@ -872,8 +881,41 @@ def patch_abstract_suspend(content, path):
 
 # --- Patch 11: search/processors/online.py (Retry-After + CAPTCHA logging) ---
 def patch_online_captcha(content, path):
+    if (
+        "except SearxEngineCaptchaException as e:" in content
+        and "except SearxEngineTooManyRequestsException as e:" in content
+        and ("parsedate_to_datetime" in content or "return max(5, min(v, 900))" not in content)
+    ):
+        return "ALREADY_APPLIED"
+
     original = content
     helper_present = "_parse_retry_after_header" in content
+
+    new_helper = (
+        "def _parse_retry_after_header(resp) -> int | None:\n"
+        "    if resp is None:\n"
+        "        return None\n"
+        "    try:\n"
+        "        hdr = None\n"
+        "        if hasattr(resp, 'headers'):\n"
+        "            hdr = resp.headers.get('Retry-After') or resp.headers.get('retry-after')\n"
+        "        if hdr is None:\n"
+        "            return None\n"
+        "        hdr = hdr.strip()\n"
+        "        if hdr.isdigit():\n"
+        "            v = int(hdr)\n"
+        "            return max(5, min(v, 900))\n"
+        "        import datetime\n"
+        "        import email.utils\n"
+        "        dt = email.utils.parsedate_to_datetime(hdr)\n"
+        "        if dt is not None:\n"
+        "            now = datetime.datetime.utcnow() if dt.tzinfo is None else datetime.datetime.now(datetime.timezone.utc)\n"
+        "            delta = int((dt - now).total_seconds())\n"
+        "            return max(5, min(delta, 900))\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    return None"
+    )
 
     if not helper_present:
         old_import = "from searx.metrics.error_recorder import count_error\nfrom .abstract import EngineProcessor, RequestParams"
@@ -882,27 +924,19 @@ def patch_online_captcha(content, path):
             "from .abstract import EngineProcessor, RequestParams\n"
             "\n"
             "\n"
-            "def _parse_retry_after_header(resp) -> int | None:\n"
-            "    if resp is None:\n"
-            "        return None\n"
-            "    try:\n"
-            "        hdr = None\n"
-            "        if hasattr(resp, 'headers'):\n"
-            "            hdr = resp.headers.get('Retry-After') or resp.headers.get('retry-after')\n"
-            "        if hdr is None:\n"
-            "            return None\n"
-            "        hdr = hdr.strip()\n"
-            "        if hdr.isdigit():\n"
-            "            v = int(hdr)\n"
-            "            return max(5, min(v, 900))\n"
-            "    except Exception:\n"
-            "        pass\n"
-            "    return None"
+            + new_helper
         )
         if old_import in content:
             content = content.replace(old_import, new_import, 1)
             helper_present = True
     else:
+        if "return max(5, min(v, 900))" in content and "parsedate_to_datetime" not in content:
+            content = re.sub(
+                r'(?s)def _parse_retry_after_header\(resp\).*?return None',
+                new_helper,
+                content,
+                count=1,
+            )
         # Legacy hard-coded CAPTCHA cap from pre-patch-11 installs.
         content = content.replace("            e.suspended_time = min(e.suspended_time, 900)\n", "")
 
@@ -1132,6 +1166,44 @@ def main():
         patch_config_settings_yml,
         required=False
     )
+
+    # Ensure missing engines are marked inactive across all configuration files
+    engines_dir = os.path.join(SITE_PACKAGES, "searx", "engines")
+    for cfg_file in (
+        os.path.join(REPO_ROOT, "config", "settings.yml.example"),
+        os.path.join(REPO_ROOT, "config", "settings.yml"),
+        os.path.join(SITE_PACKAGES, "searx", "settings.yml"),
+    ):
+        if os.path.exists(cfg_file) and os.path.exists(engines_dir):
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location(
+                    "disable_missing_engines", os.path.join(REPO_ROOT, "tools", "disable-missing-engines.py")
+                )
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    with open(cfg_file, 'r', encoding='utf-8') as f:
+                        yaml_content = f.read()
+                    engines = mod.extract_engines(yaml_content)
+                    modified = yaml_content
+                    for engine_entry in (engines or []):
+                        name = engine_entry.get('name')
+                        if not name:
+                            continue
+                        engine_mod = engine_entry.get('engine', name)
+                        if engine_mod and re.match(r'^[a-z0-9_.-]+$', engine_mod):
+                            parts = engine_mod.split('.')
+                            mod_file = os.path.join(engines_dir, *parts) + ".py"
+                            pkg_init = os.path.join(engines_dir, *parts, "__init__.py")
+                            if not os.path.exists(mod_file) and not os.path.exists(pkg_init) and not engine_entry.get('inactive'):
+                                modified = mod.disable_engine_in_text(modified, name)
+                    if modified != yaml_content:
+                        with open(cfg_file, 'w', encoding='utf-8', newline='\n') as f:
+                            f.write(modified)
+                        logger.info(f"Marked missing engines inactive in {cfg_file}")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Could not check missing engines in {cfg_file}: {exc}")
 
     logger.info("All patches processed.")
 
