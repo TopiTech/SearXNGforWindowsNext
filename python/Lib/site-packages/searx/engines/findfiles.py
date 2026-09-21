@@ -13,8 +13,6 @@ from os.path import basename
 from urllib.parse import urlencode
 import typing as t
 
-from lxml import html
-
 from searx.result_types import EngineResults
 from searx.utils import extract_text, eval_xpath, eval_xpath_list
 
@@ -76,15 +74,15 @@ def request(query: str, params: "OnlineParams") -> None:
 def response(resp: "SXNG_Response") -> EngineResults:
     res = EngineResults()
 
-    dom = html.fromstring(resp.text)
+    dom = resp.html()
     if findfiles_categ == "image":
         for result in eval_xpath_list(
             dom, "//div[contains(@class, 'image-mosaic')]/div[contains(@class, 'image-item')]"
         ):
             res.add(
                 res.types.Image(
-                    url=extract_text(eval_xpath(result, ".//div[contains(@class, 'caption')]/a/@href")) or "",
-                    title=extract_text(eval_xpath(result, ".//div[contains(@class, 'caption')]/a")) or "",
+                    url=extract_text(eval_xpath(result, ".//figcaption/a/@href")) or "",
+                    title=extract_text(eval_xpath(result, ".//figcaption/a")) or "",
                     thumbnail_src=extract_text(eval_xpath(result, ".//img/@src")) or "",
                 )
             )
@@ -94,8 +92,7 @@ def response(resp: "SXNG_Response") -> EngineResults:
         ):
             video_src = extract_text(eval_xpath(result, ".//video/@src")) or ""
             res.add(
-                res.types.LegacyResult(
-                    template="videos.html",
+                res.types.Video(
                     url=video_src,
                     title=extract_text(eval_xpath(result, ".//div[contains(@class, 'caption')]/span")) or "",
                     iframe_src=video_src or "",

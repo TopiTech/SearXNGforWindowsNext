@@ -12,8 +12,6 @@ results from YouTube.
 import typing as t
 from urllib.parse import urlencode
 
-from lxml import html
-
 from searx.utils import eval_xpath_list, eval_xpath, extract_text, ElementType
 from searx.result_types import EngineResults
 from searx.enginelib import EngineAbout
@@ -121,8 +119,7 @@ def _video_results(doc: ElementType, res: EngineResults):
             continue
         title_parts: list[ElementType] = eval_xpath(result, ".//a[starts-with(@class, 'tMMReshl')]")
         res.add(
-            res.types.LegacyResult(
-                template="videos.html",
+            res.types.Video(
                 url=url,
                 title=" - ".join(extract_text(part) or "" for part in title_parts),
                 thumbnail=extract_text(eval_xpath(result, ".//img/@src") or "") or "",
@@ -131,7 +128,7 @@ def _video_results(doc: ElementType, res: EngineResults):
 
 
 def response(resp: "SXNG_Response") -> EngineResults:
-    doc = html.fromstring(resp.text)
+    doc = resp.html()
     res = EngineResults()
     match tonline_categ:
         case "web":
