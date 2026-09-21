@@ -18,6 +18,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 concurrency:
   group: upstream-sync
@@ -77,15 +78,30 @@ jobs:
         with:
          script: |
            const issueNumber = context.issue && context.issue.number;
+           const detailsBody = '❌ **Upstream sync failed** (Workflow run: ${{ github.run_id }})\n\n' +
+                               'Upstream synchronization step failed.\n' +
+                               'Please check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.\n\n' +
+                               '- Requested Ref: `' + '${{ steps.ref.outputs.requested_ref }}' + '`\n';
            if (issueNumber) {
              await github.rest.issues.createComment({
                issue_number: issueNumber,
                owner: context.repo.owner,
                repo: context.repo.repo,
-               body: '❌ **Upstream sync failed** (Workflow: ${{ github.run_id }})\n\nPlease check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.'
+               body: detailsBody
              });
            } else {
-             core.warning('Upstream sync failed, but there is no issue or PR context to comment on.');
+             try {
+               await github.rest.issues.create({
+                 owner: context.repo.owner,
+                 repo: context.repo.repo,
+                 title: '❌ Upstream sync failed (run ${{ github.run_id }})',
+                 body: detailsBody,
+                 labels: ['automated-sync', 'bug']
+               });
+               core.info('Created GitHub issue for sync failure.');
+             } catch (err) {
+               core.warning('Could not create issue for sync failure: ' + err.message);
+             }
            }
            core.setFailed('Upstream sync failed.');
 

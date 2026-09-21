@@ -264,11 +264,14 @@ git commit --amend --no-edit
 
 #### ステップ1: secret_key の再生成（最優先）
 漏洩したキーは侵害されたものとみなし、即座に無効化して新しいキーを発行してください。
-本プロジェクトでは `config/secret_key`（`.gitignore` 対象）にキーが保存される仕様のため、該当ファイルを再生成します。
+本プロジェクトでは `config/secret.key`（`.gitignore` 対象）にキーが保存される仕様のため、該当ファイルを削除して再生成します（次回サーバー起動時またはツール実行時に自動で安全な32バイトのランダムキーが生成されます）。
 
 ```powershell
-# PowerShell でランダムな32バイトキーを再生成
-[Convert]::ToHexString((1..32 | ForEach-Object { Get-Random -Minimum 0 -Maximum 256 } | [byte[]])) | Out-File -FilePath "config\secret_key" -Encoding utf8 -NoNewline
+# 方法A: 既存の secret.key を削除（次回起動時に自動再生成）
+Remove-Item "config\secret.key" -ErrorAction SilentlyContinue
+
+# または 方法B: ツールを実行して即座に新しいキーを生成
+.\python\python.exe tools\ensure-secret-key.py
 ```
 
 #### ステップ2: Git 履歴からキーを完全に消去（git-filter-repo）

@@ -182,6 +182,7 @@ try {
     Assert-HttpStatusCode -Uri "$base/scrape" -ExpectedStatusCode 400 -Label "Scrape missing URL"
     Assert-HttpStatusCode -Uri "$base/scrape" -Method Post -Body '{"url": 12345}' -ContentType "application/json" -ExpectedStatusCode 400 -Label "Scrape invalid URL type"
     Assert-HttpStatusCode -Uri "$base/scrape?url=http%3A%2F%2F%5B%3A%3A1" -ExpectedStatusCode 400 -Label "Scrape malformed URL"
+    Assert-HttpStatusCode -Uri "$base/scrape?url=http://example.com:0/" -ExpectedStatusCode 400 -Label "Scrape port 0 blocked"
     Write-Host ""
 
     # Test 27: json_lite with empty query (server should reject with 400 "No query")
@@ -195,6 +196,16 @@ try {
     $hcResponse = Invoke-WebRequest -Uri "$base/healthz" -UseBasicParsing -ErrorAction Stop
     Assert-In -Value $hcResponse.Content.Trim() -Allowed @("OK") -Label "Healthcheck body"
     Write-Host "  [OK] /healthz returned OK" -ForegroundColor Green
+    Write-Host ""
+
+    # Test 29: Preferences page
+    Write-Host "Test 29: Preferences page..." -ForegroundColor Cyan
+    $prefResponse = Invoke-WebRequest -Uri "$base/preferences" -UseBasicParsing -ErrorAction Stop
+    if ($prefResponse.StatusCode -eq 200 -and $prefResponse.Content -match 'id="pref-hash-input"') {
+        Write-Host "  [OK] /preferences returned 200 with preferences input" -ForegroundColor Green
+    } else {
+        throw "[FAIL] /preferences returned unexpected response"
+    }
     Write-Host ""
 
     Write-Host "=====================================" -ForegroundColor Green

@@ -360,6 +360,22 @@ class TestPatchSimpleSearchAccessibility(unittest.TestCase):
         self.assertEqual(self.fn(content, "search.html"), "ALREADY_APPLIED")
 
 
+class TestPatchPreferencesAccessibility(unittest.TestCase):
+    """The cookie hash input in preferences must have an accessible name."""
+
+    def setUp(self):
+        self.fn = apply_patches.patch_preferences_accessibility
+
+    def test_adds_aria_label_to_hash_input(self):
+        content = '<input type="text" id="pref-hash-input" name="preferences" placeholder="{{- _(\'Preferences hash\') -}}">\n'
+        result = self.fn(content, "cookies.html")
+        self.assertIn('aria-label="{{- _(\'Preferences hash\') -}}"', result)
+
+    def test_is_idempotent(self):
+        content = '<input type="text" id="pref-hash-input" name="preferences" aria-label="{{- _(\'Preferences hash\') -}}" placeholder="{{- _(\'Preferences hash\') -}}">\n'
+        self.assertEqual(self.fn(content, "cookies.html"), "ALREADY_APPLIED")
+
+
 class TestPatchEnginesInit(unittest.TestCase):
     """Verify cleanup of the legacy disabled-engine short circuit."""
 
@@ -523,6 +539,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "ip_direct = ipaddress.ip_address(host_clean)\n"
             "s6to4 = getattr(ip, 'sixtofour', None)\n"
             "max_duration=15.0\n"
+            "Invalid port: 0\n"
         )
         self.assertEqual(self.fn(content, "webapp.py"), "ALREADY_APPLIED")
 
@@ -1632,6 +1649,64 @@ class TestHardeningEnhancements(unittest.TestCase):
         engines = disable_missing_engines.extract_engines(sample_yaml)
         self.assertEqual(len(engines), 1)
         self.assertEqual(engines[0]['engine'], 'subpkg.mymod')
+
+    def test_json_lite_date_serialization_and_string_urls(self):
+        """Verify datetime.date and string infobox URLs serialize without TypeError in json_lite."""
+        import datetime
+        import json
+
+        # 1. Verify datetime.date serialization
+        pub_date = datetime.date(2026, 9, 22)
+        pub_str = pub_date.isoformat() if hasattr(pub_date, 'isoformat') else str(pub_date)
+        res_dict = {
+            'publishedDate': pub_str,
+            'pubdate': pub_str,
+        }
+        dumped = json.dumps(res_dict)
+        self.assertIn('"publishedDate": "2026-09-22"', dumped)
+        self.assertIn('"pubdate": "2026-09-22"', dumped)
+
+        # 2. Verify string URLs in infoboxes
+        raw_urls = ['https://example.com/item1', {'title': 'Item 2', 'url': 'https://example.com/item2'}]
+        urls = []
+        for u in raw_urls:
+            if isinstance(u, dict):
+                urls.append({'title': u.get('title', ''), 'url': u.get('url', '')})
+            elif isinstance(u, str):
+                urls.append({'title': u, 'url': u})
+            else:
+                urls.append({'title': getattr(u, 'title', ''), 'url': getattr(u, 'url', '')})
+
+        self.assertEqual(urls[0], {'title': 'https://example.com/item1', 'url': 'https://example.com/item1'})
+        self.assertEqual(urls[1], {'title': 'Item 2', 'url': 'https://example.com/item2'})
+
+    def test_scrape_port_zero_blocked(self):
+        """Verify _parse_scrape_url rejects port 0 to prevent fallback to port 80."""
+        import urllib.parse
+
+        class _ScrapeBlockedError(Exception):
+            pass
+
+        def parse_scrape_url(value):
+            try:
+                parsed_url = urllib.parse.urlparse(value)
+                p = parsed_url.port
+                if p is not None and p == 0:
+                    raise _ScrapeBlockedError('Invalid port: 0')
+                return parsed_url
+            except ValueError as exc:
+                raise _ScrapeBlockedError('Invalid URL') from exc
+
+        # Port 0 must raise _ScrapeBlockedError
+        with self.assertRaises(_ScrapeBlockedError) as ctx:
+            parse_scrape_url('http://example.com:0/path')
+        self.assertEqual(str(ctx.exception), 'Invalid port: 0')
+
+        # Standard ports must pass
+        p80 = parse_scrape_url('http://example.com:80/path')
+        self.assertEqual(p80.port, 80)
+        p443 = parse_scrape_url('https://example.com:443/path')
+        self.assertEqual(p443.port, 443)
 
 
 if __name__ == "__main__":

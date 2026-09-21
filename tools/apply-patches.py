@@ -142,7 +142,7 @@ def patch_webutils(content, path):
         and "'score': d.get('score', 0)" in content
         and "_get_box" in content
         and "d.get('engines')" in content
-        and ("urls_raw = (d.get('urls')" in content or "urls_raw = d.get('urls', [])" not in content)
+        and ("hasattr(pub, 'isoformat')" in content or "sq, rc" in content)
     ):
         return "ALREADY_APPLIED"
 
@@ -153,13 +153,16 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
     """Returns a simplified JSON string (GenAI friendly)."""
     def _r(res):
         d = res.as_dict() if hasattr(res, 'as_dict') else (res if isinstance(res, dict) else {})
+        pub = d.get('pubdate') or d.get('publishedDate')
+        if hasattr(pub, 'isoformat'):
+            pub = pub.isoformat()
         return {
             'title': d.get('title', ''),
             'url': d.get('url', ''),
             'content': d.get('content', ''),
             'source': d.get('engine', '') or (', '.join(sorted(d.get('engines', []))) if d.get('engines') else ''),
             'score': d.get('score', 0),
-            'published_date': d.get('pubdate') or d.get('publishedDate'),
+            'published_date': pub,
             'author': d.get('author', ''),
             'category': d.get('category', ''),
         }
@@ -183,7 +186,9 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
             urls_raw = (d.get('urls') if isinstance(d, dict) else getattr(i, 'urls', [])) or []
             urls = []
             for u in urls_raw:
-                if isinstance(u, dict):
+                if isinstance(u, str):
+                    urls.append({'title': '', 'url': u})
+                elif isinstance(u, dict):
                     urls.append({'title': u.get('title', ''), 'url': u.get('url', '')})
                 else:
                     urls.append({'title': getattr(u, 'title', ''), 'url': getattr(u, 'url', '')})
@@ -250,6 +255,19 @@ def patch_simple_search_accessibility(content, path):
     if search_input not in content:
         return content
     return content.replace(search_input, accessible_search_input, 1)
+
+
+# --- Patch 3d: simple preferences templates (accessible input name for cookie hash) ---
+def patch_preferences_accessibility(content, path):
+    """Give the preferences hash input field an accessible, localized name."""
+    patch_preferences_accessibility._noop_when_unchanged = True
+    input_target = 'id="pref-hash-input" name="preferences"'
+    accessible_target = 'id="pref-hash-input" name="preferences" aria-label="{{- _(\'Preferences hash\') -}}"'
+    if 'id="pref-hash-input"' in content and 'aria-label=' in content:
+        return "ALREADY_APPLIED"
+    if input_target not in content:
+        return content
+    return content.replace(input_target, accessible_target, 1)
 
 
 # --- Patch 4: webapp.py (json_lite handler + ipaddress import + event loop policy) ---
@@ -350,6 +368,7 @@ def patch_webapp_scrape_route(content, path):
         "ip_direct = ipaddress.ip_address(host_clean)",
         "s6to4 = getattr(ip, 'sixtofour', None)",
         "max_duration=15.0",
+        "Invalid port: 0",
     ]
     if (
         all(anchor in content for anchor in required_anchors)
@@ -589,7 +608,9 @@ def scrape():
         try:
             parsed_url = urllib.parse.urlparse(value)
             # Accessing .port validates malformed or out-of-range ports.
-            parsed_url.port
+            p = parsed_url.port
+            if p is not None and p == 0:
+                raise _ScrapeBlockedError('Invalid port: 0')
             return parsed_url
         except ValueError as exc:
             raise _ScrapeBlockedError('Invalid URL') from exc
@@ -885,6 +906,8 @@ def patch_online_captcha(content, path):
         "except SearxEngineCaptchaException as e:" in content
         and "except SearxEngineTooManyRequestsException as e:" in content
         and ("parsedate_to_datetime" in content or "return max(5, min(v, 900))" not in content)
+        and ("datetime.timezone.utc" in content or "return max(5, min(v, 900))" not in content)
+        and "utcnow" not in content
     ):
         return "ALREADY_APPLIED"
 
@@ -909,7 +932,9 @@ def patch_online_captcha(content, path):
         "        import email.utils\n"
         "        dt = email.utils.parsedate_to_datetime(hdr)\n"
         "        if dt is not None:\n"
-        "            now = datetime.datetime.utcnow() if dt.tzinfo is None else datetime.datetime.now(datetime.timezone.utc)\n"
+        "            if dt.tzinfo is None:\n"
+        "                dt = dt.replace(tzinfo=datetime.timezone.utc)\n"
+        "            now = datetime.datetime.now(datetime.timezone.utc)\n"
         "            delta = int((dt - now).total_seconds())\n"
         "            return max(5, min(delta, 900))\n"
         "    except Exception:\n"
@@ -930,9 +955,9 @@ def patch_online_captcha(content, path):
             content = content.replace(old_import, new_import, 1)
             helper_present = True
     else:
-        if "return max(5, min(v, 900))" in content and "parsedate_to_datetime" not in content:
+        if "return max(5, min(v, 900))" in content and ("parsedate_to_datetime" not in content or "utcnow" in content):
             content = re.sub(
-                r'(?s)def _parse_retry_after_header\(resp\).*?return None',
+                r'(?s)def _parse_retry_after_header\(resp\).*?except Exception:\s*pass\s*return None',
                 new_helper,
                 content,
                 count=1,
@@ -1109,6 +1134,12 @@ def main():
         os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "simple_search.html"),
         "templates/simple/simple_search.html (accessible search label)",
         patch_simple_search_accessibility
+    )
+    update_file(
+        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "preferences", "cookies.html"),
+        "templates/simple/preferences/cookies.html (accessible hash input label)",
+        patch_preferences_accessibility,
+        required=False
     )
     update_file(
         os.path.join(SITE_PACKAGES, "searx", "webapp.py"),

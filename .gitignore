@@ -17,6 +17,7 @@ changed_files.txt
 /config/settings.yml
 /config/settings.yml.bak
 /config/secret.key
+/config/secret_key
 
 # OS and IDE files
 Thumbs.db
