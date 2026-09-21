@@ -47,6 +47,7 @@ from datetime import datetime, timedelta
 import typing as t
 
 
+from searx.search.processors.abstract import TimeRangeType
 from searx.extended_types import SXNG_Response
 from searx.result_types import EngineResults
 from searx.utils import html_to_text, parse_duration_string
@@ -54,7 +55,6 @@ from searx.utils import html_to_text, parse_duration_string
 if t.TYPE_CHECKING:
     from searx.search.processors import OnlineParams
 
-TimeRangeType = t.Literal["day", "week", "month", "year"]
 about = {
     "website": "https://kagi.com",
     "wikidata_id": "Q26000117",
@@ -178,17 +178,14 @@ def response(resp: "SXNG_Response") -> EngineResults:
                 length = parse_duration_string(result["props"]["duration"])
 
             res.add(
-                res.types.LegacyResult(
-                    {
-                        "template": "videos.html",
-                        "url": result["url"],
-                        "title": html_to_text(result.get("title", "no title available")),
-                        "content": html_to_text(result.get("snippet", "")),
-                        "thumbnail": result.get("image", {}).get("url"),
-                        "publishedDate": published_date,
-                        "author": result.get("props", {}).get("creator_name"),
-                        "length": length,
-                    }
+                res.types.Video(
+                    url=result["url"],
+                    title=html_to_text(result.get("title", "no title available")),
+                    content=html_to_text(result.get("snippet", "")),
+                    thumbnail=result.get("image", {}).get("url"),
+                    publishedDate=published_date,
+                    author=result.get("props", {}).get("creator_name"),
+                    length=length,
                 )
             )
 
