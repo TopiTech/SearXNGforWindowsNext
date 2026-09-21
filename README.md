@@ -241,34 +241,59 @@ GitHub Actions（`.github/workflows/upstream-sync.yml`）により、本家の�
 
 ---
 
-## 🔒 過去の漏えい secret_key の履歴パージ（任意・破壊的操作）
+## 🔒 誤って secret_key をコミット・プッシュしてしまった場合の対処法
 
-このリポジトリの到達可能な履歴には、過去にコミットされた実 secret_key が含まれます。現在の起動処理は新しいキーを追跡対象外へ保存しますが、過去の履歴から既知のキーを完全に消すには、管理者による履歴書き換えと全利用者へのキー失効・再発行が必要です。
+`config/settings.yml` やその他のファイルに実際の `secret_key` を記述したまま誤ってコミットまたはプッシュしてしまった場合は、セキュリティ確保のため以下の手順で対処してください。
 
-実施する場合の手順（管理者向け）:
+### 1. まだリモートに push していない場合（ローカルのみ）
+
+コミットを取り消すか、コミット内容を修正して安全な状態に戻します。
 
 ```bash
-# 1. メンテナのフレッシュな clone で実行する
-git clone <this-repo> searxng-purge
-cd searxng-purge
+# 直前のコミットを取り消して変更をワークツリーに残す
+git reset --soft HEAD~1
 
-# 2. リポジトリ外の安全な場所に置いたインシデント記録から、
-#    OLD_SECRET==>REDACTED-LEAKED-SECRET-KEY 形式の置換ファイルを作る。
-#    実際の値はこの文書やリポジトリへ貼り付けない。
+# または設定ファイルから secret_key を除去・修正した上でコミットを上書き
+git add config/settings.yml
+git commit --amend --no-edit
+```
 
-# 3. 履歴を書き換える
-git-filter-repo --force --replace-text /path/to/private/replacements.txt
+### 2. すでにリモート（GitHub等）へ push してしまった場合
 
-# 4. 非プレースホルダの secret_key が履歴に残っていないことを、値を表示せず確認する
-if git log -p -- config/settings.yml | grep -E "^[+-][[:space:]]*secret_key:" | grep -qvE "REDACTED|ultrasecretkey|CHANGE_ME"; then
-  echo "ERROR: non-placeholder secret_key remains in history"
-else
-  echo "OK: no leaked keys in history"
-fi
+公開リポジトリ等へプッシュしてしまった場合は、後から修正コミットを追加してもコミット履歴にキーが残ってしまいます。**「キーの失効・再生成」** と **「Git 履歴からの完全パージ」** を行ってください。
 
-# 5. 強制 push（リポジトリの全 clone に対して周知が必要）
-git remote add origin <this-repo>
+#### ステップ1: secret_key の再生成（最優先）
+漏洩したキーは侵害されたものとみなし、即座に無効化して新しいキーを発行してください。
+本プロジェクトでは `config/secret_key`（`.gitignore` 対象）にキーが保存される仕様のため、該当ファイルを再生成します。
+
+```powershell
+# PowerShell でランダムな32バイトキーを再生成
+[Convert]::ToHexString((1..32 | ForEach-Object { Get-Random -Minimum 0 -Maximum 256 } | [byte[]])) | Out-File -FilePath "config\secret_key" -Encoding utf8 -NoNewline
+```
+
+#### ステップ2: Git 履歴からキーを完全に消去（git-filter-repo）
+過去のコミット履歴から該当の文字列を安全なダミー値（`CHANGE_ME` 等）に置換・パージします。
+
+```bash
+# 1. 作業用のフレッシュな clone を作成
+git clone <repository-url> searxng-cleanup
+cd searxng-cleanup
+
+# 2. 置換ルールファイルを作成（リポジトリ外または一時ファイル）
+# フォーマット: 漏洩した実際の文字列==>置換後の文字列
+echo "漏洩した実際のキー文字列==>CHANGE_ME" > replace.txt
+
+# 3. 履歴全体を一括書き換え
+git-filter-repo --force --replace-text replace.txt
+
+# 4. 履歴から漏洩キーが消えたことを確認（検索結果が空であればOK）
+git log -S "漏洩した実際のキー文字列" --all
+
+# 5. リモートへ強制プッシュ
+git remote add origin <repository-url>
 git push --force --tags --all
 ```
 
-> ⚠️ force-push 後は、旧 SHA を保持している全 clone が `main` の upstream から分岐した状態になります。共同作業者は `git fetch origin && git reset --hard origin/main` で再同期する必要があります。
+> [!WARNING]
+> **共同作業者への周知**
+> 強制プッシュ（`git push --force`）を行うと、既存のコミットハッシュ（SHA）がすべて変更されます。リポジトリをクローンしている他のメンバーは、`git fetch origin && git reset --hard origin/main` などでローカル環境を再同期する必要があります。
