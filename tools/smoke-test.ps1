@@ -144,9 +144,12 @@ try {
     Write-Host "  [OK] Content extracted: $($scrapeGet.content.Length) chars" -ForegroundColor Green
     Write-Host ""
 
-    # Test 7-24: SSRF Protection
-    Write-Host "Test 7-24: SSRF Protection" -ForegroundColor Cyan
+    # Test 7-27: SSRF Protection
+    Write-Host "Test 7-27: SSRF Protection" -ForegroundColor Cyan
     Assert-Blocked -Uri "$base/scrape?url=http://127.0.0.1/" -Label "loopback IP (127.0.0.1)"
+    Assert-Blocked -Uri "$base/scrape?url=http://localhost/" -Label "bare reserved host (localhost)"
+    Assert-Blocked -Uri "$base/scrape?url=http://0.0.0.0/" -Label "unspecified address (0.0.0.0)"
+    Assert-Blocked -Uri "$base/scrape?url=http://169.254.169.254/" -Label "cloud metadata / link-local (169.254.169.254)"
     Assert-Blocked -Uri "$base/scrape?url=http://192.168.1.1/" -Label "private range (192.168.x.x)"
     Assert-Blocked -Uri "$base/scrape?url=http://127.0.0.1.nip.io/" -Label "hostname to localhost (nip.io)"
     Assert-Blocked -Uri "$base/scrape?url=http://[::1]/" -Label "IPv6 loopback (::1)"
@@ -166,8 +169,8 @@ try {
     Assert-Blocked -Uri "$base/scrape?url=data:text/html,test" -Label "data: scheme"
     Write-Host ""
 
-    # Test 25: Autocomplete endpoint
-    Write-Host "Test 25: Autocomplete endpoint..." -ForegroundColor Cyan
+    # Test 28: Autocomplete endpoint
+    Write-Host "Test 28: Autocomplete endpoint..." -ForegroundColor Cyan
     $acUri = "$base/autocompleter?q=python"
     $acResponse = Invoke-WebRequest -Uri $acUri -UseBasicParsing -ErrorAction Stop
     if ($acResponse.StatusCode -eq 200) {
@@ -177,29 +180,29 @@ try {
     }
     Write-Host ""
 
-    # Test 26: Scrape validation - missing, invalid-type, and malformed URL
-    Write-Host "Test 26: /scrape error handling (missing, invalid-type, malformed URL)..." -ForegroundColor Cyan
+    # Test 29: Scrape validation - missing, invalid-type, and malformed URL
+    Write-Host "Test 29: /scrape error handling (missing, invalid-type, malformed URL)..." -ForegroundColor Cyan
     Assert-HttpStatusCode -Uri "$base/scrape" -ExpectedStatusCode 400 -Label "Scrape missing URL"
     Assert-HttpStatusCode -Uri "$base/scrape" -Method Post -Body '{"url": 12345}' -ContentType "application/json" -ExpectedStatusCode 400 -Label "Scrape invalid URL type"
     Assert-HttpStatusCode -Uri "$base/scrape?url=http%3A%2F%2F%5B%3A%3A1" -ExpectedStatusCode 400 -Label "Scrape malformed URL"
     Assert-HttpStatusCode -Uri "$base/scrape?url=http://example.com:0/" -ExpectedStatusCode 400 -Label "Scrape port 0 blocked"
     Write-Host ""
 
-    # Test 27: json_lite with empty query (server should reject with 400 "No query")
-    Write-Host "Test 27: json_lite with empty query..." -ForegroundColor Cyan
+    # Test 30: json_lite with empty query (server should reject with 400 "No query")
+    Write-Host "Test 30: json_lite with empty query..." -ForegroundColor Cyan
     $emptyUri = "$base/search?q=&format=json_lite"
     Assert-HttpStatusCode -Uri $emptyUri -ExpectedStatusCode 400 -Label "json_lite rejects empty query"
     Write-Host ""
 
-    # Test 28: Healthcheck endpoint
-    Write-Host "Test 28: Healthcheck endpoint..." -ForegroundColor Cyan
+    # Test 31: Healthcheck endpoint
+    Write-Host "Test 31: Healthcheck endpoint..." -ForegroundColor Cyan
     $hcResponse = Invoke-WebRequest -Uri "$base/healthz" -UseBasicParsing -ErrorAction Stop
     Assert-In -Value $hcResponse.Content.Trim() -Allowed @("OK") -Label "Healthcheck body"
     Write-Host "  [OK] /healthz returned OK" -ForegroundColor Green
     Write-Host ""
 
-    # Test 29: Preferences page
-    Write-Host "Test 29: Preferences page..." -ForegroundColor Cyan
+    # Test 32: Preferences page
+    Write-Host "Test 32: Preferences page..." -ForegroundColor Cyan
     $prefResponse = Invoke-WebRequest -Uri "$base/preferences" -UseBasicParsing -ErrorAction Stop
     if ($prefResponse.StatusCode -eq 200 -and $prefResponse.Content -match 'id="pref-hash-input"') {
         Write-Host "  [OK] /preferences returned 200 with preferences input" -ForegroundColor Green

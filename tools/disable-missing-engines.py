@@ -193,30 +193,26 @@ def disable_engine_in_text(yaml_content, engine_name):
     return yaml_content
 
 
-def main():
-    if len(sys.argv) < 3:
-        print("Usage: disable-missing-engines.py <settings_path> <engines_dir>")
-        sys.exit(1)
+def process_file(settings_path, engines_dir):
+    """Check a settings YAML file and mark any missing engine modules as inactive.
 
-    settings_path = os.path.abspath(sys.argv[1])
-    engines_dir = os.path.abspath(sys.argv[2])
+    Returns True if the file was modified, False otherwise.
+    """
+    settings_path = os.path.abspath(settings_path)
+    engines_dir = os.path.abspath(engines_dir)
 
     if not os.path.exists(settings_path):
-        print(f"settings.yml not found at: {settings_path}")
-        sys.exit(0)
+        return False
 
     if not os.path.exists(engines_dir):
-        print(f"engines directory not found at: {engines_dir}")
-        sys.exit(1)
+        raise FileNotFoundError(f"Engines directory not found: {engines_dir}")
 
     with open(settings_path, 'r', encoding='utf-8') as f:
         yaml_content = f.read()
 
     engines = extract_engines(yaml_content)
-
     if not engines:
-        print("No engines defined in settings.yml.")
-        sys.exit(0)
+        return False
 
     missing_engines = []
     for engine_entry in engines:
@@ -235,13 +231,10 @@ def main():
                 and not os.path.exists(pkg_init)
                 and not engine_entry.get('inactive')
             ):
-                # If a module is missing, it must be removed rather than merely
-                # disabled: disabled engines are intentionally still loadable.
                 missing_engines.append((name, engine_mod))
 
     if not missing_engines:
-        print("No missing engines detected.")
-        sys.exit(0)
+        return False
 
     modified_content = yaml_content
     for name, engine_mod in missing_engines:
@@ -252,9 +245,32 @@ def main():
         # Write back updated content while preserving all formatting and comments
         with open(settings_path, 'w', encoding='utf-8', newline='\n') as f:
             f.write(modified_content)
-        print("settings.yml updated successfully (comments preserved).")
-    else:
-        print("No changes made to settings.yml.")
+        print(f"settings.yml updated successfully (comments preserved): {settings_path}")
+        return True
+
+    return False
+
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: disable-missing-engines.py <settings_path> <engines_dir>")
+        sys.exit(1)
+
+    settings_path = os.path.abspath(sys.argv[1])
+    engines_dir = os.path.abspath(sys.argv[2])
+
+    if not os.path.exists(settings_path):
+        print(f"settings.yml not found at: {settings_path}")
+        sys.exit(0)
+
+    if not os.path.exists(engines_dir):
+        print(f"engines directory not found at: {engines_dir}")
+        sys.exit(1)
+
+    changed = process_file(settings_path, engines_dir)
+    if not changed:
+        print("No missing engines detected.")
+    sys.exit(0)
 
 
 if __name__ == "__main__":

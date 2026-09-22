@@ -143,6 +143,7 @@ def patch_webutils(content, path):
         and "_get_box" in content
         and "d.get('engines')" in content
         and ("hasattr(pub, 'isoformat')" in content or "sq, rc" in content)
+        and ("ensure_ascii=False" in content or "def get_themes" not in content)
     ):
         return "ALREADY_APPLIED"
 
@@ -198,13 +199,13 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
                 'urls': urls,
             }
         data['infoboxes'] = [_get_box(i) for i in rc.infoboxes]
-    return json.dumps(data, cls=JSONEncoder)
+    return json.dumps(data, cls=JSONEncoder, ensure_ascii=False)
 '''
 
 
     # If old version exists, remove it first
     if "def get_json_lite_response" in content:
-        content = re.sub(r'(?s)\n+def get_json_lite_response.*?return json\.dumps\(data, cls=JSONEncoder\)\n+', "\n", content)
+        content = re.sub(r'(?s)\n+def get_json_lite_response.*?return json\.dumps\(data, cls=JSONEncoder.*?\)\n+', "\n", content)
 
     # Insert before get_themes while preserving a single blank-line boundary.
     # Match the line start optionally so the patch works whether get_themes is
@@ -369,6 +370,7 @@ def patch_webapp_scrape_route(content, path):
         "s6to4 = getattr(ip, 'sixtofour', None)",
         "max_duration=15.0",
         "Invalid port: 0",
+        "Port mismatch for pinned host",
     ]
     if (
         all(anchor in content for anchor in required_anchors)
@@ -499,6 +501,8 @@ def _safe_getaddrinfo(h, p, *args, **kwargs):
                     raise
                 except Exception as exc:
                     raise socket.gaierror(socket.EAI_NONAME, f'Resolution failed for pinned host {pin_host}: {exc}')
+            else:
+                raise socket.gaierror(socket.EAI_NONAME, f'Port mismatch for pinned host {pin_host}: {p} != {pin_port}')
     return _original_getaddrinfo(h, p, *args, **kwargs)
 
 socket.getaddrinfo = _safe_getaddrinfo
@@ -1200,41 +1204,24 @@ def main():
 
     # Ensure missing engines are marked inactive across all configuration files
     engines_dir = os.path.join(SITE_PACKAGES, "searx", "engines")
-    for cfg_file in (
-        os.path.join(REPO_ROOT, "config", "settings.yml.example"),
-        os.path.join(REPO_ROOT, "config", "settings.yml"),
-        os.path.join(SITE_PACKAGES, "searx", "settings.yml"),
-    ):
-        if os.path.exists(cfg_file) and os.path.exists(engines_dir):
-            try:
-                import importlib.util
-                spec = importlib.util.spec_from_file_location(
-                    "disable_missing_engines", os.path.join(REPO_ROOT, "tools", "disable-missing-engines.py")
-                )
-                if spec and spec.loader:
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
-                    with open(cfg_file, 'r', encoding='utf-8') as f:
-                        yaml_content = f.read()
-                    engines = mod.extract_engines(yaml_content)
-                    modified = yaml_content
-                    for engine_entry in (engines or []):
-                        name = engine_entry.get('name')
-                        if not name:
-                            continue
-                        engine_mod = engine_entry.get('engine', name)
-                        if engine_mod and re.match(r'^[a-z0-9_.-]+$', engine_mod):
-                            parts = engine_mod.split('.')
-                            mod_file = os.path.join(engines_dir, *parts) + ".py"
-                            pkg_init = os.path.join(engines_dir, *parts, "__init__.py")
-                            if not os.path.exists(mod_file) and not os.path.exists(pkg_init) and not engine_entry.get('inactive'):
-                                modified = mod.disable_engine_in_text(modified, name)
-                    if modified != yaml_content:
-                        with open(cfg_file, 'w', encoding='utf-8', newline='\n') as f:
-                            f.write(modified)
+    if os.path.exists(engines_dir):
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "disable_missing_engines", os.path.join(REPO_ROOT, "tools", "disable-missing-engines.py")
+            )
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                for cfg_file in (
+                    os.path.join(REPO_ROOT, "config", "settings.yml.example"),
+                    os.path.join(REPO_ROOT, "config", "settings.yml"),
+                    os.path.join(SITE_PACKAGES, "searx", "settings.yml"),
+                ):
+                    if os.path.exists(cfg_file) and mod.process_file(cfg_file, engines_dir):
                         logger.info(f"Marked missing engines inactive in {cfg_file}")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"Could not check missing engines in {cfg_file}: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Could not check missing engines: {exc}")
 
     logger.info("All patches processed.")
 

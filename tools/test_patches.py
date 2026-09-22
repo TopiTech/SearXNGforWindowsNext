@@ -99,6 +99,12 @@ class TestEnsureSecretKey(unittest.TestCase):
         secret_path, _, _ = self._make_paths(with_key="   \n")
         self.assertIsNone(self.fn._read_key(secret_path))
 
+    def test_read_key_strips_utf8_bom(self):
+        secret_path, _, _ = self._make_paths()
+        with open(secret_path, "wb") as f:
+            f.write(b"\xef\xbb\xbf" + ("b" * 64).encode("utf-8") + b"\n")
+        self.assertEqual(self.fn._read_key(secret_path), "b" * 64)
+
     def test_write_key_creates_file_with_key(self):
         secret_path, _, _ = self._make_paths()
         ok = self.fn._write_key(secret_path, "deadbeef" * 8)
@@ -151,6 +157,21 @@ class TestEnsureSecretKey(unittest.TestCase):
             self.fn._ensure_settings_file()
         with open(settings_path, "r", encoding="utf-8") as f:
             self.assertIn(sentinel, f.read())
+
+    def test_ensure_settings_file_reseeds_zero_byte_file(self):
+        _, settings_path, example_path = self._make_paths()
+        # Truncate settings.yml to 0 bytes
+        with open(settings_path, "w", encoding="utf-8") as f:
+            pass
+        self.assertEqual(os.path.getsize(settings_path), 0)
+        with (
+            mock.patch.object(self.fn, "SETTINGS_PATH", settings_path),
+            mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path),
+        ):
+            self.fn._ensure_settings_file()
+        self.assertGreater(os.path.getsize(settings_path), 0)
+        with open(settings_path, "r", encoding="utf-8") as f:
+            self.assertIn("ultrasecretkey", f.read())
 
     def test_main_reuses_existing_valid_key(self):
         secret_path, settings_path, example_path = self._make_paths(
@@ -319,6 +340,12 @@ class TestPatchWebUtils(unittest.TestCase):
         result = self.fn(content, "webutils.py")
         self.assertIn("d.get('engines')", result)
         self.assertIn("', '.join(sorted(d.get('engines', [])))", result)
+
+    def test_json_lite_ensure_ascii_false(self):
+        content = "def get_themes(p):\n    return []\n"
+        result = self.fn(content, "webutils.py")
+        self.assertIn("json.dumps(data, cls=JSONEncoder, ensure_ascii=False)", result)
+
 
 
 class TestPatchWebUtilsWindowsPaths(unittest.TestCase):
@@ -540,6 +567,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "s6to4 = getattr(ip, 'sixtofour', None)\n"
             "max_duration=15.0\n"
             "Invalid port: 0\n"
+            "Port mismatch for pinned host\n"
         )
         self.assertEqual(self.fn(content, "webapp.py"), "ALREADY_APPLIED")
 
@@ -572,6 +600,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertNotIn("import idna\n                        enc_h", res)
         # R4 regression: DNS pinning family isolation, mixed record check, and reserved TLDs
         self.assertIn("Address family not supported for pinned host", res)
+        self.assertIn("Port mismatch for pinned host", res)
         self.assertIn("_RESERVED_TLDS", res)
         self.assertIn("resolves to a private/reserved IP", res)
         self.assertIn("html.unescape", res)
@@ -925,8 +954,10 @@ class TestDisableMissingEngines(unittest.TestCase):
         with (
             mock.patch.object(self.mod, "yaml", None),
             mock.patch.object(sys, "argv", ["disable-missing-engines.py", settings_file, engines_dir]),
+            self.assertRaises(SystemExit) as cm,
         ):
             self.mod.main()
+        self.assertEqual(cm.exception.code, 0)
 
         with open(settings_file, "r", encoding="utf-8") as f:
             updated = f.read()
@@ -934,6 +965,19 @@ class TestDisableMissingEngines(unittest.TestCase):
         self.assertIn("inactive: true", updated)
         self.assertIn("- name: removed\n    engine: removed\n    inactive: true", updated)
         self.assertNotIn("inactive: true\n  - name: google", updated)
+
+    def test_process_file_disables_missing_engine(self):
+        settings_file = os.path.join(self._tmpdir, "settings_pf.yml")
+        engines_dir = os.path.join(self._tmpdir, "engines_pf")
+        os.makedirs(engines_dir, exist_ok=True)
+        with open(settings_file, "w", encoding="utf-8") as f:
+            f.write("engines:\n  - name: ghost\n    engine: ghost\n")
+        changed = self.mod.process_file(settings_file, engines_dir)
+        self.assertTrue(changed)
+        with open(settings_file, "r", encoding="utf-8") as f:
+            self.assertIn("inactive: true", f.read())
+        # Second call is idempotent and returns False
+        self.assertFalse(self.mod.process_file(settings_file, engines_dir))
 
     def test_package_engine_not_disabled(self):
         # Engines structured as packages (engines/<name>/__init__.py) must be recognized as present.
@@ -1556,6 +1600,49 @@ class TestHardeningEnhancements(unittest.TestCase):
             test_safe_getaddrinfo('example.com', 443)
         self.assertIn("Resolution failed for pinned host example.com", str(ctx.exception))
         # Ensure zero live DNS requests were made
+        self.assertEqual(len(live_calls), 0)
+
+    def test_safe_getaddrinfo_port_mismatch_raises_gaierror(self):
+        """When host is pinned to a specific port, querying a mismatched port raises gaierror without live DNS leak."""
+        import socket
+        import threading
+
+        thread_local = threading.local()
+        thread_local.pin = {'host': 'example.com', 'ip': '93.184.216.34', 'port': 443}
+
+        live_calls = []
+
+        def mock_original_gai(h, p, *args, **kwargs):
+            live_calls.append((h, p))
+            return [('live_dns', h, p)]
+
+        def test_safe_getaddrinfo(h, p, *args, **kwargs):
+            pin = getattr(thread_local, 'pin', None)
+            if pin:
+                pin_host = pin.get('host')
+                host_matches = False
+                if pin_host:
+                    h_clean = (h or '').strip('[]').rstrip('.').lower()
+                    pin_clean = pin_host.strip('[]').rstrip('.').lower()
+                    host_matches = (h_clean == pin_clean)
+                if host_matches:
+                    pin_port = pin.get('port')
+                    port_matches = (
+                        p is None
+                        or p == pin_port
+                        or str(p) == str(pin_port)
+                        or (pin_port == 443 and p == 'https')
+                        or (pin_port == 80 and p == 'http')
+                    )
+                    if port_matches:
+                        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', (pin['ip'], int(pin_port)))]
+                    else:
+                        raise socket.gaierror(socket.EAI_NONAME, f'Port mismatch for pinned host {pin_host}: {p} != {pin_port}')
+            return mock_original_gai(h, p, *args, **kwargs)
+
+        with self.assertRaises(socket.gaierror) as ctx:
+            test_safe_getaddrinfo('example.com', 8080)
+        self.assertIn("Port mismatch for pinned host example.com", str(ctx.exception))
         self.assertEqual(len(live_calls), 0)
 
     def test_parse_retry_after_http_date(self):

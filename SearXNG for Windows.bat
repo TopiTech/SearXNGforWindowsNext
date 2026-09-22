@@ -35,17 +35,18 @@ REM The real key never lives in any tracked file, so rotating it produces
 REM no git diff.
 echo Checking security settings...
 set "SEARXNG_SECRET="
-for /f "delims=" %%K in ('"".\python\python.exe" "tools\ensure-secret-key.py""') do %%K
+for /f "tokens=1* delims==" %%A in ('"".\python\python.exe" "tools\ensure-secret-key.py""') do (
+  if "%%A"=="set SEARXNG_SECRET" set "SEARXNG_SECRET=%%B"
+)
 if not defined SEARXNG_SECRET (
   echo [ERROR] Failed to obtain or generate SEARXNG_SECRET.
   pause
   exit /b 1
 )
 REM Validate the secret key format: must be a 64-character hex string.
-REM This is a defense-in-depth check to prevent command injection if the
-REM Python script output is ever compromised.
-REM Use PowerShell for reliable regex validation (findstr has regex length limits).
-powershell -NoProfile -Command "$v = $env:SEARXNG_SECRET; if ($v -notmatch '^[0-9a-fA-F]{64}$') { exit 1 }"
+REM This is a defense-in-depth check to prevent malformed or invalid keys
+REM from being passed to the runtime.
+powershell -NoProfile -Command "if ($env:SEARXNG_SECRET -notmatch '^[0-9a-fA-F]{64}$') { exit 1 }"
 if errorlevel 1 (
   echo [ERROR] SEARXNG_SECRET format validation failed. Key must be a 64-char hex string.
   pause

@@ -58,7 +58,7 @@ _SAFE_KEY_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 def _read_key(path: str) -> str | None:
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             value = f.read().strip()
     except FileNotFoundError:
         return None
@@ -100,7 +100,7 @@ def _write_key(path: str, key: str) -> bool:
 
 
 def _ensure_settings_file() -> None:
-    """Seed config/settings.yml from the tracked example if it is missing.
+    """Seed config/settings.yml from the tracked example if it is missing or empty.
 
     Existing users keep their customised ``settings.yml`` untouched. Fresh
     checkouts get a working default so the launcher can start without manual
@@ -108,7 +108,16 @@ def _ensure_settings_file() -> None:
     without affecting the repository.
     """
     if os.path.exists(SETTINGS_PATH):
-        return
+        try:
+            if os.path.getsize(SETTINGS_PATH) > 0:
+                return
+            print(
+                f"[WARN] {SETTINGS_PATH} exists but is empty (0 bytes). Re-seeding from {SETTINGS_EXAMPLE_PATH}...",
+                file=sys.stderr,
+            )
+        except OSError:
+            pass
+
     if not os.path.exists(SETTINGS_EXAMPLE_PATH):
         print(
             f"[ERROR] Neither {SETTINGS_PATH} nor {SETTINGS_EXAMPLE_PATH} "
@@ -120,12 +129,15 @@ def _ensure_settings_file() -> None:
         os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(SETTINGS_EXAMPLE_PATH, "r", encoding="utf-8") as src:
             content = src.read()
-        with open(SETTINGS_PATH, "w", encoding="utf-8", newline="\n") as dst:
+        tmp_settings = f"{SETTINGS_PATH}.tmp"
+        with open(tmp_settings, "w", encoding="utf-8", newline="\n") as dst:
             dst.write(content)
+        os.replace(tmp_settings, SETTINGS_PATH)
     except OSError as exc:
         print(f"[ERROR] Could not seed {SETTINGS_PATH}: {exc}", file=sys.stderr)
         sys.exit(1)
     print(f"[INFO] Seeded {SETTINGS_PATH} from settings.yml.example", file=sys.stderr)
+
 
 def _generate_key() -> str:
     # 32 bytes == 64 hex chars == 256 bits of entropy. SearXNG itself uses
