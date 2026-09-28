@@ -144,6 +144,7 @@ def patch_webutils(content, path):
         and "_format_source" in content
         and ("hasattr(pub, 'isoformat')" in content or "sq, rc" in content)
         and ("ensure_ascii=False" in content or "def get_themes" not in content)
+        and "d.get('title') or ''" in content
     ):
         return "ALREADY_APPLIED"
 
@@ -169,27 +170,27 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
         if hasattr(pub, 'isoformat'):
             pub = pub.isoformat()
         return {
-            'title': d.get('title', ''),
-            'url': d.get('url', ''),
-            'content': d.get('content', ''),
+            'title': d.get('title') or '',
+            'url': d.get('url') or '',
+            'content': d.get('content') or '',
             'source': _format_source(d),
-            'score': d.get('score', 0),
+            'score': d.get('score', 0) if d.get('score') is not None else 0,
             'published_date': pub,
-            'author': d.get('author', ''),
-            'category': d.get('category', ''),
+            'author': d.get('author') or '',
+            'category': d.get('category') or '',
         }
     data = {
         'query': sq.query,
         'results': [_r(r) for r in rc.get_ordered_results()[:20]],
-        'suggestions': list(rc.suggestions),
-        'corrections': list(rc.corrections),
+        'suggestions': list(rc.suggestions or ()),
+        'corrections': list(rc.corrections or ()),
     }
     if rc.answers:
         def _get_ans(a):
             if hasattr(a, 'as_dict'):
-                return a.as_dict().get('answer', '')
+                return a.as_dict().get('answer') or ''
             if isinstance(a, dict):
-                return a.get('answer', '')
+                return a.get('answer') or ''
             return str(a)
         data['answers'] = [_get_ans(a) for a in rc.answers]
     if rc.infoboxes:
@@ -201,12 +202,12 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
                 if isinstance(u, str):
                     urls.append({'title': '', 'url': u})
                 elif isinstance(u, dict):
-                    urls.append({'title': u.get('title', ''), 'url': u.get('url', '')})
+                    urls.append({'title': u.get('title') or '', 'url': u.get('url') or ''})
                 else:
-                    urls.append({'title': getattr(u, 'title', ''), 'url': getattr(u, 'url', '')})
+                    urls.append({'title': getattr(u, 'title', '') or '', 'url': getattr(u, 'url', '') or ''})
             return {
-                'infobox': d.get('infobox', '') if isinstance(d, dict) else getattr(i, 'infobox', ''),
-                'content': d.get('content', '') if isinstance(d, dict) else getattr(i, 'content', ''),
+                'infobox': (d.get('infobox') if isinstance(d, dict) else getattr(i, 'infobox', '')) or '',
+                'content': (d.get('content') if isinstance(d, dict) else getattr(i, 'content', '')) or '',
                 'urls': urls,
             }
         data['infoboxes'] = [_get_box(i) for i in rc.infoboxes]
@@ -367,9 +368,12 @@ def patch_webapp_scrape_route(content, path):
         "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')", # default should be true
         "max_keepalive_connections=20",
         "_searxng_original_getaddrinfo",
-        "v16-bulletproof-scrape-fix",
+        "v17-bulletproof-scrape-fix",
         ".localdomain",
+        ".arpa",
         "(?si)<script",
+        "(?si)<iframe",
+        "SEARXNG_SCRAPE_MAX_DURATION",
         "import urllib",
         "import re",
         "import html",
@@ -440,6 +444,13 @@ _SCRAPE_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
 
 def _read_scrape_response(response, max_duration=15.0):
+    try:
+        env_dur = float(os.environ.get('SEARXNG_SCRAPE_MAX_DURATION', max_duration))
+        if env_dur > 0:
+            max_duration = env_dur
+    except (ValueError, TypeError):
+        pass
+
     content_length = response.headers.get('content-length')
     if content_length:
         cl_str = content_length.strip()
@@ -479,7 +490,14 @@ def _safe_getaddrinfo(h, p, *args, **kwargs):
         pin_host = pin.get('host')
         host_matches = False
         if pin_host:
-            h_clean = (h or '').strip('[]').rstrip('.').lower()
+            if isinstance(h, (bytes, bytearray)):
+                try:
+                    h_str = h.decode('ascii')
+                except UnicodeDecodeError:
+                    h_str = h.decode('utf-8', errors='replace')
+            else:
+                h_str = h or ''
+            h_clean = h_str.strip('[]').rstrip('.').lower()
             pin_clean = pin_host.strip('[]').rstrip('.').lower()
             if h_clean == pin_clean:
                 host_matches = True
@@ -493,17 +511,24 @@ def _safe_getaddrinfo(h, p, *args, **kwargs):
 
         if host_matches:
             pin_port = pin.get('port')
+            if isinstance(p, (bytes, bytearray)):
+                try:
+                    p_str = p.decode('ascii', errors='replace')
+                except Exception:
+                    p_str = str(p)
+            else:
+                p_str = p
             port_matches = (
-                p is None
-                or p == pin_port
-                or str(p) == str(pin_port)
-                or (pin_port == 443 and p == 'https')
-                or (pin_port == 80 and p == 'http')
+                p_str is None
+                or p_str == pin_port
+                or str(p_str) == str(pin_port)
+                or (pin_port == 443 and p_str == 'https')
+                or (pin_port == 80 and p_str == 'http')
             )
             if port_matches:
                 try:
                     ip_obj = ipaddress.ip_address(pin['ip'])
-                    port_num = int(pin_port or (443 if p in (443, 'https') else 80))
+                    port_num = int(pin_port or (443 if p_str in (443, 'https') else 80))
                     req_family = args[0] if len(args) > 0 else kwargs.get('family', 0)
                     ip_family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
                     if req_family in (0, ip_family):
@@ -538,11 +563,16 @@ def pinned_dns(host, ip, port):
 _RESERVED_TLDS = (
     '.localhost', '.local', '.internal', '.lan', '.home.arpa',
     '.invalid', '.test', '.example', '.onion', '.corp', '.home',
-    '.localdomain', '.intranet', '.private',
+    '.localdomain', '.intranet', '.private', '.arpa',
 )
 
 
 def _is_reserved_scrape_host(host):
+    if isinstance(host, (bytes, bytearray)):
+        try:
+            host = host.decode('ascii')
+        except UnicodeDecodeError:
+            host = host.decode('utf-8', errors='replace')
     h = (host or '').strip().rstrip('.').lower()
     if not h or h == 'localhost':
         return True
@@ -582,6 +612,11 @@ def _is_ip_blocked(ip):
 
 
 def _is_blocked_scrape_host(host):
+    if isinstance(host, (bytes, bytearray)):
+        try:
+            host = host.decode('ascii')
+        except UnicodeDecodeError:
+            host = host.decode('utf-8', errors='replace')
     host_clean = (host or '').strip().rstrip('.').lower()
     if _is_reserved_scrape_host(host_clean):
         return True
@@ -605,7 +640,7 @@ def _is_blocked_scrape_host(host):
 @app.route('/scrape', methods=['GET', 'POST'])
 def scrape():
     """Extract main text content from URL (GenAI friendly, SSRF-protected).
-    # v16-bulletproof-scrape-fix
+    # v17-bulletproof-scrape-fix
 
     SECURITY: Blocks loopback, private/reserved IP ranges, link-local, and
     file:// scheme to prevent SSRF attacks and internal resource exposure.
@@ -709,7 +744,7 @@ def scrape():
         current_url = request_url
         for _ in range(5):
             cur_parsed = _parse_scrape_url(current_url)
-            if cur_parsed.scheme not in ('http', 'https'):
+            if (cur_parsed.scheme or '').lower() not in ('http', 'https'):
                 raise _ScrapeBlockedError(f'Blocked invalid scheme during redirect: {cur_parsed.scheme}')
 
             safe_ip, original_host, port = _get_safe_ip_url(current_url)
@@ -745,9 +780,12 @@ def scrape():
         )
         if not content_text and downloaded:
             # Fallback to basic HTML text extraction if trafilatura returns None/empty
-            raw_text = re.sub(r'(?si)<script.*?>.*?</script>', ' ', downloaded)
+            raw_text = re.sub(r'(?si)<!--.*?-->', ' ', downloaded)
+            raw_text = re.sub(r'(?si)<script.*?>.*?</script>', ' ', raw_text)
             raw_text = re.sub(r'(?si)<style.*?>.*?</style>', ' ', raw_text)
             raw_text = re.sub(r'(?si)<noscript.*?>.*?</noscript>', ' ', raw_text)
+            raw_text = re.sub(r'(?si)<iframe.*?>.*?</iframe>', ' ', raw_text)
+            raw_text = re.sub(r'(?si)<template.*?>.*?</template>', ' ', raw_text)
             raw_text = re.sub(r'<[^>]+>', ' ', raw_text)
             raw_text = html.unescape(raw_text)
             raw_text = re.sub(r'\\s+', ' ', raw_text).strip()
@@ -1100,14 +1138,19 @@ def patch_raise_for_httperror(content, path):
 
 # --- Patch 12: settings.yml / settings_defaults.py (reduce suspended_times) ---
 def patch_settings_yml(content, path):
-    if "SearxEngineCaptcha: 900" in content:
+    if "SearxEngineCaptcha: 900" in content and (
+        "cf_SearxEngineAccessDenied" not in content or "cf_SearxEngineAccessDenied: 1800" in content
+    ):
         return "ALREADY_APPLIED"
-    content = re.sub(r'SearxEngineCaptcha:\s*\d+', 'SearxEngineCaptcha: 900', content)
-    content = re.sub(r'SearxEngineAccessDenied:\s*\d+', 'SearxEngineAccessDenied: 900', content)
-    content = re.sub(r'SearxEngineTooManyRequests:\s*\d+', 'SearxEngineTooManyRequests: 600', content)
-    content = re.sub(r'cf_SearxEngineCaptcha:\s*\d+', 'cf_SearxEngineCaptcha: 3600', content)
-    content = re.sub(r'recaptcha_SearxEngineCaptcha:\s*\d+', 'recaptcha_SearxEngineCaptcha: 3600', content)
-    return content
+    patched = re.sub(r'SearxEngineCaptcha:\s*\d+', 'SearxEngineCaptcha: 900', content)
+    patched = re.sub(r'SearxEngineAccessDenied:\s*\d+', 'SearxEngineAccessDenied: 900', patched)
+    patched = re.sub(r'SearxEngineTooManyRequests:\s*\d+', 'SearxEngineTooManyRequests: 600', patched)
+    patched = re.sub(r'cf_SearxEngineCaptcha:\s*\d+', 'cf_SearxEngineCaptcha: 3600', patched)
+    patched = re.sub(r'cf_SearxEngineAccessDenied:\s*\d+', 'cf_SearxEngineAccessDenied: 1800', patched)
+    patched = re.sub(r'recaptcha_SearxEngineCaptcha:\s*\d+', 'recaptcha_SearxEngineCaptcha: 3600', patched)
+    if patched == content:
+        return "ALREADY_APPLIED"
+    return patched
 
 def patch_config_settings_yml(content, path):
     if "SearxEngineCaptcha: 900" in content:

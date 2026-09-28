@@ -1,6 +1,6 @@
 @echo off
 SETLOCAL
-SET PY=%~dp0..\python\python.exe
+set "PY=%~dp0..\python\python.exe"
 IF NOT EXIST "%PY%" (
   echo Embedded python not found at %PY%
   exit /b 1

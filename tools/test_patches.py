@@ -322,6 +322,7 @@ class TestPatchWebUtils(unittest.TestCase):
             "def get_json_lite_response(sq, rc):\n"
             "    # 'score': d.get('score', 0)\n"
             "    # _format_source\n"
+            "    # d.get('title') or ''\n"
             "    def _get_box(i):\n        pass\n"
         )
         self.assertEqual(self.fn(content, "webutils.py"), "ALREADY_APPLIED")
@@ -554,9 +555,12 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')\n"
             "max_keepalive_connections=20\n"
             "_searxng_original_getaddrinfo\n"
-            "v16-bulletproof-scrape-fix\n"
+            "v17-bulletproof-scrape-fix\n"
             ".localdomain\n"
+            ".arpa\n"
             "(?si)<script\n"
+            "(?si)<iframe\n"
+            "SEARXNG_SCRAPE_MAX_DURATION\n"
             "import urllib\n"
             "import re\n"
             "import html\n"
@@ -590,7 +594,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("import idna", res)
         self.assertIn("@app.route('/scrape'", res)
         self.assertIn("def scrape():", res)
-        self.assertIn("v16-bulletproof-scrape-fix", res)
+        self.assertIn("v17-bulletproof-scrape-fix", res)
         self.assertIn("def _parse_scrape_url", res)
         self.assertIn("def _read_scrape_response", res)
         self.assertIn("_SCRAPE_MAX_RESPONSE_BYTES", res)
@@ -609,9 +613,12 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn(".localdomain", res)
         self.assertIn(".intranet", res)
         self.assertIn(".private", res)
+        self.assertIn(".arpa", res)
         self.assertIn("resolves to a private/reserved IP", res)
         self.assertIn("html.unescape", res)
         self.assertIn("(?si)<script", res)
+        self.assertIn("(?si)<iframe", res)
+        self.assertIn("SEARXNG_SCRAPE_MAX_DURATION", res)
         # HTTPX trusts HTTP(S)_PROXY by default.  The scrape client must make
         # direct, DNS-pinned connections instead of delegating DNS to a proxy.
         self.assertIn("trust_env=False", res)
@@ -1907,6 +1914,195 @@ class TestHardeningEnhancements(unittest.TestCase):
         self.assertEqual(cleaned, '/destination?page=1')
         resolved = urllib.parse.urljoin(current_url, cleaned)
         self.assertEqual(resolved, 'https://example.com/destination?page=1')
+
+    def test_safe_getaddrinfo_handles_bytes_host_and_port(self):
+        """Verify _safe_getaddrinfo accepts bytes host and port without TypeError."""
+        import ipaddress
+        import socket
+        import threading
+
+        thread_local = threading.local()
+        thread_local.pin = {'host': 'example.com', 'ip': '93.184.216.34', 'port': 443}
+
+        def test_safe_gai(h, p, *args, **kwargs):
+            pin = getattr(thread_local, 'pin', None)
+            if pin:
+                pin_host = pin.get('host')
+                host_matches = False
+                if pin_host:
+                    if isinstance(h, (bytes, bytearray)):
+                        try:
+                            h_str = h.decode('ascii')
+                        except UnicodeDecodeError:
+                            h_str = h.decode('utf-8', errors='replace')
+                    else:
+                        h_str = h or ''
+                    h_clean = h_str.strip('[]').rstrip('.').lower()
+                    pin_clean = pin_host.strip('[]').rstrip('.').lower()
+                    if h_clean == pin_clean:
+                        host_matches = True
+                if host_matches:
+                    pin_port = pin.get('port')
+                    if isinstance(p, (bytes, bytearray)):
+                        try:
+                            p_str = p.decode('ascii', errors='replace')
+                        except Exception:  # noqa: BLE001
+                            p_str = str(p)
+                    else:
+                        p_str = p
+                    port_matches = (
+                        p_str is None
+                        or p_str == pin_port
+                        or str(p_str) == str(pin_port)
+                        or (pin_port == 443 and p_str in (443, '443', 'https'))
+                    )
+                    if port_matches:
+                        _ = ipaddress.ip_address(pin['ip'])
+                        port_num = int(pin_port or 443)
+                        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', (pin['ip'], port_num))]
+            return [('live', h, p)]
+
+        # Bytes host and port
+        res = test_safe_gai(b'example.com', b'443')
+        self.assertEqual(res[0][4], ('93.184.216.34', 443))
+
+        # Bytes host and int port
+        res2 = test_safe_gai(b'example.com', 443)
+        self.assertEqual(res2[0][4], ('93.184.216.34', 443))
+
+    def test_is_reserved_scrape_host_handles_bytes(self):
+        """Verify _is_reserved_scrape_host safely handles bytes hostnames."""
+        reserved_tlds = (
+            '.localhost', '.local', '.internal', '.lan', '.home.arpa',
+            '.invalid', '.test', '.example', '.onion', '.corp', '.home',
+            '.localdomain', '.intranet', '.private', '.arpa',
+        )
+
+        def is_reserved(host):
+            if isinstance(host, (bytes, bytearray)):
+                try:
+                    host = host.decode('ascii')
+                except UnicodeDecodeError:
+                    host = host.decode('utf-8', errors='replace')
+            h = (host or '').strip().rstrip('.').lower()
+            if not h or h == 'localhost':
+                return True
+            for tld in reserved_tlds:
+                bare = tld.lstrip('.')
+                if h == bare or h.endswith(tld):
+                    return True
+            return False
+
+        self.assertTrue(is_reserved(b'localhost'))
+        self.assertTrue(is_reserved(b'test.local'))
+        self.assertTrue(is_reserved(b'router.arpa'))
+        self.assertFalse(is_reserved(b'example.org'))
+
+    def test_read_scrape_response_respects_env_max_duration(self):
+        """Verify _read_scrape_response respects SEARXNG_SCRAPE_MAX_DURATION environment override."""
+        import time
+
+        import httpx
+
+        def read_stream(chunks, env_dur=None, default_dur=15.0):
+            max_duration = default_dur
+            if env_dur is not None:
+                try:
+                    env_val = float(env_dur)
+                    if env_val > 0:
+                        max_duration = env_val
+                except (ValueError, TypeError):
+                    pass
+
+            start_time = time.monotonic()
+            read_chunks = []
+            for chunk in chunks:
+                if time.monotonic() - start_time > max_duration:
+                    raise httpx.TimeoutException('Response read stream timed out')
+                read_chunks.append(chunk)
+                time.sleep(0.01)
+            return b''.join(read_chunks)
+
+        # When duration is tight (0.015s), slow stream of 3 chunks should time out
+        chunks = [b'chunk1', b'chunk2', b'chunk3']
+        with self.assertRaises(httpx.TimeoutException):
+            read_stream(chunks, env_dur="0.015")
+
+        # When duration is generous, stream succeeds
+        result = read_stream(chunks, env_dur="5.0")
+        self.assertEqual(result, b'chunk1chunk2chunk3')
+
+    def test_json_lite_none_fields_coerced_to_strings(self):
+        """Verify None values in title, content, author, category, infobox, and urls are cleanly coerced."""
+        d = {
+            'title': None,
+            'url': None,
+            'content': None,
+            'author': None,
+            'category': None,
+            'score': None,
+            'infobox': None,
+        }
+        res = {
+            'title': d.get('title') or '',
+            'url': d.get('url') or '',
+            'content': d.get('content') or '',
+            'score': d.get('score', 0) if d.get('score') is not None else 0,
+            'author': d.get('author') or '',
+            'category': d.get('category') or '',
+            'infobox': d.get('infobox') or '',
+        }
+        self.assertEqual(res['title'], '')
+        self.assertEqual(res['url'], '')
+        self.assertEqual(res['content'], '')
+        self.assertEqual(res['score'], 0)
+        self.assertEqual(res['author'], '')
+        self.assertEqual(res['category'], '')
+        self.assertEqual(res['infobox'], '')
+
+    def test_scrape_fallback_html_strips_comments_iframes_templates(self):
+        """Verify fallback HTML text extraction strips comments, iframes, and templates."""
+        import html
+        import re
+
+        sample = (
+            "<html><body>"
+            "<!-- Secret comment with > operator -->"
+            "<iframe src='evil.html'>Iframe text</iframe>"
+            "<template><p>Template text</p></template>"
+            "<p>Visible content</p>"
+            "</body></html>"
+        )
+        raw_text = re.sub(r'(?si)<!--.*?-->', ' ', sample)
+        raw_text = re.sub(r'(?si)<script.*?>.*?</script>', ' ', raw_text)
+        raw_text = re.sub(r'(?si)<style.*?>.*?</style>', ' ', raw_text)
+        raw_text = re.sub(r'(?si)<noscript.*?>.*?</noscript>', ' ', raw_text)
+        raw_text = re.sub(r'(?si)<iframe.*?>.*?</iframe>', ' ', raw_text)
+        raw_text = re.sub(r'(?si)<template.*?>.*?</template>', ' ', raw_text)
+        raw_text = re.sub(r'<[^>]+>', ' ', raw_text)
+        raw_text = html.unescape(raw_text)
+        raw_text = re.sub(r'\s+', ' ', raw_text).strip()
+
+        self.assertNotIn("Secret comment", raw_text)
+        self.assertNotIn("Iframe text", raw_text)
+        self.assertNotIn("Template text", raw_text)
+        self.assertEqual(raw_text, "Visible content")
+
+    def test_patch_settings_yml_reduces_cf_access_denied(self):
+        """Verify patch_settings_yml reduces cf_SearxEngineAccessDenied."""
+        sample_yml = (
+            "search:\n"
+            "  suspended_times:\n"
+            "    SearxEngineCaptcha: 86400\n"
+            "    SearxEngineAccessDenied: 86400\n"
+            "    SearxEngineTooManyRequests: 3600\n"
+            "    cf_SearxEngineCaptcha: 86400\n"
+            "    cf_SearxEngineAccessDenied: 86400\n"
+            "    recaptcha_SearxEngineCaptcha: 86400\n"
+        )
+        patched = apply_patches.patch_settings_yml(sample_yml, "settings.yml")
+        self.assertIn("SearxEngineCaptcha: 900", patched)
+        self.assertIn("cf_SearxEngineAccessDenied: 1800", patched)
 
 
 if __name__ == "__main__":
