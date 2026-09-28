@@ -238,13 +238,6 @@ categories_as_tabs:
 
 engines:
   # Engines enabled by default. Edit config/settings.yml to enable more.
-  - name: baidu
-    baidu_category: general
-    categories: [general]
-    engine: baidu
-    shortcut: bd
-    disabled: false
-
   - name: bing
     engine: bing
     shortcut: bi
@@ -265,9 +258,37 @@ engines:
     shortcut: biv
     disabled: false
 
-  - name: duckduckgo
-    engine: duckduckgo
-    shortcut: ddg
+  - name: brave
+    engine: brave
+    shortcut: br
+    time_range_support: true
+    paging: true
+    categories: [general, web]
+    brave_category: search
+    disabled: false
+
+  - name: brave.images
+    engine: brave
+    network: brave
+    shortcut: brimg
+    categories: [images, web]
+    brave_category: images
+    disabled: false
+
+  - name: brave.videos
+    engine: brave
+    network: brave
+    shortcut: brvid
+    categories: [videos, web]
+    brave_category: videos
+    disabled: false
+
+  - name: brave.news
+    engine: brave
+    network: brave
+    shortcut: brnews
+    categories: news
+    brave_category: news
     disabled: false
 
   - name: google
@@ -282,30 +303,56 @@ engines:
     categories: [general, web]
     disabled: false
 
-  - name: sogou
-    engine: sogou
-    shortcut: sogou
+  - name: yahoo
+    engine: yahoo
+    shortcut: yh
+    categories: [general, web]
     disabled: false
 
-  - name: sogou images
-    engine: sogou_images
-    shortcut: sogoui
-    disabled: false
-
-  - name: sogou videos
-    engine: sogou_videos
-    shortcut: sogouv
-    disabled: false
-
-  - name: sogou wechat
-    engine: sogou_wechat
-    shortcut: sogouw
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    display_type: ["infobox", "list"]
+    categories: [general]
     disabled: false
 
   - name: soundcloud
     engine: soundcloud
     shortcut: sc
     disabled: false
+
+  # Engines disabled due to persistent CAPTCHA / anti-bot blocking
+  - name: baidu
+    baidu_category: general
+    categories: [general]
+    engine: baidu
+    shortcut: bd
+    disabled: true
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: true
+
+  - name: sogou
+    engine: sogou
+    shortcut: sogou
+    disabled: true
+
+  - name: sogou images
+    engine: sogou_images
+    shortcut: sogoui
+    disabled: true
+
+  - name: sogou videos
+    engine: sogou_videos
+    shortcut: sogouv
+    disabled: true
+
+  - name: sogou wechat
+    engine: sogou_wechat
+    shortcut: sogouw
+    disabled: true
 
 doi_resolvers:
   oadoi.org: 'https://oadoi.org/'
