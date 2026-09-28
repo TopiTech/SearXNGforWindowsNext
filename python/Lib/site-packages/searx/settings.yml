@@ -946,6 +946,35 @@ engines:
     shortcut: fd
     disabled: true
 
+  - name: findborg
+    engine: findborg
+    shortcut: fi
+    findborg_categ: search
+    categories: general
+    inactive: true
+
+  - name: findborg images
+    engine: findborg
+    shortcut: fii
+    paging: false
+    findborg_categ: images
+    categories: images
+    inactive: true
+
+  - name: findborg videos
+    engine: findborg
+    shortcut: fiv
+    findborg_categ: videos
+    categories: videos
+    inactive: true
+
+  - name: findborg news
+    engine: findborg
+    shortcut: fin
+    findborg_categ: news
+    categories: news
+    inactive: true
+
   - name: findfiles
     engine: findfiles
     findfiles_categ: all
@@ -1291,6 +1320,11 @@ engines:
       use_official_api: false
       require_api_key: false
       results: JSON
+
+  - name: iconify
+    engine: iconify
+    shortcut: ico
+    disabled: true
 
   - name: iseek
     engine: iseek
@@ -3196,6 +3230,28 @@ engines:
       website: https://xonaly.com
       description: "Canadian search engine with its own index"
       results: HTML
+
+  - name: xprivo
+    engine: xprivo
+    shortcut: xpr
+    disabled: true
+    inactive: true
+
+  - name: xprivo news
+    engine: xprivo
+    categories: news
+    xprivo_search_type: news
+    shortcut: xprn
+    disabled: true
+    inactive: true
+
+  - name: xprivo videos
+    engine: xprivo
+    categories: videos
+    xprivo_search_type: videos
+    shortcut: xprv
+    disabled: true
+    inactive: true
 
   - name: zapmeta
     engine: xpath
