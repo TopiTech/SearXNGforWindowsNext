@@ -244,8 +244,12 @@ try {
         Copy-Item -LiteralPath (Join-Path $tempRoot "requirements-server.txt") `
             (Join-Path $repoRoot "config\requirements-server.upstream.txt") -Force
     }
-    Copy-Item -LiteralPath (Join-Path $tempRoot "setup.py") (Join-Path $repoRoot "config\setup.upstream.py") -Force
-    Copy-Item -LiteralPath (Join-Path $tempRoot "README.rst") (Join-Path $repoRoot "config\README.upstream.rst") -Force
+    if (Test-Path -LiteralPath (Join-Path $tempRoot "setup.py")) {
+        Copy-Item -LiteralPath (Join-Path $tempRoot "setup.py") (Join-Path $repoRoot "config\setup.upstream.py") -Force
+    }
+    if (Test-Path -LiteralPath (Join-Path $tempRoot "README.rst")) {
+        Copy-Item -LiteralPath (Join-Path $tempRoot "README.rst") (Join-Path $repoRoot "config\README.upstream.rst") -Force
+    }
 
     # Alert user if requirements changed
     $newReqHash = (Get-FileHash $oldReqPath).Hash

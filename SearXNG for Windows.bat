@@ -26,6 +26,8 @@ if not exist ".\python\Lib\site-packages\searx\webapp.py" (
 
 REM === Configure environment ===
 set "SEARXNG_SETTINGS_PATH=%CD%\config\settings.yml"
+if not defined SEARXNG_PORT set "SEARXNG_PORT=8888"
+if not defined SEARXNG_BIND_ADDRESS set "SEARXNG_BIND_ADDRESS=127.0.0.1"
 
 REM === Automated security: provision a per-install secret_key ===
 REM The Python tool seeds config\settings.yml from the tracked example if it
@@ -67,9 +69,9 @@ echo.
 echo [INFO] Starting SearXNG for Windows...
 echo [INFO] Server: Granian (High Performance)
 echo [INFO] Settings: %SEARXNG_SETTINGS_PATH%
-echo [INFO] Web server: http://127.0.0.1:8888
+echo [INFO] Web server: http://%SEARXNG_BIND_ADDRESS%:%SEARXNG_PORT%
 echo.
 
-".\python\python.exe" -m granian --interface wsgi searx.webapp:application --host 127.0.0.1 --port 8888 --blocking-threads 16
+".\python\python.exe" -m granian --interface wsgi searx.webapp:application --host %SEARXNG_BIND_ADDRESS% --port %SEARXNG_PORT% --blocking-threads 16
 
 pause

@@ -141,7 +141,7 @@ def patch_webutils(content, path):
         "def get_json_lite_response" in content
         and "'score': d.get('score', 0)" in content
         and "_get_box" in content
-        and "d.get('engines')" in content
+        and "_format_source" in content
         and ("hasattr(pub, 'isoformat')" in content or "sq, rc" in content)
         and ("ensure_ascii=False" in content or "def get_themes" not in content)
     ):
@@ -152,6 +152,17 @@ def patch_webutils(content, path):
 
 def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
     """Returns a simplified JSON string (GenAI friendly)."""
+    def _format_source(d):
+        eng = d.get('engine', '')
+        if eng:
+            return str(eng)
+        engs = d.get('engines')
+        if isinstance(engs, (list, tuple, set)):
+            return ', '.join(sorted(str(e) for e in engs if e is not None))
+        if isinstance(engs, str):
+            return engs
+        return ''
+
     def _r(res):
         d = res.as_dict() if hasattr(res, 'as_dict') else (res if isinstance(res, dict) else {})
         pub = d.get('pubdate') or d.get('publishedDate')
@@ -161,7 +172,7 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
             'title': d.get('title', ''),
             'url': d.get('url', ''),
             'content': d.get('content', ''),
-            'source': d.get('engine', '') or (', '.join(sorted(d.get('engines', []))) if d.get('engines') else ''),
+            'source': _format_source(d),
             'score': d.get('score', 0),
             'published_date': pub,
             'author': d.get('author', ''),
@@ -356,7 +367,10 @@ def patch_webapp_scrape_route(content, path):
         "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')", # default should be true
         "max_keepalive_connections=20",
         "_searxng_original_getaddrinfo",
-        "v15-bulletproof-scrape-fix",
+        "v16-bulletproof-scrape-fix",
+        ".localdomain",
+        "(?si)<script",
+        "import urllib",
         "import re",
         "import html",
         "import httpx",
@@ -378,8 +392,8 @@ def patch_webapp_scrape_route(content, path):
     ):
         return "ALREADY_APPLIED"
 
-    # 1. Add imports at module level (ensure re, html, httpx, idna, and time are present)
-    for mod in ('re', 'html', 'httpx', 'idna', 'time'):
+    # 1. Add imports at module level (ensure re, html, httpx, idna, time, and urllib are present)
+    for mod in ('re', 'html', 'httpx', 'idna', 'time', 'urllib'):
         if f'import {mod}' not in content:
             content, count = re.subn(r'(import warnings\n)', f'import {mod}\n' + r'\1', content, count=1)
             if count == 0:
@@ -524,6 +538,7 @@ def pinned_dns(host, ip, port):
 _RESERVED_TLDS = (
     '.localhost', '.local', '.internal', '.lan', '.home.arpa',
     '.invalid', '.test', '.example', '.onion', '.corp', '.home',
+    '.localdomain', '.intranet', '.private',
 )
 
 
@@ -590,7 +605,7 @@ def _is_blocked_scrape_host(host):
 @app.route('/scrape', methods=['GET', 'POST'])
 def scrape():
     """Extract main text content from URL (GenAI friendly, SSRF-protected).
-    # v15-bulletproof-scrape-fix
+    # v16-bulletproof-scrape-fix
 
     SECURITY: Blocks loopback, private/reserved IP ranges, link-local, and
     file:// scheme to prevent SSRF attacks and internal resource exposure.
@@ -710,9 +725,9 @@ def scrape():
                         return _read_scrape_response(response)
 
                     location = response.headers.get('location')
-                    if not location:
+                    if not location or not location.strip():
                         raise RuntimeError(f'Redirect without Location header (status {response.status_code})')
-                    current_url = urllib.parse.urljoin(current_url, location)
+                    current_url = urllib.parse.urljoin(current_url, location.strip())
         else:
             raise RuntimeError('Too many redirects')
 
@@ -730,8 +745,9 @@ def scrape():
         )
         if not content_text and downloaded:
             # Fallback to basic HTML text extraction if trafilatura returns None/empty
-            raw_text = re.sub(r'(?s)<script.*?>.*?</script>', ' ', downloaded)
-            raw_text = re.sub(r'(?s)<style.*?>.*?</style>', ' ', raw_text)
+            raw_text = re.sub(r'(?si)<script.*?>.*?</script>', ' ', downloaded)
+            raw_text = re.sub(r'(?si)<style.*?>.*?</style>', ' ', raw_text)
+            raw_text = re.sub(r'(?si)<noscript.*?>.*?</noscript>', ' ', raw_text)
             raw_text = re.sub(r'<[^>]+>', ' ', raw_text)
             raw_text = html.unescape(raw_text)
             raw_text = re.sub(r'\\s+', ' ', raw_text).strip()

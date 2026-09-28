@@ -2,7 +2,8 @@
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 $ErrorActionPreference = "Stop"
 
-$base = "http://127.0.0.1:8888"
+$port = if ($env:SEARXNG_PORT) { $env:SEARXNG_PORT } else { "8888" }
+$base = if ($env:SEARXNG_BASE_URL) { $env:SEARXNG_BASE_URL } else { "http://127.0.0.1:$port" }
 $scriptDir = Split-Path -Parent $PSCommandPath
 $repoRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
 
@@ -162,6 +163,9 @@ try {
     Assert-Blocked -Uri "$base/scrape?url=http://[::127.0.0.1]/" -Label "IPv4-compatible loopback (::127.0.0.1)"
     Assert-Blocked -Uri "$base/scrape?url=http://local/" -Label "bare reserved host (local)"
     Assert-Blocked -Uri "$base/scrape?url=http://internal/" -Label "bare reserved host (internal)"
+    Assert-Blocked -Uri "$base/scrape?url=http://router.localdomain/" -Label "reserved TLD (.localdomain)"
+    Assert-Blocked -Uri "$base/scrape?url=http://gateway.intranet/" -Label "reserved TLD (.intranet)"
+    Assert-Blocked -Uri "$base/scrape?url=http://nas.private/" -Label "reserved TLD (.private)"
     Assert-Blocked -Uri "$base/scrape?url=file:///etc/passwd" -Label "file:// scheme"
     Assert-Blocked -Uri "$base/scrape?url=gopher://127.0.0.1:6379/" -Label "gopher:// scheme"
     Assert-Blocked -Uri "$base/scrape?url=ftp://example.com/test" -Label "ftp:// scheme"

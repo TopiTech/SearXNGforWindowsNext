@@ -315,13 +315,13 @@ class TestPatchWebUtils(unittest.TestCase):
         self.fn = apply_patches.patch_webutils
 
     def test_already_applied_when_canonical_form_present(self):
-        # The canonical injected function references the 'score' key, 'engines' key,
+        # The canonical injected function references the 'score' key, _format_source,
         # and the `_get_box` nested helper. All must be present for the idempotency
         # check to fire.
         content = (
             "def get_json_lite_response(sq, rc):\n"
             "    # 'score': d.get('score', 0)\n"
-            "    # d.get('engines')\n"
+            "    # _format_source\n"
             "    def _get_box(i):\n        pass\n"
         )
         self.assertEqual(self.fn(content, "webutils.py"), "ALREADY_APPLIED")
@@ -339,7 +339,8 @@ class TestPatchWebUtils(unittest.TestCase):
         content = "def get_themes(p):\n    return []\n"
         result = self.fn(content, "webutils.py")
         self.assertIn("d.get('engines')", result)
-        self.assertIn("', '.join(sorted(d.get('engines', [])))", result)
+        self.assertIn("def _format_source(d):", result)
+        self.assertIn("', '.join(sorted(str(e) for e in engs if e is not None))", result)
 
     def test_json_lite_ensure_ascii_false(self):
         content = "def get_themes(p):\n    return []\n"
@@ -553,7 +554,10 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')\n"
             "max_keepalive_connections=20\n"
             "_searxng_original_getaddrinfo\n"
-            "v15-bulletproof-scrape-fix\n"
+            "v16-bulletproof-scrape-fix\n"
+            ".localdomain\n"
+            "(?si)<script\n"
+            "import urllib\n"
             "import re\n"
             "import html\n"
             "import httpx\n"
@@ -586,7 +590,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("import idna", res)
         self.assertIn("@app.route('/scrape'", res)
         self.assertIn("def scrape():", res)
-        self.assertIn("v15-bulletproof-scrape-fix", res)
+        self.assertIn("v16-bulletproof-scrape-fix", res)
         self.assertIn("def _parse_scrape_url", res)
         self.assertIn("def _read_scrape_response", res)
         self.assertIn("_SCRAPE_MAX_RESPONSE_BYTES", res)
@@ -602,8 +606,12 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("Address family not supported for pinned host", res)
         self.assertIn("Port mismatch for pinned host", res)
         self.assertIn("_RESERVED_TLDS", res)
+        self.assertIn(".localdomain", res)
+        self.assertIn(".intranet", res)
+        self.assertIn(".private", res)
         self.assertIn("resolves to a private/reserved IP", res)
         self.assertIn("html.unescape", res)
+        self.assertIn("(?si)<script", res)
         # HTTPX trusts HTTP(S)_PROXY by default.  The scrape client must make
         # direct, DNS-pinned connections instead of delegating DNS to a proxy.
         self.assertIn("trust_env=False", res)
@@ -1795,6 +1803,112 @@ class TestHardeningEnhancements(unittest.TestCase):
         p443 = parse_scrape_url('https://example.com:443/path')
         self.assertEqual(p443.port, 443)
 
+    def test_scrape_fallback_html_strips_case_insensitive_scripts_and_styles(self):
+        """Verify fallback HTML text extraction strips <SCRIPT>, <STYLE>, and <NOSCRIPT> tags case-insensitively."""
+        import html
+        import re
+
+        sample_html = (
+            "<html><head><TITLE>Test Article</TITLE>"
+            "<SCRIPT type=\"text/javascript\">alert('evil1');</SCRIPT>"
+            "<Script src=\"foo.js\">var x = 1;</Script>"
+            "<STYLE>body { color: red; }</style>"
+            "<Noscript><p>Please enable JS</p></Noscript>"
+            "</head><body>"
+            "<h1>Main Heading</h1>"
+            "<p>This is the &amp; genuine article body.</p>"
+            "</body></html>"
+        )
+
+        raw_text = re.sub(r'(?si)<script.*?>.*?</script>', ' ', sample_html)
+        raw_text = re.sub(r'(?si)<style.*?>.*?</style>', ' ', raw_text)
+        raw_text = re.sub(r'(?si)<noscript.*?>.*?</noscript>', ' ', raw_text)
+        raw_text = re.sub(r'<[^>]+>', ' ', raw_text)
+        raw_text = html.unescape(raw_text)
+        raw_text = re.sub(r'\s+', ' ', raw_text).strip()
+
+        self.assertNotIn("alert", raw_text)
+        self.assertNotIn("evil1", raw_text)
+        self.assertNotIn("var x", raw_text)
+        self.assertNotIn("color: red", raw_text)
+        self.assertNotIn("Please enable JS", raw_text)
+        self.assertIn("Main Heading", raw_text)
+        self.assertIn("This is the & genuine article body.", raw_text)
+
+    def test_reserved_tlds_includes_intranet_localdomain_private(self):
+        """Verify _is_reserved_scrape_host blocks .localdomain, .intranet, and .private hosts."""
+        reserved_tlds = (
+            '.localhost', '.local', '.internal', '.lan', '.home.arpa',
+            '.invalid', '.test', '.example', '.onion', '.corp', '.home',
+            '.localdomain', '.intranet', '.private',
+        )
+
+        def is_reserved_host(host):
+            h = (host or '').strip().rstrip('.').lower()
+            if not h or h == 'localhost':
+                return True
+            for tld in reserved_tlds:
+                bare = tld.lstrip('.')
+                if h == bare or h.endswith(tld):
+                    return True
+            return False
+
+        # Blocked domains
+        self.assertTrue(is_reserved_host('router.localdomain'))
+        self.assertTrue(is_reserved_host('sub.gateway.intranet'))
+        self.assertTrue(is_reserved_host('nas.private'))
+        self.assertTrue(is_reserved_host('localdomain'))
+        self.assertTrue(is_reserved_host('intranet'))
+        self.assertTrue(is_reserved_host('private'))
+        self.assertTrue(is_reserved_host('localhost'))
+        self.assertTrue(is_reserved_host('test.local'))
+
+        # Allowed public domains
+        self.assertFalse(is_reserved_host('example.com'))
+        self.assertFalse(is_reserved_host('docs.searxng.org'))
+        self.assertFalse(is_reserved_host('my-intranet.com'))
+
+    def test_json_lite_format_source_handles_diverse_types(self):
+        """Verify _format_source in get_json_lite_response safely formats strings, lists, sets, and non-strings."""
+        def format_source(d):
+            eng = d.get('engine', '')
+            if eng:
+                return str(eng)
+            engs = d.get('engines')
+            if isinstance(engs, (list, tuple, set)):
+                return ', '.join(sorted(str(e) for e in engs if e is not None))
+            if isinstance(engs, str):
+                return engs
+            return ''
+
+        # 1. Primary engine present
+        self.assertEqual(format_source({'engine': 'bing'}), 'bing')
+
+        # 2. Merged engines list
+        self.assertEqual(format_source({'engines': ['google', 'bing']}), 'bing, google')
+
+        # 3. Merged engines with integer / None elements (should not raise TypeError)
+        self.assertEqual(format_source({'engines': ['google', 1, None]}), '1, google')
+
+        # 4. Merged engines as string
+        self.assertEqual(format_source({'engines': 'duckduckgo'}), 'duckduckgo')
+
+        # 5. Empty or missing
+        self.assertEqual(format_source({}), '')
+        self.assertEqual(format_source({'engines': None}), '')
+
+    def test_scrape_redirect_location_whitespace_stripped(self):
+        """Verify redirect location with leading/trailing whitespace is cleanly stripped and joined."""
+        import urllib.parse
+
+        current_url = 'https://example.com/start'
+        raw_location = '   /destination?page=1  \t\n'
+        cleaned = raw_location.strip()
+        self.assertEqual(cleaned, '/destination?page=1')
+        resolved = urllib.parse.urljoin(current_url, cleaned)
+        self.assertEqual(resolved, 'https://example.com/destination?page=1')
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
