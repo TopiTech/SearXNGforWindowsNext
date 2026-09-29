@@ -89,6 +89,10 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Unit tests in tools\test_agent_tools.py failed with exit code $LASTEXITCODE"
     }
+    & ".\python\python.exe" "tools\test_agentic_search.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unit tests in tools\test_agentic_search.py failed with exit code $LASTEXITCODE"
+    }
     Write-Host "  [OK] Unit tests passed!" -ForegroundColor Green
 
     # 5. Start SearXNG server in the background

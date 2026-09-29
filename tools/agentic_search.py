@@ -16,8 +16,9 @@ import concurrent.futures
 import math
 import re
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, ClassVar
 
 # High-authority primary domains (Documentation, Source Repositories, Standards)
 DEFAULT_BOOST_DOMAINS: dict[str, float] = {
@@ -126,17 +127,16 @@ def extract_domain(url: str) -> str:
         parsed = urllib.parse.urlparse(url)
         netloc = parsed.netloc.lower().split(":")[0]
         # Remove leading www.
-        if netloc.startswith("www."):
-            netloc = netloc[4:]
+        netloc = netloc.removeprefix("www.")
         return netloc
-    except Exception:
+    except (ValueError, AttributeError):
         return ""
 
 
 class QueryOptimizer:
     """Analyzes and optimizes natural language search queries for AI agents."""
 
-    CODE_KEYWORDS: set[str] = {
+    CODE_KEYWORDS: ClassVar[set[str]] = {
         "error", "exception", "traceback", "syntax", "def", "class", "function",
         "api", "method", "bug", "crash", "segfault", "module", "import", "package",
         "npm", "pip", "cargo", "go", "python", "typescript", "javascript", "rust",
@@ -144,13 +144,13 @@ class QueryOptimizer:
         "undefined", "pointer", "regex", "sql", "hook", "component", "lifespan",
     }
 
-    ACADEMIC_KEYWORDS: set[str] = {
+    ACADEMIC_KEYWORDS: ClassVar[set[str]] = {
         "paper", "arxiv", "theorem", "proof", "dataset", "benchmark", "survey",
         "algorithm", "evaluation", "ablation", "transformer", "neural", "deep learning",
         "model", "parameters", "citation",
     }
 
-    NEWS_KEYWORDS: set[str] = {
+    NEWS_KEYWORDS: ClassVar[set[str]] = {
         "news", "announcement", "announced", "release", "released", "vulnerability",
         "cve", "breaking", "update", "latest", "today", "yesterday", "launch",
     }
@@ -171,15 +171,11 @@ class QueryOptimizer:
         for token in tokens:
             lower = token.lower()
             if lower.startswith("site:") and len(token) > 5:
-                domain = token[5:].strip().lower()
-                if domain.startswith("www."):
-                    domain = domain[4:]
+                domain = token[5:].strip().lower().removeprefix("www.")
                 if domain:
                     include_domains.append(domain)
             elif lower.startswith("-site:") and len(token) > 6:
-                domain = token[6:].strip().lower()
-                if domain.startswith("www."):
-                    domain = domain[4:]
+                domain = token[6:].strip().lower().removeprefix("www.")
                 if domain:
                     exclude_domains.append(domain)
             else:
@@ -272,7 +268,7 @@ class DomainScorer:
                 return weight
 
         # General documentation domains (.docs, docs.*, doc.*)
-        if domain.startswith("docs.") or domain.startswith("doc.") or ".readthedocs." in domain:
+        if domain.startswith(("docs.", "doc.")) or ".readthedocs." in domain:
             return 1.8
 
         return 1.0
@@ -284,8 +280,8 @@ class DomainScorer:
         exclude_domains: list[str] | None = None,
     ) -> list[SearchResultItem]:
         """Filter and score raw search results, returning ordered items."""
-        inc_set = set(d.lower() for d in (include_domains or []))
-        exc_set = set(d.lower() for d in (exclude_domains or []))
+        inc_set = {d.lower() for d in (include_domains or [])}
+        exc_set = {d.lower() for d in (exclude_domains or [])}
 
         items: list[SearchResultItem] = []
         total = len(raw_results)
@@ -298,14 +294,12 @@ class DomainScorer:
             dom = extract_domain(url)
 
             # Apply explicit include filters
-            if inc_set:
-                if not any(dom == target or dom.endswith("." + target) for target in inc_set):
-                    continue
+            if inc_set and not any(dom == target or dom.endswith("." + target) for target in inc_set):
+                continue
 
             # Apply explicit exclude filters
-            if exc_set:
-                if any(dom == target or dom.endswith("." + target) for target in exc_set):
-                    continue
+            if exc_set and any(dom == target or dom.endswith("." + target) for target in exc_set):
+                continue
 
             # Base score inversely proportional to original rank: 1.0 down to 0.1
             base_score = 1.0 - (rank / max(total, 1)) * 0.7
@@ -483,7 +477,7 @@ class SpeculativeFetcher:
                 else:
                     item.scrape_error = "本文が見つかりませんでした"
                     item.is_scraped = False
-            except Exception as e:
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError, RuntimeError) as e:
                 item.scrape_error = str(e)
                 item.is_scraped = False
             return item
@@ -600,9 +594,9 @@ def execute_deep_search(
             "markdown": "検索クエリが空です。",
         }
 
-    # Merge explicit domain filters
-    final_inc = list(set((include_domains or []) + explicit_inc))
-    final_exc = list(set((exclude_domains or []) + explicit_exc))
+    # Merge explicit domain filters deterministically
+    final_inc = sorted(set((include_domains or []) + explicit_inc))
+    final_exc = sorted(set((exclude_domains or []) + explicit_exc))
 
     intent = QueryOptimizer.classify_intent(clean_q)
     categories, engines = QueryOptimizer.get_routing(intent)

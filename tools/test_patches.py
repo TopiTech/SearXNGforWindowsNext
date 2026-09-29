@@ -2200,7 +2200,7 @@ class TestProjectPatchHardening(unittest.TestCase):
                     if 0 <= ip_int <= 0xFFFFFFFF:
                         v4 = ipaddress.IPv4Address(ip_int)
                         return v4.is_loopback or v4.is_private
-                except Exception:
+                except (ValueError, ipaddress.AddressValueError):
                     pass
             return False
 
@@ -2233,7 +2233,7 @@ class TestPatchCache(unittest.TestCase):
         fp = apply_patches._compute_fingerprints()
         self.assertIsInstance(fp, dict)
         # Should at least contain this script itself or apply-patches.py
-        self.assertTrue(any("apply-patches.py" in k for k in fp.keys()))
+        self.assertTrue(any("apply-patches.py" in k for k in fp))
 
     def test_cache_validity_roundtrip(self):
         # Save cache and verify it's valid

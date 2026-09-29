@@ -218,6 +218,45 @@ try {
     }
     Write-Host ""
 
+    # Test 33: CLI healthcheck
+    Write-Host "Test 33: SearXNG CLI health check..." -ForegroundColor Cyan
+    $pythonExe = Join-Path $repoRoot "python\python.exe"
+    $cliPy = Join-Path $repoRoot "tools\searxng_cli.py"
+    if (Test-Path -LiteralPath $pythonExe) {
+        $cliHealthRaw = & $pythonExe $cliPy --base-url $base health --json | Out-String
+        $cliHealth = $cliHealthRaw | ConvertFrom-Json
+        if (-not $cliHealth.healthy) {
+            throw "[FAIL] CLI health check failed: $($cliHealth.status)"
+        }
+        Write-Host "  [OK] CLI health check passed: $($cliHealth.status)" -ForegroundColor Green
+        Write-Host ""
+
+        # Test 34: CLI search
+        Write-Host "Test 34: SearXNG CLI search..." -ForegroundColor Cyan
+        $cliSearchRaw = & $pythonExe $cliPy --base-url $base search "SearXNG" -n 2 --json | Out-String
+        $cliSearch = $cliSearchRaw | ConvertFrom-Json
+        if ($cliSearch.error) {
+            throw "[FAIL] CLI search returned error: $($cliSearch.error)"
+        }
+        Assert-JsonProperty -Value $cliSearch -PropertyName "results" -Label "CLI search"
+        Write-Host "  [OK] CLI search returned $(@($cliSearch.results).Count) result(s)" -ForegroundColor Green
+        Write-Host ""
+
+        # Test 35: CLI scrape
+        Write-Host "Test 35: SearXNG CLI scrape..." -ForegroundColor Cyan
+        $cliScrapeRaw = & $pythonExe $cliPy --base-url $base scrape "https://example.com" -m 200 --json | Out-String
+        $cliScrape = $cliScrapeRaw | ConvertFrom-Json
+        if ($cliScrape.error) {
+            throw "[FAIL] CLI scrape returned error: $($cliScrape.error)"
+        }
+        Assert-JsonProperty -Value $cliScrape -PropertyName "content" -Label "CLI scrape"
+        Write-Host "  [OK] CLI scrape extracted $($cliScrape.content.Length) chars" -ForegroundColor Green
+        Write-Host ""
+    } else {
+        Write-Host "  [SKIP] Embedded Python not found at $pythonExe, skipping CLI tests" -ForegroundColor Yellow
+        Write-Host ""
+    }
+
     Write-Host "=====================================" -ForegroundColor Green
     Write-Host "[OK] All smoke tests PASSED" -ForegroundColor Green
     Write-Host "=====================================" -ForegroundColor Green

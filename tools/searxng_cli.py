@@ -23,7 +23,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-import searxng_client  # noqa: E402
+import searxng_client
 
 
 def build_parser() -> argparse.ArgumentParser:

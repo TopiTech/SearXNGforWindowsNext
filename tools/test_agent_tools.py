@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import argparse
 import io
 import json
 import os
@@ -16,9 +15,9 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-import mcp_server  # noqa: E402
-import searxng_cli  # noqa: E402
-import searxng_client  # noqa: E402
+import mcp_server
+import searxng_cli
+import searxng_client
 
 
 class TestSearXNGClient(unittest.TestCase):
@@ -135,6 +134,42 @@ class TestSearXNGClient(unittest.TestCase):
         healthy, msg = searxng_client.check_health()
         self.assertFalse(healthy)
         self.assertIn("接続できませんでした", msg)
+
+    @patch("urllib.request.urlopen")
+    def test_search_count_sanitization(self, mock_urlopen: MagicMock) -> None:
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"query": "test", "results": []}).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        res_str = searxng_client.search("test", count="3")
+        self.assertNotIn("error", res_str)
+        res_invalid = searxng_client.search("test", count="invalid")
+        self.assertNotIn("error", res_invalid)
+
+    @patch("urllib.request.urlopen")
+    def test_scrape_max_length_sanitization(self, mock_urlopen: MagicMock) -> None:
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"url": "https://example.com", "content": "A" * 100}).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        res_str = searxng_client.scrape("https://example.com", max_length="50")
+        self.assertNotIn("error", res_str)
+        self.assertEqual(len(res_str["content"]), 50)
+        self.assertTrue(res_str["is_truncated"])
+
+    @patch("urllib.request.urlopen")
+    def test_health_404_fallback_to_root(self, mock_urlopen: MagicMock) -> None:
+        import urllib.error
+
+        err_404 = urllib.error.HTTPError("http://127.0.0.1:8888/healthz", 404, "Not Found", {}, None)
+        root_resp = MagicMock()
+        root_resp.status = 200
+        root_resp.read.return_value = b"<html>SearXNG</html>"
+
+        mock_urlopen.side_effect = [err_404, root_resp]
+        healthy, msg = searxng_client.check_health()
+        self.assertTrue(healthy)
+        self.assertIn("サーバー応答あり", msg)
 
     def test_format_search_markdown(self) -> None:
         data = {
@@ -318,6 +353,24 @@ class TestMCPServer(unittest.TestCase):
         self.assertIsNotNone(resp)
         self.assertFalse(resp["result"]["isError"])
         self.assertIn("SearXNG 稼働中", resp["result"]["content"][0]["text"])
+
+    @patch("searxng_client.search")
+    def test_tools_call_search_with_string_arguments(self, mock_search: MagicMock) -> None:
+        mock_search.return_value = {"query": "fastapi", "results": []}
+        raw_msg = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 15,
+                "method": "tools/call",
+                "params": {"name": "searxng_search", "arguments": {"query": "fastapi", "count": "10"}},
+            }
+        )
+        resp = mcp_server.process_message(raw_msg)
+        self.assertIsNotNone(resp)
+        self.assertFalse(resp["result"]["isError"])
+        mock_search.assert_called_once_with(
+            query="fastapi", count=10, categories="", engines="", time_range=""
+        )
 
     def test_tools_call_unknown_tool(self) -> None:
         raw_msg = json.dumps(

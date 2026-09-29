@@ -21,7 +21,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-import searxng_client  # noqa: E402
+import searxng_client
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "searxng-for-windows"
@@ -110,7 +110,10 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                 },
                 "search_depth": {
                     "type": "string",
-                    "description": "Search depth: 'basic' (snippets only), 'advanced' (speculative scrape + highlights), or 'code' (prioritize code/docs).",
+                    "description": (
+                        "Search depth: 'basic' (snippets only), 'advanced' (speculative scrape + highlights), "
+                        "or 'code' (prioritize code/docs)."
+                    ),
                     "enum": ["basic", "advanced", "code"],
                     "default": "advanced",
                 },
@@ -129,7 +132,9 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                 "include_domains": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional list of domains to restrict search to (e.g. ['docs.python.org', 'github.com']).",
+                    "description": (
+                        "Optional list of domains to restrict search to (e.g. ['docs.python.org', 'github.com'])."
+                    ),
                 },
                 "exclude_domains": {
                     "type": "array",
@@ -222,7 +227,10 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
 
     if tool_name == "searxng_search":
         query = str(arguments.get("query", ""))
-        count = int(arguments.get("count", 5))
+        try:
+            count = int(arguments.get("count", 5))
+        except (ValueError, TypeError):
+            count = 5
         categories = str(arguments.get("categories", ""))
         engines = str(arguments.get("engines", ""))
         time_range = str(arguments.get("time_range", ""))
@@ -248,7 +256,10 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
 
     elif tool_name == "searxng_scrape":
         url = str(arguments.get("url", ""))
-        max_length = int(arguments.get("max_length", 4000))
+        try:
+            max_length = int(arguments.get("max_length", 4000))
+        except (ValueError, TypeError):
+            max_length = 4000
 
         data = searxng_client.scrape(url=url, max_length=max_length)
         is_error = bool(data.get("error"))
@@ -266,13 +277,19 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
     elif tool_name == "searxng_deep_search":
         query = str(arguments.get("query", ""))
         search_depth = str(arguments.get("search_depth", "advanced"))
-        max_results = int(arguments.get("max_results", 5))
+        try:
+            max_results = int(arguments.get("max_results", 5))
+        except (ValueError, TypeError):
+            max_results = 5
         include_highlights = bool(arguments.get("include_highlights", True))
         raw_inc = arguments.get("include_domains")
         include_domains = [str(d) for d in raw_inc] if isinstance(raw_inc, list) else None
         raw_exc = arguments.get("exclude_domains")
         exclude_domains = [str(d) for d in raw_exc] if isinstance(raw_exc, list) else None
-        max_tokens = int(arguments.get("max_tokens", 3000))
+        try:
+            max_tokens = int(arguments.get("max_tokens", 3000))
+        except (ValueError, TypeError):
+            max_tokens = 3000
 
         data = searxng_client.search_deep(
             query=query,
@@ -379,7 +396,7 @@ def main() -> None:
                 send_response(resp)
     except KeyboardInterrupt:
         log_debug("Server stopped by user interrupt.")
-    except Exception as e:
+    except (OSError, UnicodeDecodeError, ValueError) as e:
         log_debug(f"Fatal error in stdio loop: {e}")
         sys.exit(1)
 

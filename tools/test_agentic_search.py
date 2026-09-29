@@ -13,7 +13,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-import agentic_search  # noqa: E402
+import agentic_search
 
 
 class TestQueryOptimizer(unittest.TestCase):

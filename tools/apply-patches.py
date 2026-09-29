@@ -60,9 +60,7 @@ def is_patch_cache_valid() -> bool:
         with open(CACHE_FILE, "r", encoding="utf-8") as f:
             cached = json.load(f)
         current = _compute_fingerprints()
-        if not cached or cached.get("files") != current:
-            return False
-        return True
+        return bool(cached and cached.get("files") == current)
     except Exception as exc:  # noqa: BLE001
         logger.debug(f"Cache check failed: {exc}")
         return False
@@ -1022,7 +1020,7 @@ def scrape():
             raw_text = re.sub(r'(?si)<template.*?>.*?</template>', ' ', raw_text)
             raw_text = re.sub(r'<[^>]+>', ' ', raw_text)
             raw_text = html.unescape(raw_text)
-            raw_text = re.sub(r'\s+', ' ', raw_text).strip()
+            raw_text = re.sub(r'\\s+', ' ', raw_text).strip()
             if raw_text:
                 content_text = raw_text[:5000]
 

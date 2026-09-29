@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -85,13 +84,13 @@ def check_health(base_url: str | None = None, timeout: float | None = None) -> t
             )
             with urllib.request.urlopen(root_req, timeout=t) as resp:
                 return True, f"SearXNG サーバー応答あり ({target_base}, status: {resp.status})"
-        except Exception as fallback_e:
+        except (urllib.error.URLError, TimeoutError, OSError):
             return False, f"SearXNG HTTP エラー: {e.code} ({e.reason})"
     except urllib.error.URLError as e:
         return False, _make_offline_error_message(target_base, str(e.reason))
     except TimeoutError:
         return False, f"SearXNG サーバー ({target_base}) への接続がタイムアウトしました ({t}秒)"
-    except Exception as e:
+    except (OSError, ValueError) as e:
         return False, f"SearXNG 接続エラー: {e}"
 
 
@@ -130,6 +129,10 @@ def search(
     t = timeout or get_timeout()
 
     # Cap count within safe boundaries (1 to 50)
+    try:
+        count = int(count)
+    except (ValueError, TypeError):
+        count = 5
     count = max(1, min(count, 50))
 
     params: dict[str, str] = {
@@ -170,7 +173,7 @@ def search(
             err_body = e.read().decode("utf-8", errors="replace")
             if "No query" in err_body:
                 err_msg = "検索クエリが認識されませんでした。"
-        except Exception:
+        except (OSError, UnicodeDecodeError):
             pass
         return {"query": clean_query, "results": [], "error": err_msg}
 
@@ -195,7 +198,7 @@ def search(
             "error": "SearXNG からの応答を JSON として解析できませんでした。",
         }
 
-    except Exception as e:
+    except (OSError, ValueError, KeyError) as e:
         return {"query": clean_query, "results": [], "error": f"検索処理中にエラーが発生しました: {e}"}
 
 
@@ -222,6 +225,12 @@ def scrape(
 
     target_base = (base_url or get_base_url()).rstrip("/")
     t = timeout or get_timeout()
+    try:
+        max_length = int(max_length)
+    except (ValueError, TypeError):
+        max_length = 4000
+    if max_length < 0:
+        max_length = 4000
 
     params = {"url": clean_url}
     scrape_url = f"{target_base}/scrape?{urllib.parse.urlencode(params)}"
@@ -256,7 +265,7 @@ def scrape(
         elif e.code == 422:
             err_msg = f"本文抽出失敗 (422): {clean_url} から本文テキストを抽出できませんでした。"
         elif e.code == 504:
-            err_msg = f"スクレイピングタイムアウト (504): 対象サイトからの応答が得られませんでした。"
+            err_msg = "スクレイピングタイムアウト (504): 対象サイトからの応答が得られませんでした。"
         else:
             err_msg = f"SearXNG スクレイピング HTTP エラー: {e.code} ({e.reason})"
         return {"url": clean_url, "content": "", "error": err_msg}
@@ -282,7 +291,7 @@ def scrape(
             "error": "SearXNG スクレイピング応答を JSON として解析できませんでした。",
         }
 
-    except Exception as e:
+    except (OSError, ValueError, KeyError) as e:
         return {
             "url": clean_url,
             "content": "",

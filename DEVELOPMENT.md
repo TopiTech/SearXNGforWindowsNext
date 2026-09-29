@@ -300,8 +300,10 @@ server {
 # Run Ruff lint checks
 ruff check .
 
-# Run unit tests (patch idempotency, edge cases, hardening regression tests)
+# Run unit tests (patch idempotency, edge cases, hardening regression tests, and agent tools)
 .\python\python.exe tools\test_patches.py
+.\python\python.exe tools\test_agent_tools.py
+.\python\python.exe tools\test_agentic_search.py
 
 # Run standalone smoke test (requires server running)
 .\tools\smoke-test.ps1
@@ -328,6 +330,7 @@ Smoke tests validate:
 - ✓ `/scrape` extracts web content safely (form, JSON, and GET params)
 - ✓ SSRF protection blocks loopback/private/multicast IPs and non-HTTP schemes
 - ✓ Autocomplete and healthcheck endpoints respond properly
+- ✓ SearXNG CLI (`tools\searxng_cli.py`) health check, search, and scrape integration tests
 
 ### Patch Customization (If Upstream Changes)
 
