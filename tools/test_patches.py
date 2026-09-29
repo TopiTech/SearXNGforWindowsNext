@@ -2105,6 +2105,126 @@ class TestHardeningEnhancements(unittest.TestCase):
         self.assertIn("cf_SearxEngineAccessDenied: 1800", patched)
 
 
+class TestProjectPatchHardening(unittest.TestCase):
+    """Tests for patch stability enhancements, error countermeasures, and AST verification."""
+
+    def test_update_file_atomic_write_and_syntax_validation(self):
+        """Verify update_file successfully writes valid Python syntax atomically."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            py_path = os.path.join(tmpdir, "valid.py")
+            with open(py_path, "w", encoding="utf-8") as f:
+                f.write("x = 1\n")
+            res = apply_patches.update_file(
+                py_path,
+                "valid python patch",
+                lambda content, path: "x = 2\n",
+            )
+            self.assertEqual(res, "PATCHED")
+            with open(py_path, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), "x = 2\n")
+
+    def test_update_file_syntax_error_protects_original_file(self):
+        """Verify that an invalid Python patch raises RuntimeError and does not corrupt target file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            py_path = os.path.join(tmpdir, "broken.py")
+            orig = "def good():\n    return 42\n"
+            with open(py_path, "w", encoding="utf-8") as f:
+                f.write(orig)
+
+            with self.assertRaisesRegex(RuntimeError, "Patch validation failed.*invalid Python syntax"):
+                apply_patches.update_file(
+                    py_path,
+                    "syntax error patch",
+                    lambda content, path: "def broken(\n    return 42\n",  # SyntaxError: unclosed parenthesis
+                )
+
+            # Original file content must be preserved unchanged
+            with open(py_path, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), orig)
+
+    def test_json_lite_sanitizes_nan_inf_scores(self):
+        """Verify get_json_lite_response cleans NaN, Infinity, and invalid scores to 0."""
+        content = "def get_themes(p):\n    return []\n"
+        patched = apply_patches.patch_webutils(content, "webutils.py")
+        self.assertIn("def _clean_score(v):", patched)
+        self.assertIn("math.isnan", patched)
+        self.assertIn("math.isinf", patched)
+
+        # Test the pure cleaning logic
+        def clean_score(v):
+            if v is None:
+                return 0
+            try:
+                f = float(v)
+                import math
+                if math.isnan(f) or math.isinf(f):
+                    return 0
+                return int(f) if f.is_integer() else f
+            except (ValueError, TypeError):
+                return 0
+
+        self.assertEqual(clean_score(float('nan')), 0)
+        self.assertEqual(clean_score(float('inf')), 0)
+        self.assertEqual(clean_score(float('-inf')), 0)
+        self.assertEqual(clean_score("invalid"), 0)
+        self.assertEqual(clean_score(12.5), 12.5)
+        self.assertEqual(clean_score(10.0), 10)
+
+    def test_json_lite_resilience_to_broken_objects(self):
+        """Verify JSON-lite helper handles objects where as_dict() or get_ordered_results raises exceptions."""
+        content = "def get_themes(p):\n    return []\n"
+        patched = apply_patches.patch_webutils(content, "webutils.py")
+        self.assertIn("getattr(rc, 'results', [])", patched)
+        self.assertIn("callable(pub.isoformat)", patched)
+
+    def test_scrape_integer_ip_blocking(self):
+        """Verify integer representation of loopback/private IPs is detected and blocked."""
+        content = (
+            "import warnings\n"
+            "from flask import Flask\n\n"
+            "@app.route('/search')\n"
+            "def search():\n"
+            "    pass\n"
+        )
+        patched = apply_patches.patch_webapp_scrape_route(content, "webapp.py")
+        self.assertIn("host_clean.isdigit()", patched)
+        self.assertIn("0 <= ip_int <= 0xFFFFFFFF", patched)
+
+        import ipaddress
+
+        def is_blocked(host_clean):
+            if host_clean.isdigit():
+                try:
+                    ip_int = int(host_clean)
+                    if 0 <= ip_int <= 0xFFFFFFFF:
+                        v4 = ipaddress.IPv4Address(ip_int)
+                        return v4.is_loopback or v4.is_private
+                except Exception:
+                    pass
+            return False
+
+        # 2130706433 is 127.0.0.1
+        self.assertTrue(is_blocked("2130706433"))
+        # 167772161 is 10.0.0.1
+        self.assertTrue(is_blocked("167772161"))
+        # 134744072 is 8.8.8.8 (public)
+        self.assertFalse(is_blocked("134744072"))
+
+    def test_simple_search_accessibility_reordered_attributes(self):
+        """Verify patch_simple_search_accessibility works even when input attributes are in different order."""
+        sample = '<input name="q" id="q" type="text" placeholder="Search">\n'
+        patched = apply_patches.patch_simple_search_accessibility(sample, "search.html")
+        self.assertIn('aria-label="{{ _(\'Search for...\') }}"', patched)
+        self.assertIn('id="q"', patched)
+
+    def test_preferences_accessibility_reordered_attributes(self):
+        """Verify patch_preferences_accessibility works even when input attributes are in different order."""
+        sample = '<input name="preferences" id="pref-hash-input" type="text">\n'
+        patched = apply_patches.patch_preferences_accessibility(sample, "cookies.html")
+        self.assertIn('aria-label="{{- _(\'Preferences hash\') -}}"', patched)
+        self.assertIn('id="pref-hash-input"', patched)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

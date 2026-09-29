@@ -1,11 +1,43 @@
 import os
 import re
 import sys
+import tempfile
+import time
 
 try:
     import yaml
 except ImportError:
     yaml = None
+
+
+def _atomic_write(file_path: str, data: str, encoding: str = 'utf-8', newline: str = '\n') -> None:
+    """Atomically write data to file_path using a temporary file and os.replace."""
+    directory = os.path.dirname(os.path.abspath(file_path))
+    os.makedirs(directory, exist_ok=True)
+    temp_fd, temp_path = tempfile.mkstemp(prefix=".tmp_cfg_", dir=directory, text=True)
+    try:
+        with open(temp_fd, 'w', encoding=encoding, newline=newline) as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+
+        last_err = None
+        for attempt in range(5):
+            try:
+                os.replace(temp_path, file_path)
+                return
+            except PermissionError as exc:
+                last_err = exc
+                time.sleep(0.05 * (2 ** attempt))
+        if last_err:
+            raise last_err
+    except Exception:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise
 
 
 def _unquote(s):
@@ -243,8 +275,7 @@ def process_file(settings_path, engines_dir):
 
     if modified_content != yaml_content:
         # Write back updated content while preserving all formatting and comments
-        with open(settings_path, 'w', encoding='utf-8', newline='\n') as f:
-            f.write(modified_content)
+        _atomic_write(settings_path, modified_content, encoding='utf-8', newline='\n')
         print(f"settings.yml updated successfully (comments preserved): {settings_path}")
         return True
 
