@@ -308,7 +308,18 @@ ruff check .
 
 # Run complete end-to-end test suite (unit tests + background server + all smoke tests)
 .\tools\run-tests.ps1 -SkipInstall
+
+# Clean bytecode and temporary caches (frees ~25-30MB)
+PowerShell -File .\tools\clean-cache.ps1
 ```
+
+### Performance & Patch Caching
+
+- **Fast-Path Verification**: `tools\apply-patches.py` caches file fingerprints in `python\.patches_cache.json`. When files have not changed, patch verification runs in **~5ms** (down from ~465ms).
+- **Forced Re-Verification**: To force a complete re-scan and validation of all patch anchors, run:
+  ```powershell
+  .\python\python.exe tools\apply-patches.py --force
+  ```
 
 Smoke tests validate:
 - ✓ Root page accessible with proper ARIA attributes

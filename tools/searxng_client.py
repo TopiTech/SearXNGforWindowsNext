@@ -18,6 +18,11 @@ from typing import Any
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8888"
 DEFAULT_TIMEOUT = 15.0
+DEFAULT_HEADERS = {
+    "User-Agent": "SearXNG-Agent-Client/1.0",
+    "Accept": "application/json",
+    "Connection": "keep-alive",
+}
 
 
 def get_base_url() -> str:
@@ -143,10 +148,7 @@ def search(
     try:
         req = urllib.request.Request(
             search_url,
-            headers={
-                "User-Agent": "SearXNG-Agent-Client/1.0",
-                "Accept": "application/json",
-            },
+            headers=DEFAULT_HEADERS,
         )
         with urllib.request.urlopen(req, timeout=t) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
@@ -227,10 +229,7 @@ def scrape(
     try:
         req = urllib.request.Request(
             scrape_url,
-            headers={
-                "User-Agent": "SearXNG-Agent-Client/1.0",
-                "Accept": "application/json",
-            },
+            headers=DEFAULT_HEADERS,
         )
         with urllib.request.urlopen(req, timeout=t) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))

@@ -219,12 +219,12 @@ class QueryOptimizer:
             tuple[str, str]: (categories, engines)
         """
         if intent == "code":
-            return "it", "duckduckgo,bing,github"
+            return "it", "bing,brave,github"
         elif intent == "academic":
-            return "science,general", "duckduckgo,arxiv,google_scholar"
+            return "science,general", "bing,brave,arxiv,google_scholar"
         elif intent == "news":
-            return "news,general", "duckduckgo,bing,brave"
-        return "general", "duckduckgo,bing,brave"
+            return "news,general", "bing,brave,google"
+        return "general", "bing,brave,google"
 
     @classmethod
     def extract_keywords(cls, query: str) -> list[str]:

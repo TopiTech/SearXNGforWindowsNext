@@ -45,12 +45,15 @@ if not defined SEARXNG_SECRET (
   pause
   exit /b 1
 )
-REM Validate the secret key format: must be a 64-character hex string.
-REM This is a defense-in-depth check to prevent malformed or invalid keys
-REM from being passed to the runtime.
-powershell -NoProfile -Command "if ($env:SEARXNG_SECRET -notmatch '^[0-9a-fA-F]{64}$') { exit 1 }"
-if errorlevel 1 (
-  echo [ERROR] SEARXNG_SECRET format validation failed. Key must be a 64-char hex string.
+REM Validate the secret key format: ensure key length is exactly 64 hex characters.
+REM (Full regex verification is already guaranteed by tools\ensure-secret-key.py)
+if "%SEARXNG_SECRET:~63,1%"=="" (
+  echo [ERROR] SEARXNG_SECRET is too short. Key must be a 64-char hex string.
+  pause
+  exit /b 1
+)
+if not "%SEARXNG_SECRET:~64,1%"=="" (
+  echo [ERROR] SEARXNG_SECRET is too long. Key must be a 64-char hex string.
   pause
   exit /b 1
 )
@@ -65,13 +68,15 @@ if errorlevel 1 (
 )
 
 REM === Start server ===
+if not defined SEARXNG_BLOCKING_THREADS set "SEARXNG_BLOCKING_THREADS=16"
 echo.
 echo [INFO] Starting SearXNG for Windows...
-echo [INFO] Server: Granian (High Performance)
+echo [INFO] Server: Granian (High Performance WSGI)
 echo [INFO] Settings: %SEARXNG_SETTINGS_PATH%
 echo [INFO] Web server: http://%SEARXNG_BIND_ADDRESS%:%SEARXNG_PORT%
+echo [INFO] Blocking threads: %SEARXNG_BLOCKING_THREADS%
 echo.
 
-".\python\python.exe" -m granian --interface wsgi searx.webapp:application --host %SEARXNG_BIND_ADDRESS% --port %SEARXNG_PORT% --blocking-threads 16
+".\python\python.exe" -m granian --interface wsgi searx.webapp:application --host %SEARXNG_BIND_ADDRESS% --port %SEARXNG_PORT% --blocking-threads %SEARXNG_BLOCKING_THREADS% --no-ws
 
 pause

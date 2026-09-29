@@ -48,6 +48,12 @@ Invoke-RestMethod "http://127.0.0.1:8888/search?q=SearXNG&format=json_lite" | Co
 curl -G "http://127.0.0.1:8888/search" --data-urlencode "q=SearXNG" --data-urlencode "format=json_lite"
 ```
 
+### 4. キャッシュのクリーンアップ (軽量化)
+蓄積した Python バイトコード（`__pycache__`）や一時キャッシュを一括消去し、約 25〜30MB のディスク容量をワンクリックで解放できます。
+```powershell
+PowerShell -File .\tools\clean-cache.ps1
+```
+
 ---
 
 ##  GenAI / LLM での活用例

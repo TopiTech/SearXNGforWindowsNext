@@ -1,7 +1,9 @@
 import ast
+import json
 import logging
 import os
 import re
+import sys
 import tempfile
 import time
 
@@ -11,6 +13,74 @@ logger = logging.getLogger("apply-patches")
 # Determine repository root
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SITE_PACKAGES = os.path.join(REPO_ROOT, "python", "Lib", "site-packages")
+CACHE_FILE = os.path.join(REPO_ROOT, "python", ".patches_cache.json")
+
+
+def _get_tracked_targets() -> list[str]:
+    """Return all target file paths tracked by the patch cache."""
+    return [
+        os.path.abspath(__file__),
+        os.path.join(REPO_ROOT, "tools", "disable-missing-engines.py"),
+        os.path.join(REPO_ROOT, "UPSTREAM_VERSION.txt"),
+        os.path.join(SITE_PACKAGES, "searx", "valkeydb.py"),
+        os.path.join(SITE_PACKAGES, "searx", "settings_defaults.py"),
+        os.path.join(SITE_PACKAGES, "searx", "webutils.py"),
+        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "search.html"),
+        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "simple_search.html"),
+        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "preferences", "cookies.html"),
+        os.path.join(SITE_PACKAGES, "searx", "webapp.py"),
+        os.path.join(SITE_PACKAGES, "searx", "engines", "__init__.py"),
+        os.path.join(SITE_PACKAGES, "searx", "search", "processors", "__init__.py"),
+        os.path.join(SITE_PACKAGES, "searx", "engines", "google.py"),
+        os.path.join(SITE_PACKAGES, "searx", "engines", "sogou.py"),
+        os.path.join(SITE_PACKAGES, "searx", "search", "processors", "abstract.py"),
+        os.path.join(SITE_PACKAGES, "searx", "search", "processors", "online.py"),
+        os.path.join(SITE_PACKAGES, "searx", "network", "raise_for_httperror.py"),
+        os.path.join(SITE_PACKAGES, "searx", "settings.yml"),
+        os.path.join(REPO_ROOT, "config", "settings.yml"),
+    ]
+
+
+def _compute_fingerprints() -> dict[str, dict[str, int]]:
+    """Compute mtime_ns and size for each tracked target."""
+    fp: dict[str, dict[str, int]] = {}
+    for p in _get_tracked_targets():
+        if os.path.exists(p):
+            st = os.stat(p)
+            rel_p = os.path.relpath(p, REPO_ROOT).replace("\\", "/")
+            fp[rel_p] = {"mtime_ns": st.st_mtime_ns, "size": st.st_size}
+    return fp
+
+
+def is_patch_cache_valid() -> bool:
+    """Return True if all tracked targets match the cached fingerprints."""
+    if not os.path.exists(CACHE_FILE):
+        return False
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            cached = json.load(f)
+        current = _compute_fingerprints()
+        if not cached or cached.get("files") != current:
+            return False
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"Cache check failed: {exc}")
+        return False
+
+
+def save_patch_cache() -> None:
+    """Save current target fingerprints to the cache file."""
+    try:
+        data = {
+            "version": 1,
+            "timestamp": time.time(),
+            "files": _compute_fingerprints(),
+        }
+        _atomic_write(CACHE_FILE, json.dumps(data, indent=2), encoding="utf-8")
+        logger.debug("Saved patch cache fingerprint.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Failed to write patch cache: {exc}")
+
 
 
 def _atomic_write(file_path: str, data: str, encoding: str = 'utf-8', newline: str = '\n') -> None:
@@ -1328,7 +1398,12 @@ def patch_config_settings_yml(content, path):
         return "ALREADY_APPLIED"
     return patched
 
-def main():
+def main() -> None:
+    force = "--force" in sys.argv
+    if not force and is_patch_cache_valid():
+        logger.info("All patches already verified (cached).")
+        return
+
     logger.info("Applying Windows compatibility and feature patches...")
     
     # Run patches
@@ -1447,6 +1522,8 @@ def main():
             logger.warning(f"Could not check missing engines: {exc}")
 
     logger.info("All patches processed.")
+    save_patch_cache()
+
 
 if __name__ == "__main__":
     main()

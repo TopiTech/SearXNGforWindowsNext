@@ -22,25 +22,23 @@ Write-Host ""
 
 try {
     Write-Host "Upgrading pip, setuptools, wheel..." -ForegroundColor Green
-    & $pythonExe -m pip install --quiet --upgrade pip setuptools wheel
+    & $pythonExe -m pip install --quiet --prefer-binary --upgrade pip setuptools wheel
     if ($LASTEXITCODE -ne 0) {
         throw "pip upgrade failed with code $LASTEXITCODE"
     }
 
     $mainReqs = Join-Path $scriptDir "config\requirements.txt"
-    Write-Host "Installing main requirements..." -ForegroundColor Green
-    & $pythonExe -m pip install --quiet -r $mainReqs
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to install main requirements from $mainReqs"
+    $serverReqs = Join-Path $scriptDir "config\requirements-server.upstream.txt"
+
+    $pipArgs = @("install", "--quiet", "--prefer-binary", "-r", $mainReqs)
+    if (Test-Path $serverReqs) {
+        $pipArgs += @("-r", $serverReqs)
     }
 
-    $serverReqs = Join-Path $scriptDir "config\requirements-server.upstream.txt"
-    if (Test-Path $serverReqs) {
-        Write-Host "Installing server-specific requirements..." -ForegroundColor Green
-        & $pythonExe -m pip install --quiet -r $serverReqs
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to install server requirements from $serverReqs"
-        }
+    Write-Host "Installing requirements (--prefer-binary)..." -ForegroundColor Green
+    & $pythonExe -m pip @pipArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to install requirements"
     }
 
     Write-Host ""

@@ -7,6 +7,7 @@ Usage:
     python tools/test_patches.py
 """
 import io
+import json
 import os
 import shutil
 import sys
@@ -2223,6 +2224,43 @@ class TestProjectPatchHardening(unittest.TestCase):
         patched = apply_patches.patch_preferences_accessibility(sample, "cookies.html")
         self.assertIn('aria-label="{{- _(\'Preferences hash\') -}}"', patched)
         self.assertIn('id="pref-hash-input"', patched)
+
+
+class TestPatchCache(unittest.TestCase):
+    """Tests for patch caching and fast-path verification."""
+
+    def test_compute_fingerprints_returns_dict(self):
+        fp = apply_patches._compute_fingerprints()
+        self.assertIsInstance(fp, dict)
+        # Should at least contain this script itself or apply-patches.py
+        self.assertTrue(any("apply-patches.py" in k for k in fp.keys()))
+
+    def test_cache_validity_roundtrip(self):
+        # Save cache and verify it's valid
+        apply_patches.save_patch_cache()
+        self.assertTrue(apply_patches.is_patch_cache_valid())
+
+    def test_cache_invalidated_on_tamper(self):
+        apply_patches.save_patch_cache()
+        self.assertTrue(apply_patches.is_patch_cache_valid())
+
+        # Temporarily tamper with cache file
+        with open(apply_patches.CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        orig_files = data.get("files", {})
+        # Fake a modified mtime
+        if orig_files:
+            first_key = next(iter(orig_files))
+            data["files"][first_key]["size"] = orig_files[first_key]["size"] + 9999
+            with open(apply_patches.CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            
+            self.assertFalse(apply_patches.is_patch_cache_valid())
+        
+        # Restore valid cache
+        apply_patches.save_patch_cache()
+        self.assertTrue(apply_patches.is_patch_cache_valid())
 
 
 if __name__ == "__main__":
