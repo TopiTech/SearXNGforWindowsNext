@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "searxng": {
+      "type": "local",
+      "command": [
+        "python",
+        "tools/mcp_server.py"
+      ],
+      "environment": {
+        "SEARXNG_BASE_URL": "http://127.0.0.1:8888"
+      },
+      "enabled": true
+    }
+  }
+}

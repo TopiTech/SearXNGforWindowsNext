@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "searxng": {
+      "command": "python",
+      "args": [
+        "tools/mcp_server.py"
+      ],
+      "env": {
+        "SEARXNG_BASE_URL": "http://127.0.0.1:8888"
+      }
+    }
+  }
+}

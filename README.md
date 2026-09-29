@@ -94,6 +94,64 @@ GET http://127.0.0.1:8888/scrape?url=https://example.com/article
 
 
 
+### 🤖 コーディングエージェント連携 (OpenCode, Claude Code, Cursor, Codex など)
+
+SearXNG for Windows Next は **OpenCode**, **Claude Code**, **Cursor**, **Windsurf**, **Cline**, **OpenAI Codex CLI**, **Aider** 等の AI コーディングエージェントから極めて簡単に呼び出すことができます。
+
+詳細なエージェント別設定手順やトラブルシューティングは [docs/CODING_AGENTS.md](docs/CODING_AGENTS.md) を参照してください。
+
+#### 1. MCP (Model Context Protocol) サーバーとして呼び出す
+エージェント設定ファイルに登録するだけで、`searxng_search`（Web検索）、`searxng_scrape`（本文抽出）、`searxng_health`（稼働確認）の各ツールが利用可能になります。
+
+- **OpenCode (`opencode.json`):**
+  ```json
+  {
+    "mcp": {
+      "searxng": {
+        "type": "local",
+        "command": ["python", "tools/mcp_server.py"],
+        "enabled": true
+      }
+    }
+  }
+  ```
+
+- **Claude Code (CLI):**
+  ```bash
+  claude mcp add searxng -- python tools/mcp_server.py
+  ```
+
+- **Cursor / Windsurf / Claude Desktop (`.cursor/mcp.json` 等):**
+  ```json
+  {
+    "mcpServers": {
+      "searxng": {
+        "command": "python",
+        "args": ["tools/mcp_server.py"],
+        "env": {
+          "SEARXNG_BASE_URL": "http://127.0.0.1:8888"
+        }
+      }
+    }
+  }
+  ```
+
+#### 2. コマンドライン / Codex / ターミナルから呼び出す
+MCP 非対応のエージェントやスクリプトからでも、付属の CLI ツールで簡単に検索・本文抽出を行えます。
+
+```bash
+# Web 検索 (AI 向け Markdown 形式)
+python tools/searxng_cli.py search "FastAPI lifespan events" -n 5
+
+# Web ページの本文抽出
+python tools/searxng_cli.py scrape "https://docs.searxng.org" --max-chars 3000
+
+# サーバー稼働確認 (Windows バッチラッパー)
+tools\searxng.bat health
+```
+
+
+
 ### Open WebUI での活用例 (Tool として登録)
 
 Open WebUI を使用している場合、この SearXNG フォークの「検索（json_lite）」および「スクレイピング（scrape）」機能をツールとして登録することで、AI が必要に応じて Web 検索と本文抽出を組み合わせて実行できるようになります。なおこの機能に関しては未テストであり、想定していた動作結果が得られない可能性があります。
@@ -178,6 +236,11 @@ class Tools:
 ##  構成ファイル
 
 - **`SearXNG for Windows.bat`**: メインの起動スクリプト。
+- **`tools/mcp_server.py`**: AI コーディングエージェント用 MCP (Model Context Protocol) stdio サーバー。
+- **`tools/searxng_cli.py`**: ターミナルおよびエージェント向けコマンドライン検索・スクレイピングツール。
+- **`tools/searxng.bat`**: Windows 用 CLI 実行ラッパー。
+- **`docs/CODING_AGENTS.md`**: 各種コーディングエージェント連携の詳細マニュアル。
+- **`config/agent_templates/`**: OpenCode, Cursor 等のエージェント設定テンプレート集。
 - **`config/settings.yml.example`**: 追跡されるテンプレート。初回起動時に `config/settings.yml` へコピーされる。
 - **`config/settings.yml`**: ユーザー設定（エンジン、ポート、フォーマットなど）。`.gitignore` 対象のため自由に編集可能。
 - **`config/secret.key`**: Flask の `secret_key` のみを保存するローカルファイル。`.gitignore` 対象。削除すると次回起動時に新しいキーが生成される。

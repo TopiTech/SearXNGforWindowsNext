@@ -79,11 +79,15 @@ try {
         throw "Failed to apply patches via apply-patches.py"
     }
 
-    # 4. Run Unit Tests (patch idempotency, engine disabling, secret key generation)
+    # 4. Run Unit Tests (patch idempotency, engine disabling, secret key generation, agent tools)
     Write-Host "[4/6] Running unit tests..." -ForegroundColor Green
     & ".\python\python.exe" "tools\test_patches.py"
     if ($LASTEXITCODE -ne 0) {
         throw "Unit tests in tools\test_patches.py failed with exit code $LASTEXITCODE"
+    }
+    & ".\python\python.exe" "tools\test_agent_tools.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unit tests in tools\test_agent_tools.py failed with exit code $LASTEXITCODE"
     }
     Write-Host "  [OK] Unit tests passed!" -ForegroundColor Green
 
