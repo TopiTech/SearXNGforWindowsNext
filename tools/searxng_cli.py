@@ -111,6 +111,61 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output raw JSON instead of Markdown",
     )
 
+    # Subcommand: deep (Exa/Tavily-like one-pass deep search)
+    deep_parser = subparsers.add_parser(
+        "deep",
+        help="Exa/Tavily-like deep search with parallel scraping and BM25 highlights",
+    )
+    deep_parser.add_argument("query", help="Search query or research topic")
+    deep_parser.add_argument(
+        "-n",
+        "--max-results",
+        type=int,
+        default=5,
+        help="Number of results to return (default: 5)",
+    )
+    deep_parser.add_argument(
+        "-d",
+        "--depth",
+        choices=["basic", "advanced", "code"],
+        default="advanced",
+        help="Search depth: 'basic' (snippets), 'advanced' (highlights), or 'code' (tech/code priority)",
+    )
+    deep_parser.add_argument(
+        "--no-highlights",
+        dest="include_highlights",
+        action="store_false",
+        default=True,
+        help="Disable passage highlight extraction",
+    )
+    deep_parser.add_argument(
+        "--site",
+        dest="include_domains",
+        action="append",
+        default=[],
+        help="Restrict search to specific domain(s) (can be specified multiple times)",
+    )
+    deep_parser.add_argument(
+        "--exclude-site",
+        dest="exclude_domains",
+        action="append",
+        default=[],
+        help="Exclude specific domain(s) (can be specified multiple times)",
+    )
+    deep_parser.add_argument(
+        "--max-tokens",
+        dest="max_tokens",
+        type=int,
+        default=3000,
+        help="Maximum token budget for Markdown context (default: 3000)",
+    )
+    deep_parser.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Output raw JSON instead of Markdown",
+    )
+
     # Subcommand: health
     health_parser = subparsers.add_parser(
         "health",
@@ -161,6 +216,27 @@ def cmd_scrape(args: argparse.Namespace) -> int:
     return 1 if res.get("error") else 0
 
 
+def cmd_deep(args: argparse.Namespace) -> int:
+    """Handle 'deep' subcommand."""
+    res = searxng_client.search_deep(
+        query=args.query,
+        search_depth=args.depth,
+        max_results=args.max_results,
+        include_highlights=args.include_highlights,
+        include_domains=args.include_domains if args.include_domains else None,
+        exclude_domains=args.exclude_domains if args.exclude_domains else None,
+        max_tokens=args.max_tokens,
+        base_url=args.base_url,
+        timeout=args.timeout,
+    )
+    if args.as_json:
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+    else:
+        print(searxng_client.format_deep_search_markdown(res))
+
+    return 1 if res.get("error") else 0
+
+
 def cmd_health(args: argparse.Namespace) -> int:
     """Handle 'health' subcommand."""
     is_healthy, status_msg = searxng_client.check_health(
@@ -195,6 +271,8 @@ def main() -> None:
     exit_code = 0
     if args.command == "search":
         exit_code = cmd_search(args)
+    elif args.command == "deep":
+        exit_code = cmd_deep(args)
     elif args.command == "scrape":
         exit_code = cmd_scrape(args)
     elif args.command == "health":
@@ -208,3 +286,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

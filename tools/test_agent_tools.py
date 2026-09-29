@@ -168,6 +168,25 @@ class TestSearXNGClient(unittest.TestCase):
         self.assertIn("Hello World Article", md)
         self.assertIn("コンテキスト長制限のため", md)
 
+    @patch("agentic_search.execute_deep_search")
+    def test_search_deep_invokes_agentic_search(self, mock_deep: MagicMock) -> None:
+        mock_deep.return_value = {
+            "query": "fastapi",
+            "results": [],
+            "markdown": "## Deep Search Results: `fastapi`",
+        }
+        res = searxng_client.search_deep("fastapi", search_depth="advanced", max_results=3)
+        self.assertEqual(res["query"], "fastapi")
+        mock_deep.assert_called_once()
+
+    def test_format_deep_search_markdown(self) -> None:
+        data = {
+            "query": "fastapi",
+            "markdown": "## Deep Search Results: `fastapi`\n\n### [1] [Docs](https://fastapi.tiangolo.com)",
+        }
+        md = searxng_client.format_deep_search_markdown(data)
+        self.assertIn("Deep Search Results", md)
+
 
 class TestMCPServer(unittest.TestCase):
     """Test the MCP stdio server protocol handling."""
@@ -206,6 +225,34 @@ class TestMCPServer(unittest.TestCase):
         # Check search tool schema
         search_tool = next(t for t in tools if t["name"] == "searxng_search")
         self.assertIn("query", search_tool["inputSchema"]["required"])
+
+        # Check deep search tool schema
+        self.assertIn("searxng_deep_search", tool_names)
+        deep_tool = next(t for t in tools if t["name"] == "searxng_deep_search")
+        self.assertIn("query", deep_tool["inputSchema"]["required"])
+        self.assertIn("search_depth", deep_tool["inputSchema"]["properties"])
+
+    @patch("searxng_client.search_deep")
+    def test_tools_call_deep_search(self, mock_deep: MagicMock) -> None:
+        mock_deep.return_value = {
+            "query": "fastapi lifespan",
+            "results": [],
+            "markdown": "## Deep Search Results: `fastapi lifespan`\n\n### [1] [FastAPI](https://fastapi.tiangolo.com)",
+        }
+        raw_msg = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 15,
+                "method": "tools/call",
+                "params": {"name": "searxng_deep_search", "arguments": {"query": "fastapi lifespan"}},
+            }
+        )
+        resp = mcp_server.process_message(raw_msg)
+        self.assertIsNotNone(resp)
+        self.assertEqual(resp["id"], 15)
+        self.assertFalse(resp["result"]["isError"])
+        text = resp["result"]["content"][0]["text"]
+        self.assertIn("Deep Search Results", text)
 
     @patch("searxng_client.search")
     def test_tools_call_search(self, mock_search: MagicMock) -> None:
@@ -366,6 +413,22 @@ class TestSearXNGCLI(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("Scraped article text", mock_out.getvalue())
 
+    @patch("searxng_client.search_deep")
+    def test_cmd_deep_markdown(self, mock_deep: MagicMock) -> None:
+        mock_deep.return_value = {
+            "query": "fastapi",
+            "results": [],
+            "markdown": "## Deep Search Results: `fastapi`",
+        }
+        parser = searxng_cli.build_parser()
+        args = parser.parse_args(["deep", "fastapi", "-n", "3", "-d", "advanced"])
+
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            code = searxng_cli.cmd_deep(args)
+            self.assertEqual(code, 0)
+            self.assertIn("Deep Search Results", mock_out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -351,3 +351,72 @@ def format_scrape_markdown(scrape_data: dict[str, Any]) -> str:
 
     lines.append(content)
     return "\n".join(lines).strip()
+
+
+def search_deep(
+    query: str,
+    search_depth: str = "advanced",
+    max_results: int = 5,
+    include_highlights: bool = True,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+    max_tokens: int = 3000,
+    base_url: str | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Execute deep, agentic search with speculative page fetching and BM25 highlights.
+
+    Args:
+        query: Search query or research topic.
+        search_depth: 'basic' (snippets only), 'advanced' (speculative scrape + highlights),
+                      or 'code' (prioritize technical docs and code repositories).
+        max_results: Number of top results to return (default 5, min 1, max 20).
+        include_highlights: Whether to extract relevant passage highlights (default True).
+        include_domains: Optional list of domains to restrict search to.
+        exclude_domains: Optional list of domains to exclude.
+        max_tokens: Maximum tokens for packed context (default 3000).
+        base_url: Optional SearXNG base URL override.
+        timeout: Optional request timeout in seconds.
+
+    Returns:
+        dict: Standardized deep search result dictionary with markdown representation.
+    """
+    try:
+        import agentic_search
+    except ImportError:
+        # Fallback if imported from a different path
+        import sys
+        sys_path = os.path.dirname(os.path.abspath(__file__))
+        if sys_path not in sys.path:
+            sys.path.insert(0, sys_path)
+        import agentic_search
+
+    return agentic_search.execute_deep_search(
+        query=query,
+        search_func=search,
+        scrape_func=scrape,
+        search_depth=search_depth,
+        max_results=max_results,
+        include_highlights=include_highlights,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
+        max_tokens=max_tokens,
+        base_url=base_url,
+        timeout=timeout,
+    )
+
+
+def format_deep_search_markdown(deep_data: dict[str, Any]) -> str:
+    """Format deep search results into high-density Markdown for AI agents."""
+    error = deep_data.get("error")
+    if error:
+        return f"### ディープ検索エラー\n\n{error}"
+
+    # Return packed markdown if already computed by agentic_search
+    md = deep_data.get("markdown")
+    if md:
+        return md
+
+    # Fallback to standard search markdown
+    return format_search_markdown(deep_data)
+

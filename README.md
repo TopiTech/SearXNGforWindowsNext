@@ -94,6 +94,20 @@ GET http://127.0.0.1:8888/scrape?url=https://example.com/article
 
 
 
+### ⚡ Agentic Deep Search (Exa / Tavily スタイル検索)
+**1 回のリクエストで検索・並列スクレイピング・BM25ハイライト抽出・ドメイン評価を完結**させる、AI エージェント特化の革新的な検索ロジックです。
+- **One-Pass 完結**: 従来の「検索 → URL 選定 → 個別スクレイピング」のマルチターン往復を廃止。
+- **Smart Highlighting**: 1万文字の長文から、クエリに最も関連するパラグラフ（200〜400文字）をBM25スコアリングでピンポイント抽出。
+- **Domain Authority & Anti-SEO Spam**: 公式ドキュメント（Python, MDN, GitHub等）を自動加点し、低品質コピペファーム・広告まとめサイトを自動除外・ペナルティ。
+- **Token Budgeting**: 指定したトークン予算（`max_tokens`）内に収まるよう重要度順に構造化パッキング。
+
+**CLI での実行例:**
+```bash
+python tools/searxng_cli.py deep "FastAPI lifespan context manager syntax" -n 3
+```
+
+---
+
 ### 🤖 コーディングエージェント連携 (OpenCode, Claude Code, Cursor, Codex など)
 
 SearXNG for Windows Next は **OpenCode**, **Claude Code**, **Cursor**, **Windsurf**, **Cline**, **OpenAI Codex CLI**, **Aider** 等の AI コーディングエージェントから極めて簡単に呼び出すことができます。
@@ -101,7 +115,11 @@ SearXNG for Windows Next は **OpenCode**, **Claude Code**, **Cursor**, **Windsu
 詳細なエージェント別設定手順やトラブルシューティングは [docs/CODING_AGENTS.md](docs/CODING_AGENTS.md) を参照してください。
 
 #### 1. MCP (Model Context Protocol) サーバーとして呼び出す
-エージェント設定ファイルに登録するだけで、`searxng_search`（Web検索）、`searxng_scrape`（本文抽出）、`searxng_health`（稼働確認）の各ツールが利用可能になります。
+エージェント設定ファイルに登録するだけで、以下のツールが利用可能になります：
+- `searxng_deep_search`: **【推奨】** Exa/Tavily スタイルのワンパス深層検索（並列本文抽出＋BM25ハイライト＋ドメイン重み付け）
+- `searxng_search`: 高速メタ検索（スニペットとURLの取得）
+- `searxng_scrape`: 特定URLの本文抽出（Markdown化）
+- `searxng_health`: SearXNG サーバーの稼働確認
 
 - **OpenCode (`opencode.json`):**
   ```json

@@ -94,6 +94,60 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "searxng_deep_search",
+        "description": (
+            "Exa/Tavily-like one-pass deep web search. Performs meta-search, automatically "
+            "fetches top web pages in parallel, extracts clean relevant highlights via BM25, "
+            "and reranks results using domain authority and intent routing. Returns rich "
+            "context with minimal token usage in a single turn."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search keywords or research question.",
+                },
+                "search_depth": {
+                    "type": "string",
+                    "description": "Search depth: 'basic' (snippets only), 'advanced' (speculative scrape + highlights), or 'code' (prioritize code/docs).",
+                    "enum": ["basic", "advanced", "code"],
+                    "default": "advanced",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Number of top results to return (default 5, min 1, max 20).",
+                    "default": 5,
+                    "minimum": 1,
+                    "maximum": 20,
+                },
+                "include_highlights": {
+                    "type": "boolean",
+                    "description": "Whether to extract relevant passage highlights (default true).",
+                    "default": True,
+                },
+                "include_domains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of domains to restrict search to (e.g. ['docs.python.org', 'github.com']).",
+                },
+                "exclude_domains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of domains to exclude.",
+                },
+                "max_tokens": {
+                    "type": "integer",
+                    "description": "Maximum token budget for returned markdown context (default 3000).",
+                    "default": 3000,
+                    "minimum": 500,
+                    "maximum": 16000,
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "searxng_health",
         "description": (
             "Check the health and reachability of the local SearXNG server instance."
@@ -199,6 +253,38 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         data = searxng_client.scrape(url=url, max_length=max_length)
         is_error = bool(data.get("error"))
         formatted_text = searxng_client.format_scrape_markdown(data)
+
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "content": [{"type": "text", "text": formatted_text}],
+                "isError": is_error,
+            },
+        }
+
+    elif tool_name == "searxng_deep_search":
+        query = str(arguments.get("query", ""))
+        search_depth = str(arguments.get("search_depth", "advanced"))
+        max_results = int(arguments.get("max_results", 5))
+        include_highlights = bool(arguments.get("include_highlights", True))
+        raw_inc = arguments.get("include_domains")
+        include_domains = [str(d) for d in raw_inc] if isinstance(raw_inc, list) else None
+        raw_exc = arguments.get("exclude_domains")
+        exclude_domains = [str(d) for d in raw_exc] if isinstance(raw_exc, list) else None
+        max_tokens = int(arguments.get("max_tokens", 3000))
+
+        data = searxng_client.search_deep(
+            query=query,
+            search_depth=search_depth,
+            max_results=max_results,
+            include_highlights=include_highlights,
+            include_domains=include_domains,
+            exclude_domains=exclude_domains,
+            max_tokens=max_tokens,
+        )
+        is_error = bool(data.get("error"))
+        formatted_text = searxng_client.format_deep_search_markdown(data)
 
         return {
             "jsonrpc": "2.0",

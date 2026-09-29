@@ -186,15 +186,31 @@ python tools/searxng_cli.py scrape "https://docs.searxng.org" --max-chars 3000
 ```markdown
 ### 外部情報の検索ルール
 最新のライブラリ仕様、エラー解決策、公式ドキュメントを調べる必要がある場合は、以下のローカルコマンドを実行して情報を取得してください：
-- Web 検索: `python tools/searxng_cli.py search "<検索キーワード>" -n 5`
-- ページ本文の取得: `python tools/searxng_cli.py scrape "<URL>" --max-chars 3000`
+- 深層検索 (推奨): `python tools/searxng_cli.py deep "<検索キーワード/質問>" -n 5`
+  (※自動で上位サイトを並列スクレイプし、BM25で最も関連するハイライト段落を抽出して返します)
+- 通常検索: `python tools/searxng_cli.py search "<検索キーワード>" -n 5`
+- 個別ページ本文の取得: `python tools/searxng_cli.py scrape "<URL>" --max-chars 3000`
 ```
 
 ---
 
 ## 📋 提供ツール仕様
 
-### 1. `searxng_search` (Web 検索)
+### 1. `searxng_deep_search` (Exa/Tavily スタイル深層検索) ★推奨★
+
+1 回の呼び出しで「メタ検索 → ドメインスコアリング → 並列非同期スクレイプ → BM25ハイライト抽出 → トークン制御」を一貫して実行します。AIエージェントのターン数とトークン消費を最小化しながら最高密度の回答コンテキストを返します。
+
+| パラメータ | 型 | 既定値 | 説明 |
+|---|---|---|---|
+| `query` | `string` | *(必須)* | 検索キーワードまたは自然言語の質問。 |
+| `search_depth` | `string` | `"advanced"` | 検索深度。`"advanced"` (並列スクレイプ+BM25ハイライト), `"code"` (公式ドキュメント・GitHub優先), `"basic"` (スニペットのみ)。 |
+| `max_results` | `integer` | `5` | 取得対象の上位件数 (1〜20件)。 |
+| `include_highlights` | `boolean` | `true` | 本文から最もクエリに関連する段落（ハイライト）を抽出するかどうか。 |
+| `include_domains` | `array[string]` | `null` | 検索対象を限定するドメインのリスト（例: `["docs.python.org", "github.com"]`）。 |
+| `exclude_domains` | `array[string]` | `null` | 除外するドメインのリスト（コピペサイト、不要なドメイン等）。 |
+| `max_tokens` | `integer` | `3000` | 生成される Markdown コンテキストの最大トークン予算 (500〜16000)。 |
+
+### 2. `searxng_search` (Web 検索)
 
 SearXNG の `json_lite` 形式を使用して Web 検索を行います。
 
@@ -206,7 +222,7 @@ SearXNG の `json_lite` 形式を使用して Web 検索を行います。
 | `engines` | `string` | `""` | 検索エンジン指定（例: `"duckduckgo,bing"`）。 |
 | `time_range` | `string` | `""` | 期間指定（`"day"`, `"week"`, `"month"`, `"year"`）。 |
 
-### 2. `searxng_scrape` (本文抽出)
+### 3. `searxng_scrape` (本文抽出)
 
 指定された URL の Web ページから本文テキストを抽出します。
 
@@ -215,7 +231,7 @@ SearXNG の `json_lite` 形式を使用して Web 検索を行います。
 | `url` | `string` | *(必須)* | 抽出対象の Web ページ URL。 |
 | `max_length` | `integer` | `4000` | 抽出文字数の上限（コンテキスト溢れ防止）。 |
 
-### 3. `searxng_health` (ヘルスチェック)
+### 4. `searxng_health` (ヘルスチェック)
 
 SearXNG サーバーの稼働状態を確認します。引数はありません。
 
