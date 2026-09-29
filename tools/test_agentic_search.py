@@ -159,6 +159,22 @@ class TestSpeculativeFetcher(unittest.TestCase):
         self.assertFalse(updated[1].is_scraped)
         self.assertIn("Connection error", updated[1].scrape_error)
 
+    def test_fetch_pages_handles_urllib_error(self) -> None:
+        import urllib.error
+
+        def failing_scrape(url: str, **kwargs):
+            raise urllib.error.URLError("Connection refused")
+
+        fetcher = agentic_search.SpeculativeFetcher(scrape_func=failing_scrape, max_workers=2)
+        items = [
+            agentic_search.SearchResultItem(title="Page 1", url="https://site1.com", domain="site1.com", content="snip1"),
+        ]
+
+        updated = fetcher.fetch_pages(items, max_fetch=1)
+        self.assertEqual(len(updated), 1)
+        self.assertFalse(updated[0].is_scraped)
+        self.assertIn("Connection refused", updated[0].scrape_error)
+
 
 class TestTokenBudgeter(unittest.TestCase):
     """Test token estimation and markdown packing."""

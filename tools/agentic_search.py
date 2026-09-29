@@ -15,6 +15,7 @@ from __future__ import annotations
 import concurrent.futures
 import math
 import re
+import urllib.error
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field

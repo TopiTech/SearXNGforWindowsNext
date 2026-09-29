@@ -2024,13 +2024,13 @@ class TestHardeningEnhancements(unittest.TestCase):
                 time.sleep(0.01)
             return b''.join(read_chunks)
 
-        # When duration is tight (0.015s), slow stream of 3 chunks should time out
-        chunks = [b'chunk1', b'chunk2', b'chunk3']
+        # When duration is tight (0.005s), slow stream of chunks should time out reliably
+        chunks = [b'chunk1', b'chunk2', b'chunk3', b'chunk4', b'chunk5']
         with self.assertRaises(httpx.TimeoutException):
-            read_stream(chunks, env_dur="0.015")
+            read_stream(chunks, env_dur="0.005")
 
         # When duration is generous, stream succeeds
-        result = read_stream(chunks, env_dur="5.0")
+        result = read_stream([b'chunk1', b'chunk2', b'chunk3'], env_dur="5.0")
         self.assertEqual(result, b'chunk1chunk2chunk3')
 
     def test_json_lite_none_fields_coerced_to_strings(self):
