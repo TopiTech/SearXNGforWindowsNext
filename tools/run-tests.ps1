@@ -101,7 +101,7 @@ try {
     
     # Run the server under the embedded python
     $serverProcess = Start-Process -FilePath ".\python\python.exe" `
-        -ArgumentList "-m granian --interface wsgi searx.webapp:application --host 127.0.0.1 --port 8888 --blocking-threads 4" `
+        -ArgumentList "-m granian --interface wsgi searx.webapp:application --host 127.0.0.1 --port 8888 --blocking-threads 4 --no-ws" `
         -PassThru -NoNewWindow
 
     # 6. Wait for the server to become responsive

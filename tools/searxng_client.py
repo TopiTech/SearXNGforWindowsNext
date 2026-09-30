@@ -139,12 +139,15 @@ def search(
         "q": clean_query,
         "format": "json_lite",
     }
-    if categories.strip():
-        params["categories"] = categories.strip()
-    if engines.strip():
-        params["engines"] = engines.strip()
-    if time_range.strip():
-        params["time_range"] = time_range.strip()
+    cats_clean = (categories or "").strip()
+    if cats_clean:
+        params["categories"] = cats_clean
+    engs_clean = (engines or "").strip()
+    if engs_clean:
+        params["engines"] = engs_clean
+    tr_clean = (time_range or "").strip()
+    if tr_clean:
+        params["time_range"] = tr_clean
 
     search_url = f"{target_base}/search?{urllib.parse.urlencode(params)}"
 

@@ -494,13 +494,15 @@ def get_ai_info(webapp_mod: Any = None, host_url: str = "http://127.0.0.1:8888")
 
     opencode_mcp = json.dumps(
         {
+            "$schema": "https://opencode.ai/config.json",
             "mcp": {
                 "searxng": {
                     "type": "local",
                     "command": [python_exe, mcp_py],
+                    "environment": {"SEARXNG_BASE_URL": base},
                     "enabled": True,
                 }
-            }
+            },
         },
         indent=2,
         ensure_ascii=False,
@@ -2361,7 +2363,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
               hlHeader.style.fontWeight = '700';
               hlHeader.style.fontSize = '0.84rem';
               hlHeader.style.margin = '0.5rem 0 0.3rem';
-              hlHeader.textContent = '🎯 BM25 関連ハイライト (' + res.query + ')';
+              hlHeader.textContent = '🎯 BM25 関連ハイライト (' + (res.query || '') + ')';
               card.appendChild(hlHeader);
               renderHighlights(card, res.highlights, '');
             }
@@ -2454,6 +2456,11 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       function executeCurrentAction() {
         var qVal = document.getElementById('q').value.trim();
         if (!qVal) return;
+
+        var classicLink = document.getElementById('classic-ui-link');
+        if (classicLink && !isUrlText(qVal)) {
+          classicLink.href = '/search?q=' + encodeURIComponent(qVal);
+        }
 
         // Auto-detect URL in search bar if user pastes http(s)://...
         if (state.mode === 'scrape' || isUrlText(qVal)) {
@@ -2565,9 +2572,18 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             max_length=max_len,
             webapp_mod=webapp_mod,
         )
-        status_code = (
-            400 if res.get("error") and "拒否" in str(res.get("error")) else (422 if res.get("error") else 200)
+        err = str(res.get("error") or "")
+        err_lower = err.lower()
+        is_blocked = (
+            "拒否" in err
+            or "400" in err
+            or "blocked" in err_lower
+            or "private" in err_lower
+            or "invalid port" in err_lower
+            or "loopback" in err_lower
+            or "ssrf" in err_lower
         )
+        status_code = 400 if is_blocked else (422 if err else 200)
         return jsonify(res), status_code
 
     @app.route("/deep_search", methods=["GET", "POST"])

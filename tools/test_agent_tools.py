@@ -583,6 +583,124 @@ class TestSearXNGCLI(unittest.TestCase):
         self.assertEqual(mock_unified.call_args[1]["mode"], "fast")
         self.assertEqual(mock_unified.call_args[1]["search_depth"], "advanced")
 
+    @patch("urllib.request.urlopen")
+    def test_client_search_handles_none_parameters(self, mock_urlopen: MagicMock) -> None:
+        """Verify searxng_client.search gracefully handles None for categories, engines, and time_range."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"query": "test", "results": []}).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        res = searxng_client.search(
+            "test",
+            categories=None,  # type: ignore[arg-type]
+            engines=None,  # type: ignore[arg-type]
+            time_range=None,  # type: ignore[arg-type]
+        )
+        self.assertNotIn("error", res)
+        self.assertEqual(res["query"], "test")
+
+    @patch("searxng_client.unified_search")
+    def test_mcp_handles_null_optional_arguments(self, mock_unified: MagicMock) -> None:
+        """Verify MCP server handles null JSON parameters without turning them into 'None' strings."""
+        mock_unified.return_value = {
+            "mode": "deep",
+            "query": "python",
+            "markdown": "## Results",
+        }
+        raw_msg = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 99,
+                "method": "tools/call",
+                "params": {
+                    "name": "searxng_search",
+                    "arguments": {
+                        "query": "python",
+                        "mode": "deep",
+                        "categories": None,
+                        "engines": None,
+                        "time_range": None,
+                        "include_highlights": None,
+                    },
+                },
+            }
+        )
+        resp = mcp_server.process_message(raw_msg)
+        self.assertIsNotNone(resp)
+        self.assertFalse(resp["result"]["isError"])
+        mock_unified.assert_called_once()
+        call_kwargs = mock_unified.call_args[1]
+        self.assertEqual(call_kwargs["categories"], "")
+        self.assertEqual(call_kwargs["engines"], "")
+        self.assertEqual(call_kwargs["time_range"], "")
+        self.assertTrue(call_kwargs["include_highlights"])
+
+    @patch("searxng_client.search")
+    def test_mcp_basic_search_handles_null_arguments(self, mock_search: MagicMock) -> None:
+        """Verify standard MCP searxng_search handles null parameters safely."""
+        mock_search.return_value = {
+            "query": "python",
+            "results": [],
+        }
+        raw_msg = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 101,
+                "method": "tools/call",
+                "params": {
+                    "name": "searxng_search",
+                    "arguments": {
+                        "query": "python",
+                        "categories": None,
+                        "engines": None,
+                        "time_range": None,
+                    },
+                },
+            }
+        )
+        resp = mcp_server.process_message(raw_msg)
+        self.assertIsNotNone(resp)
+        self.assertFalse(resp["result"]["isError"])
+        mock_search.assert_called_once_with(query="python", count=5, categories="", engines="", time_range="")
+
+    @patch("searxng_client.search_deep")
+    def test_mcp_deep_search_null_highlights_defaults_to_true(self, mock_deep: MagicMock) -> None:
+        """Verify searxng_deep_search with include_highlights=null preserves default True."""
+        mock_deep.return_value = {
+            "query": "python",
+            "markdown": "## Deep Results",
+        }
+        raw_msg = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 100,
+                "method": "tools/call",
+                "params": {
+                    "name": "searxng_deep_search",
+                    "arguments": {
+                        "query": "python",
+                        "include_highlights": None,
+                    },
+                },
+            }
+        )
+        resp = mcp_server.process_message(raw_msg)
+        self.assertIsNotNone(resp)
+        self.assertFalse(resp["result"]["isError"])
+        mock_deep.assert_called_once()
+        self.assertTrue(mock_deep.call_args[1]["include_highlights"])
+
+    def test_webui_next_ai_info_opencode_snippet_has_environment(self) -> None:
+        """Verify get_ai_info provides complete opencode config with environment."""
+        import webui_next
+
+        info = webui_next.get_ai_info(host_url="http://127.0.0.1:8888")
+        opencode_raw = info["snippets"]["opencode_json"]
+        opencode_cfg = json.loads(opencode_raw)
+        self.assertIn("mcp", opencode_cfg)
+        self.assertIn("environment", opencode_cfg["mcp"]["searxng"])
+        self.assertEqual(opencode_cfg["mcp"]["searxng"]["environment"]["SEARXNG_BASE_URL"], "http://127.0.0.1:8888")
+
 
 if __name__ == "__main__":
     unittest.main()

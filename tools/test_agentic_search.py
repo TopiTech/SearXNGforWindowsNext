@@ -604,5 +604,76 @@ class TestQueryOptimizerEdgeCases(unittest.TestCase):
         self.assertIn("Unexpected scraper crash", updated[0].scrape_error)
 
 
+class TestRegressionHardening(unittest.TestCase):
+    """Regression tests for code hardening and edge-case fixes."""
+
+    def test_parse_query_with_plus_site_and_trailing_dots(self) -> None:
+        query = "fastapi +site:.tiangolo.com. -site:spam.org."
+        clean_q, inc, exc = agentic_search.QueryOptimizer.parse_query(query)
+        self.assertEqual(clean_q, "fastapi")
+        self.assertEqual(inc, ["tiangolo.com"])
+        self.assertEqual(exc, ["spam.org"])
+
+    def test_bm25_tokenize_nfkc_normalization(self) -> None:
+        extractor = agentic_search.BM25PassageExtractor()
+        # Fullwidth alphanumeric and zenkaku symbols
+        tokens1 = extractor._tokenize("Ｐｙｔｈｏｎ　３．１１")
+        tokens2 = extractor._tokenize("python 3.11")
+        self.assertEqual(tokens1, tokens2)
+
+    def test_bm25_split_passages_crlf_and_boundary(self) -> None:
+        extractor = agentic_search.BM25PassageExtractor()
+        text = "```python\r\ndef foo():\r\n    return 42\r\n```\r\n\r\nSome following text describing foo in detail."
+        passages = extractor.split_passages(text, min_chars=10)
+        self.assertEqual(len(passages), 2)
+        self.assertTrue(passages[0].startswith("```python"))
+        self.assertTrue(passages[0].endswith("```"))
+
+    def test_speculative_fetcher_bounded_concurrency(self) -> None:
+        active_workers = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def bounded_scrape(url: str, **kwargs):
+            nonlocal active_workers, max_active
+            with lock:
+                active_workers += 1
+                max_active = max(max_active, active_workers)
+            time.sleep(0.05)
+            with lock:
+                active_workers -= 1
+            return {"content": f"data for {url}"}
+
+        fetcher = agentic_search.SpeculativeFetcher(scrape_func=bounded_scrape, max_workers=2)
+        items = [
+            agentic_search.SearchResultItem(title=f"T{i}", url=f"https://ex{i}.com", domain=f"ex{i}.com", content="")
+            for i in range(5)
+        ]
+        updated = fetcher.fetch_pages(items, max_fetch=5, timeout=2.0)
+        self.assertEqual(len(updated), 5)
+        self.assertLessEqual(max_active, 2, "Concurrent worker execution must not exceed max_workers")
+
+    def test_execute_unified_search_none_parameters(self) -> None:
+        mock_search = MagicMock()
+        mock_search.return_value = {
+            "query": "test",
+            "results": [{"title": "T", "url": "https://example.com", "content": "C"}],
+        }
+        mock_scrape = MagicMock()
+        mock_scrape.return_value = {"content": "Sample content"}
+
+        res = agentic_search.execute_unified_search(
+            query="test",
+            search_func=mock_search,
+            scrape_func=mock_scrape,
+            categories=None,
+            engines=None,
+            time_range=None,
+            mode="fast",
+        )
+        self.assertNotIn("error", res)
+        self.assertEqual(res["results_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

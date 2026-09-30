@@ -340,7 +340,9 @@ class TestPatchWebUtils(unittest.TestCase):
     def test_json_lite_ensure_ascii_false(self):
         content = "def get_themes(p):\n    return []\n"
         result = self.fn(content, "webutils.py")
-        self.assertIn("json.dumps(data, cls=JSONEncoder, ensure_ascii=False)", result)
+        self.assertIn("ensure_ascii=False", result)
+        self.assertIn("default=str", result)
+        self.assertIn("json.dumps(data, cls=JSONEncoder, ensure_ascii=False, default=str)", result)
 
 
 class TestPatchWebUtilsWindowsPaths(unittest.TestCase):

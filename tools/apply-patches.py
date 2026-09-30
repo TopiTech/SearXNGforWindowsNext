@@ -783,7 +783,7 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
                 'urls': urls,
             }
         data['infoboxes'] = [_get_box(i) for i in rc.infoboxes]
-    return json.dumps(data, cls=JSONEncoder, ensure_ascii=False)
+    return json.dumps(data, cls=JSONEncoder, ensure_ascii=False, default=str)
 '''
 
     # If old version exists, remove it first

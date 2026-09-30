@@ -17,6 +17,7 @@ import math
 import re
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 from collections.abc import Callable
@@ -252,6 +253,7 @@ def parse_domain_list(val: Any) -> list[str]:
             .split("/")[0]
             .split(":")[0]
             .removeprefix("www.")
+            .strip(".")
         )
         if dom and dom not in cleaned:
             cleaned.append(dom)
@@ -352,8 +354,9 @@ class QueryOptimizer:
 
         for token in tokens:
             lower = token.lower()
-            if lower.startswith("site:") and len(token) > 5:
-                for domain in parse_domain_list(token[5:]):
+            if (lower.startswith("site:") and len(token) > 5) or (lower.startswith("+site:") and len(token) > 6):
+                domain_part = token[6:] if lower.startswith("+site:") else token[5:]
+                for domain in parse_domain_list(domain_part):
                     if domain not in include_domains:
                         include_domains.append(domain)
             elif lower.startswith("-site:") and len(token) > 6:
@@ -525,8 +528,12 @@ class BM25PassageExtractor:
         self.b = b
 
     def _tokenize(self, text: str) -> list[str]:
-        """Tokenize text into lowercase words and CJK fragments."""
-        words = re.findall(r"[A-Za-z0-9_+#.-]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]", text.lower())
+        """Tokenize text into lowercase words and CJK fragments with Unicode NFKC normalization."""
+        norm_text = unicodedata.normalize("NFKC", text.lower())
+        words = re.findall(
+            r"[A-Za-z0-9_+#.-]+|[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef]",
+            norm_text,
+        )
         return [w for w in words if w not in STOP_WORDS]
 
     def split_passages(self, text: str, min_chars: int = 40, max_chars: int = 800) -> list[str]:
@@ -534,8 +541,9 @@ class BM25PassageExtractor:
         if not text:
             return []
 
-        # Split preserving code blocks
-        raw_blocks = re.split(r"(\n```[\s\S]*?```\n|\n\n+)", text)
+        # Normalize CRLF and wrap with newline so start/end code blocks are captured cleanly
+        clean_text = "\n" + text.replace("\r\n", "\n").strip() + "\n"
+        raw_blocks = re.split(r"(\n```[\s\S]*?```\n|\n\n+)", clean_text)
         passages: list[str] = []
         buffer = ""
 
@@ -564,8 +572,8 @@ class BM25PassageExtractor:
             passages.append(buffer.strip())
 
         # If passages are still empty, fallback to sentence chunks
-        if not passages and len(text) >= min_chars:
-            passages = [text[:max_chars].strip()]
+        if not passages and len(text.strip()) >= min_chars:
+            passages = [text.strip()[:max_chars].strip()]
 
         return [p for p in passages if len(p) >= min_chars]
 
@@ -638,7 +646,7 @@ class SpeculativeFetcher:
 
     def __init__(self, scrape_func: Callable[..., dict[str, Any]], max_workers: int = 5) -> None:
         self.scrape_func = scrape_func
-        self.max_workers = max_workers
+        self.max_workers = max(1, max_workers)
 
     def fetch_pages(
         self,
@@ -654,6 +662,7 @@ class SpeculativeFetcher:
             return items
 
         eff_timeout = float(timeout) if timeout is not None and timeout > 0 else 6.0
+        sem = threading.Semaphore(self.max_workers)
 
         def _do_scrape(target_url: str) -> dict[str, Any]:
             try:
@@ -689,13 +698,16 @@ class SpeculativeFetcher:
         # is marshalled back through a plain Future, keeping concurrent.futures.wait
         # semantics (and the public behaviour of this method) unchanged.
         def _daemonized_run(fut: Future, target_url: str) -> None:
-            try:
-                fut.set_result(_do_scrape(target_url))
-            except BaseException as exc:  # noqa: BLE001 - mirror Future.result() semantics
+            with sem:
+                if fut.cancelled():
+                    return
                 try:
-                    fut.set_exception(exc)
-                except concurrent.futures.InvalidStateError:
-                    pass
+                    fut.set_result(_do_scrape(target_url))
+                except BaseException as exc:  # noqa: BLE001 - mirror Future.result() semantics
+                    try:
+                        fut.set_exception(exc)
+                    except concurrent.futures.InvalidStateError:
+                        pass
 
         future_to_item: dict[Future, SearchResultItem] = {}
         for it in to_fetch:
@@ -1086,14 +1098,18 @@ def execute_unified_search(
     intent = QueryOptimizer.classify_intent(clean_q)
     routed_cats, routed_engs = QueryOptimizer.get_routing(intent)
 
+    cat_str = (categories or "").strip()
+    eng_str = (engines or "").strip()
+    tr_str = (time_range or "").strip()
+
     # In fast mode, only use explicit categories/engines unless none are specified
-    if norm_mode == "fast" and not (categories.strip() or engines.strip()):
+    if norm_mode == "fast" and not (cat_str or eng_str):
         target_cats = ""
         target_engs = ""
         fetch_count = max_res if not (final_inc or final_exc) else max(max_res * 2, 10)
     else:
-        target_cats = categories.strip() or routed_cats
-        target_engs = engines.strip() or routed_engs
+        target_cats = cat_str or routed_cats
+        target_engs = eng_str or routed_engs
         fetch_count = max(max_res * 3, 15)
 
     search_kwargs: dict[str, Any] = {
@@ -1104,8 +1120,8 @@ def execute_unified_search(
         "base_url": base_url,
         "timeout": timeout,
     }
-    if time_range.strip():
-        search_kwargs["time_range"] = time_range.strip()
+    if tr_str:
+        search_kwargs["time_range"] = tr_str
 
     try:
         search_res = search_func(**search_kwargs)

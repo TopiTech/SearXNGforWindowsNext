@@ -273,21 +273,24 @@ def _resolve_effective_mode(mode: str, search_depth: Any, query: str) -> str:
 def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
     """Handle tools/call request by executing the specified SearXNG tool."""
     tool_name = params.get("name")
-    arguments = params.get("arguments") or {}
+    raw_args = params.get("arguments")
+    arguments = raw_args if isinstance(raw_args, dict) else {}
 
     log_debug(f"Calling tool '{tool_name}' with arguments: {arguments}")
 
     if tool_name == "searxng_search":
-        query = str(arguments.get("query", ""))
+        query = str(arguments.get("query") or "")
         try:
             count = int(arguments.get("count", 5))
         except (ValueError, TypeError):
             count = 5
-        categories = str(arguments.get("categories", ""))
-        engines = str(arguments.get("engines", ""))
-        time_range = str(arguments.get("time_range", ""))
-        mode = str(arguments.get("mode", "auto")).strip().lower()
+        categories = str(arguments.get("categories") or "")
+        engines = str(arguments.get("engines") or "")
+        time_range = str(arguments.get("time_range") or "")
+        mode = str(arguments.get("mode") or "auto").strip().lower()
         search_depth = arguments.get("search_depth")
+        raw_hl = arguments.get("include_highlights")
+        include_highlights = True if raw_hl is None else bool(raw_hl)
         raw_inc = arguments.get("include_domains")
         include_domains = [str(d) for d in raw_inc] if isinstance(raw_inc, list) else None
         raw_exc = arguments.get("exclude_domains")
@@ -312,6 +315,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
                 mode=effective_mode,
                 search_depth=str(search_depth or "advanced"),
                 max_results=count,
+                include_highlights=include_highlights,
                 categories=categories,
                 engines=engines,
                 time_range=time_range,
@@ -342,12 +346,12 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         }
 
     elif tool_name == "searxng_scrape":
-        url = str(arguments.get("url", ""))
+        url = str(arguments.get("url") or "")
         try:
             max_length = int(arguments.get("max_length", 4000))
         except (ValueError, TypeError):
             max_length = 4000
-        focus_query = str(arguments.get("query", "")).strip()
+        focus_query = str(arguments.get("query") or "").strip()
 
         if focus_query:
             data = searxng_client.unified_search(
@@ -373,13 +377,14 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         }
 
     elif tool_name == "searxng_deep_search":
-        query = str(arguments.get("query", ""))
-        search_depth = str(arguments.get("search_depth", "advanced"))
+        query = str(arguments.get("query") or "")
+        search_depth = str(arguments.get("search_depth") or "advanced")
         try:
             max_results = int(arguments.get("max_results", 5))
         except (ValueError, TypeError):
             max_results = 5
-        include_highlights = bool(arguments.get("include_highlights", True))
+        raw_hl = arguments.get("include_highlights")
+        include_highlights = True if raw_hl is None else bool(raw_hl)
         raw_inc = arguments.get("include_domains")
         include_domains = [str(d) for d in raw_inc] if isinstance(raw_inc, list) else None
         raw_exc = arguments.get("exclude_domains")
