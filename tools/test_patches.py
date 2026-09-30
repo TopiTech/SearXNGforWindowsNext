@@ -1383,7 +1383,13 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
         # Verification: Slowloris responses taking longer than max_duration must raise httpx.TimeoutException
         import time
 
-        import httpx
+        try:
+            import httpx
+            timeout_exc_cls = httpx.TimeoutException
+        except ImportError:
+            class _FallbackTimeoutException(Exception):
+                pass
+            timeout_exc_cls = _FallbackTimeoutException
 
         class SlowResponse:
             def __init__(self):
@@ -1396,13 +1402,13 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
                     yield b"slow chunk"
 
         resp = SlowResponse()
-        with self.assertRaises(httpx.TimeoutException):
+        with self.assertRaises(timeout_exc_cls):
             start_time = time.monotonic()
             chunks = []
             max_duration = 0.005
             for chunk in resp.iter_bytes():
                 if time.monotonic() - start_time > max_duration:
-                    raise httpx.TimeoutException("Response read stream timed out")
+                    raise timeout_exc_cls("Response read stream timed out")
                 chunks.append(chunk)
 
     def test_read_scrape_response_content_length_whitespace(self):
@@ -2003,7 +2009,13 @@ class TestHardeningEnhancements(unittest.TestCase):
         """Verify _read_scrape_response respects SEARXNG_SCRAPE_MAX_DURATION environment override."""
         import time
 
-        import httpx
+        try:
+            import httpx
+            timeout_exc_cls = httpx.TimeoutException
+        except ImportError:
+            class _FallbackTimeoutException(Exception):
+                pass
+            timeout_exc_cls = _FallbackTimeoutException
 
         def read_stream(chunks, env_dur=None, default_dur=15.0):
             max_duration = default_dur
@@ -2019,14 +2031,14 @@ class TestHardeningEnhancements(unittest.TestCase):
             read_chunks = []
             for chunk in chunks:
                 if time.monotonic() - start_time > max_duration:
-                    raise httpx.TimeoutException('Response read stream timed out')
+                    raise timeout_exc_cls('Response read stream timed out')
                 read_chunks.append(chunk)
                 time.sleep(0.01)
             return b''.join(read_chunks)
 
         # When duration is tight (0.005s), slow stream of chunks should time out reliably
         chunks = [b'chunk1', b'chunk2', b'chunk3', b'chunk4', b'chunk5']
-        with self.assertRaises(httpx.TimeoutException):
+        with self.assertRaises(timeout_exc_cls):
             read_stream(chunks, env_dur="0.005")
 
         # When duration is generous, stream succeeds
@@ -2226,6 +2238,129 @@ class TestProjectPatchHardening(unittest.TestCase):
         self.assertIn('id="pref-hash-input"', patched)
 
 
+class TestAiWebuiPatches(unittest.TestCase):
+    """Tests for SearXNG Next AI-First WebUI patches and webui_next module."""
+
+    def test_patch_webapp_ai_webui_injects_and_is_idempotent(self):
+        sample = (
+            "import os\n"
+            "import sys\n\n"
+            "@app.route('/search', methods=['GET', 'POST'])\n"
+            "def search():\n"
+            "    pass\n"
+        )
+        patched = apply_patches.patch_webapp_ai_webui(sample, "webapp.py")
+        self.assertIn("# --- GenAI Next WebUI Integration ---", patched)
+        self.assertIn("_webui_next.register_next_webui(app, sys.modules.get(__name__))", patched)
+        self.assertEqual(apply_patches.patch_webapp_ai_webui(patched, "webapp.py"), "ALREADY_APPLIED")
+
+    def test_patch_simple_base_ai_webui_injects_and_is_idempotent(self):
+        sample = (
+            '<nav id="links_on_top">\n'
+            '      {%- block linkto_about -%}\n'
+            '        <a href="/about">About</a>\n'
+            '      {%- endblock -%}\n'
+            '</nav>\n'
+            '</body>\n'
+        )
+        patched = apply_patches.patch_simple_base_ai_webui(sample, "base.html")
+        self.assertIn('class="link_on_top_ai"', patched)
+        self.assertIn('href="/ai/embed.css"', patched)
+        self.assertIn('src="/ai/embed.js"', patched)
+        self.assertEqual(apply_patches.patch_simple_base_ai_webui(patched, "base.html"), "ALREADY_APPLIED")
+
+    def test_patch_simple_index_ai_webui_injects_and_is_idempotent(self):
+        sample = (
+            '<div class="index">\n'
+            '    <div class="title"><h1>SearXNG</h1></div>\n'
+            "    {% include 'simple/simple_search.html' %}\n"
+            '</div>\n'
+        )
+        patched = apply_patches.patch_simple_index_ai_webui(sample, "index.html")
+        self.assertIn('class="sxng-next-badge"', patched)
+        self.assertIn('class="sxng-ai-home-bar"', patched)
+        self.assertEqual(apply_patches.patch_simple_index_ai_webui(patched, "index.html"), "ALREADY_APPLIED")
+
+    def test_patch_simple_results_ai_webui_injects_and_is_idempotent(self):
+        sample = (
+            '<div id="results" class="{{ only_template }}">\n'
+            '    <div id="urls" role="main"></div>\n'
+            '</div>\n'
+        )
+        patched = apply_patches.patch_simple_results_ai_webui(sample, "results.html")
+        self.assertIn('id="sxng-ai-results-bar"', patched)
+        self.assertIn('id="sxng-ai-deep-drawer"', patched)
+        self.assertEqual(apply_patches.patch_simple_results_ai_webui(patched, "results.html"), "ALREADY_APPLIED")
+
+    def test_webui_next_helpers_and_deep_search_pipeline(self):
+        import webui_next
+
+        self.assertTrue(webui_next._parse_bool("true"))
+        self.assertFalse(webui_next._parse_bool("false"))
+        self.assertEqual(webui_next._parse_int("999", 5, 1, 20), 20)
+        self.assertEqual(
+            webui_next._parse_domain_list("https://www.github.com/foo, docs.python.org"),
+            ["github.com", "docs.python.org"],
+        )
+
+        info = webui_next.get_ai_info(host_url="http://127.0.0.1:8888")
+        self.assertTrue(info["healthy"])
+        self.assertEqual(info["endpoints"]["ai_workspace"], "/ai")
+        self.assertEqual(info["endpoints"]["deep_search"], "/deep_search")
+        self.assertIn("claude_code", info["snippets"])
+
+        with (
+            mock.patch.object(
+                webui_next,
+                "_search_in_process",
+                return_value={
+                    "query": "fastapi lifespan",
+                    "results": [
+                        {
+                            "title": "FastAPI Lifespan Events",
+                            "url": "https://fastapi.tiangolo.com/advanced/events/",
+                            "content": "You can define lifespan startup and shutdown logic using asynccontextmanager.",
+                            "source": "bing",
+                            "score": 2.0,
+                        }
+                    ],
+                    "answers": ["Use @asynccontextmanager with FastAPI(lifespan=...)"],
+                },
+            ),
+            mock.patch.object(
+                webui_next,
+                "_scrape_url_direct",
+                return_value={
+                    "url": "https://fastapi.tiangolo.com/advanced/events/",
+                    "content": "FastAPI lifespan context manager allows startup and shutdown events in async applications.",
+                    "is_truncated": False,
+                    "original_length": 91,
+                },
+            ),
+        ):
+            deep_res = webui_next.execute_server_deep_search(
+                query="fastapi lifespan",
+                search_depth="advanced",
+                max_results=3,
+                max_tokens=2000,
+            )
+            self.assertEqual(deep_res["query"], "fastapi lifespan")
+            self.assertEqual(deep_res["results_count"], 1)
+            self.assertEqual(deep_res["scraped_count"], 1)
+            self.assertGreater(deep_res["estimated_tokens"], 0)
+            self.assertIn("## 質問・調査テーマ", deep_res["rag_prompt"])
+
+            scrape_res = webui_next.execute_scrape_analyze(
+                url="https://fastapi.tiangolo.com/advanced/events/",
+                query="lifespan startup",
+                max_length=4000,
+            )
+            self.assertNotIn("error", scrape_res)
+            self.assertGreater(scrape_res["estimated_tokens"], 0)
+            self.assertTrue(len(scrape_res["highlights"]) >= 1)
+            self.assertIn("FastAPI lifespan", scrape_res["markdown"])
+
+
 class TestPatchCache(unittest.TestCase):
     """Tests for patch caching and fast-path verification."""
 
@@ -2265,4 +2400,5 @@ class TestPatchCache(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
 

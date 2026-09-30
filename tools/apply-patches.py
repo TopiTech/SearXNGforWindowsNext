@@ -21,10 +21,14 @@ def _get_tracked_targets() -> list[str]:
     return [
         os.path.abspath(__file__),
         os.path.join(REPO_ROOT, "tools", "disable-missing-engines.py"),
+        os.path.join(REPO_ROOT, "tools", "webui_next.py"),
         os.path.join(REPO_ROOT, "UPSTREAM_VERSION.txt"),
         os.path.join(SITE_PACKAGES, "searx", "valkeydb.py"),
         os.path.join(SITE_PACKAGES, "searx", "settings_defaults.py"),
         os.path.join(SITE_PACKAGES, "searx", "webutils.py"),
+        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "base.html"),
+        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "index.html"),
+        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "results.html"),
         os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "search.html"),
         os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "simple_search.html"),
         os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "preferences", "cookies.html"),
@@ -1396,6 +1400,150 @@ def patch_config_settings_yml(content, path):
         return "ALREADY_APPLIED"
     return patched
 
+
+# --- Patch 13: webapp.py (register SearXNG Next AI WebUI & /deep_search routes) ---
+def patch_webapp_ai_webui(content, path):
+    required_anchors = (
+        "# --- GenAI Next WebUI Integration ---",
+        "_webui_next.register_next_webui(app, sys.modules.get(__name__))",
+    )
+    if all(anchor in content for anchor in required_anchors):
+        return "ALREADY_APPLIED"
+
+    # Remove any previous integration block for idempotency
+    while "# --- GenAI Next WebUI Integration ---" in content:
+        content = re.sub(
+            r"(?s)\n# --- GenAI Next WebUI Integration ---.*?(?=\n@app\.route|\Z)",
+            "",
+            content,
+            count=1,
+        )
+
+    integration_code = '''
+
+# --- GenAI Next WebUI Integration ---
+try:
+    _tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'tools'))
+    if os.path.isdir(_tools_dir) and _tools_dir not in sys.path:
+        sys.path.insert(0, _tools_dir)
+    import webui_next as _webui_next
+    _webui_next.register_next_webui(app, sys.modules.get(__name__))
+except Exception as _webui_exc:
+    logger.warning('Could not initialize SearXNG Next AI WebUI: %s', _webui_exc)
+
+'''
+
+    content, count = re.subn(
+        r"(?m)^(\s*@app\.route\(\s*['\"]/search['\"])",
+        lambda m: integration_code + m.group(1),
+        content,
+        count=1,
+    )
+    if count == 0:
+        raise RuntimeError(f"Patch failed for {path}: Could not find @app.route('/search') anchor to inject AI WebUI.")
+    return content
+
+
+# --- Patch 14: templates/simple/base.html (inject AI Workspace nav link & assets) ---
+def patch_simple_base_ai_webui(content, path):
+    required_anchors = (
+        'class="link_on_top_ai"',
+        'href="/ai/embed.css"',
+        'src="/ai/embed.js"',
+    )
+    if all(anchor in content for anchor in required_anchors):
+        return "ALREADY_APPLIED"
+
+    patched = content
+    if 'class="link_on_top_ai"' not in patched:
+        ai_nav_block = (
+            "      {%- block linkto_ai_workspace -%}\n"
+            "        <a href=\"/ai\" class=\"link_on_top_ai\" title=\"AI Search &amp; Context Studio\"><span>⚡ AI Workspace</span></a>\n"
+            "      {%- endblock -%}\n"
+        )
+        if "{%- block linkto_about -%}" in patched:
+            patched = patched.replace("{%- block linkto_about -%}", ai_nav_block + "      {%- block linkto_about -%}", 1)
+        elif '<nav id="links_on_top">' in patched:
+            patched = patched.replace('<nav id="links_on_top">\n', '<nav id="links_on_top">\n' + ai_nav_block, 1)
+
+    if 'src="/ai/embed.js"' not in patched:
+        embed_tags = (
+            '  <link rel="stylesheet" href="/ai/embed.css" type="text/css">\n'
+            '  <script defer src="/ai/embed.js"></script>\n'
+        )
+        if "</body>" in patched:
+            patched = patched.replace("</body>", embed_tags + "</body>", 1)
+
+    return patched
+
+
+# --- Patch 15: templates/simple/index.html (inject AI Quick Actions bar on home page) ---
+def patch_simple_index_ai_webui(content, path):
+    required_anchors = (
+        'class="sxng-ai-home-bar"',
+        'class="sxng-next-badge"',
+    )
+    if all(anchor in content for anchor in required_anchors):
+        return "ALREADY_APPLIED"
+
+    patched = content
+    if 'class="sxng-next-badge"' not in patched and "<h1>SearXNG</h1>" in patched:
+        patched = patched.replace(
+            "<h1>SearXNG</h1>",
+            '<h1>SearXNG</h1><span class="sxng-next-badge">Next · AI-First Edition</span>',
+            1,
+        )
+
+    if 'class="sxng-ai-home-bar"' not in patched and "{% include 'simple/simple_search.html' %}" in patched:
+        home_bar = (
+            "{% include 'simple/simple_search.html' %}\n"
+            '    <div class="sxng-ai-home-bar" role="region" aria-label="AI Search Actions">\n'
+            '        <button type="button" class="sxng-ai-btn sxng-ai-btn-primary" id="sxng-home-deep-btn" '
+            "onclick=\"var q=document.getElementById('q');window.location.href='/ai'+(q&&q.value.trim()?'?q='+encodeURIComponent(q.value.trim())+'&mode=deep':'');\">"
+            "⚡ AI Deep Search</button>\n"
+            '        <a href="/ai?mode=fast" class="sxng-ai-btn" id="sxng-home-fast-link">🚀 Fast Search (json_lite)</a>\n'
+            '        <a href="/ai?mode=scrape" class="sxng-ai-btn">📄 URL 本文抽出</a>\n'
+            '        <a href="/ai?mode=agent" class="sxng-ai-btn">🤖 MCP / API Hub</a>\n'
+            "    </div>"
+        )
+        patched = patched.replace("{% include 'simple/simple_search.html' %}", home_bar, 1)
+
+    return patched
+
+
+# --- Patch 16: templates/simple/results.html (inject AI Agent Toolkit Bar on search results) ---
+def patch_simple_results_ai_webui(content, path):
+    required_anchors = (
+        'id="sxng-ai-results-bar"',
+        'id="sxng-ai-deep-drawer"',
+    )
+    if all(anchor in content for anchor in required_anchors):
+        return "ALREADY_APPLIED"
+
+    target_div = '<div id="results" class="{{ only_template }}">'
+    if target_div not in content:
+        return content
+
+    toolkit_bar = (
+        '<div id="results" class="{{ only_template }}">\n'
+        '  <div id="sxng-ai-results-bar" class="sxng-ai-results-bar" data-query="{{ q|e }}" role="region" aria-label="AI Agent Toolkit">\n'
+        '    <div class="sxng-ai-results-bar-left">\n'
+        '      <strong>🤖 AI Toolkit</strong>\n'
+        '      <span id="sxng-ai-page-tokens" class="sxng-ai-token-pill">~0 tokens</span>\n'
+        '      <button type="button" id="sxng-ai-inline-deep-btn" class="sxng-ai-btn sxng-ai-btn-primary">⚡ Deep Search (BM25 + 並列本文抽出)</button>\n'
+        '      <button type="button" id="sxng-ai-copy-md-btn" class="sxng-ai-btn">📋 AI用Markdownをコピー</button>\n'
+        '      <button type="button" id="sxng-ai-copy-prompt-btn" class="sxng-ai-btn">💬 プロンプト形式でコピー</button>\n'
+        '    </div>\n'
+        '    <div class="sxng-ai-results-bar-right">\n'
+        '      <a href="/search?q={{ q|urlencode }}&amp;format=json_lite" target="_blank" rel="noopener" class="sxng-ai-btn">{ } json_lite</a>\n'
+        '      <a href="/ai?q={{ q|urlencode }}&amp;mode=deep" class="sxng-ai-btn">🚀 AI Studioで開く</a>\n'
+        '    </div>\n'
+        '  </div>\n'
+        '  <div id="sxng-ai-deep-drawer" class="sxng-ai-deep-drawer" aria-live="polite"></div>'
+    )
+    return content.replace(target_div, toolkit_bar, 1)
+
+
 def main() -> None:
     force = "--force" in sys.argv
     if not force and is_patch_cache_valid():
@@ -1442,6 +1590,24 @@ def main() -> None:
         required=False
     )
     update_file(
+        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "base.html"),
+        "templates/simple/base.html (AI Workspace navigation & embed assets)",
+        patch_simple_base_ai_webui,
+        required=False
+    )
+    update_file(
+        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "index.html"),
+        "templates/simple/index.html (AI Quick Actions bar)",
+        patch_simple_index_ai_webui,
+        required=False
+    )
+    update_file(
+        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "results.html"),
+        "templates/simple/results.html (AI Agent Toolkit bar)",
+        patch_simple_results_ai_webui,
+        required=False
+    )
+    update_file(
         os.path.join(SITE_PACKAGES, "searx", "webapp.py"),
         "webapp.py (json_lite handler)",
         patch_webapp_json_handler
@@ -1450,6 +1616,11 @@ def main() -> None:
         os.path.join(SITE_PACKAGES, "searx", "webapp.py"),
         "webapp.py (/scrape endpoint)",
         patch_webapp_scrape_route
+    )
+    update_file(
+        os.path.join(SITE_PACKAGES, "searx", "webapp.py"),
+        "webapp.py (AI WebUI & /deep_search integration)",
+        patch_webapp_ai_webui
     )
     update_file(
         os.path.join(SITE_PACKAGES, "searx", "engines", "__init__.py"),
@@ -1525,3 +1696,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

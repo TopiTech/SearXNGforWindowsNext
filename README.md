@@ -15,7 +15,8 @@
 ##  主な特徴
 
 -  Windows Native: 組み込みPython環境により、DockerなしでWindows上で直接動作。
--  GenAI Optimized: LLMのトークン消費を抑える専用の `json_lite` フォーマットを搭載。
+-  **AI-First WebUI (`/ai` & ネイティブ統合)**: 外部CDN・フレームワーク不要の超軽量「AI Search & Context Studio」と、既存の `simple` テーマ上でのインライン本文抽出・ワンクリックMarkdown/RAGコピー機能を搭載。
+-  GenAI Optimized: LLMのトークン消費を抑える専用の `json_lite` フォーマットおよび HTTP `/deep_search` エンドポイントを搭載。
 - High-Quality Engines: Bing, DuckDuckGo, Mojeekなどの信頼性の高いエンジンを標準で最適化。
 - Auto-Sync Architecture: `searxng/searxng` 本家の最新コードを追従しつつ、Windows固有のパッチを自動適用。常に最新の状態に。
 - Secure & Local: ローカルホストでの動作に特化したセキュアなデフォルト設定。
@@ -33,19 +34,23 @@
 ```
 
 ### 2. 起動
-`SearXNG for Windows.bat` を実行します。起動後、ブラウザで [http://127.0.0.1:8888](http://127.0.0.1:8888) にアクセスできれば成功です。
+`SearXNG for Windows.bat` を実行します。起動後、ブラウザで以下にアクセスできます：
+- **AI Search & Context Studio (AIファースト専用UI)**: [http://127.0.0.1:8888/ai](http://127.0.0.1:8888/ai)
+- **Classic SearXNG (AI拡張バー付き)**: [http://127.0.0.1:8888](http://127.0.0.1:8888)
 
 ### 3. 動作確認 (Testing)
-以下のコマンドを実行して、特に `json_lite` 形式のレスポンスが正しく返ってくるか確認できます。
+以下のコマンドを実行して、特に `json_lite` 形式や `/deep_search` のレスポンスが正しく返ってくるか確認できます。
 
 **PowerShell:**
 ```powershell
 Invoke-RestMethod "http://127.0.0.1:8888/search?q=SearXNG&format=json_lite" | ConvertTo-Json -Depth 5
+Invoke-RestMethod "http://127.0.0.1:8888/deep_search?q=SearXNG&count=3" | ConvertTo-Json -Depth 5
 ```
 
 **curl:**
 ```bash
 curl -G "http://127.0.0.1:8888/search" --data-urlencode "q=SearXNG" --data-urlencode "format=json_lite"
+curl -G "http://127.0.0.1:8888/deep_search" --data-urlencode "q=SearXNG" --data-urlencode "format=markdown"
 ```
 
 ### 4. キャッシュのクリーンアップ (軽量化)
@@ -53,6 +58,23 @@ curl -G "http://127.0.0.1:8888/search" --data-urlencode "q=SearXNG" --data-urlen
 ```powershell
 PowerShell -File .\tools\clean-cache.ps1
 ```
+
+---
+
+## 🖥️ AI-First WebUI (`/ai` & Classic 統合)
+
+本プロジェクトでは、人間とAIエージェントの双方にとって直感的かつ超軽量（外部JS/CSS依存ゼロ・単一ファイル完結）な2つのUI体験を提供します。
+
+### 1. AI Search & Context Studio (`/ai` または `/next`)
+ブラウザで `http://127.0.0.1:8888/ai` を開くと、AIコンテキスト生成に特化したワークスペースが起動します。
+- **⚡ Deep Search モード**: 検索＋上位ページの並列本文抽出＋BM25ハイライト抽出＋ドメイン信頼度スコア表示を1クリックで実行。
+- **🚀 Fast Search (`json_lite`) モード**: 高速メタ検索と、各検索結果カード上でのオンデマンド「📄 本文抽出」インライン展開。
+- **📄 URL Scrape モード**: 任意のURLを入力してSSRF保護付き本文抽出を実行し、フォーカスキーワードによるBM25重要段落ハイライトと推定トークン数をリアルタイム算出。
+- **🤖 Agent & MCP Hub モード**: Claude Code / Cursor / OpenCode 用の設定JSONやCLIコマンドを、稼働中サーバーのURLに合わせて自動生成・ワンクリックコピー。
+- **コンテキスト予算＆ワンクリック出力**: 推定トークン数のプログレスバー表示、`📋 Copy Markdown`、`✨ Copy RAG Prompt`（情報源引用ルール付きプロンプト）、`{ } Copy JSON`、`$_ Copy cURL` を完備。
+
+### 2. 標準 `simple` テーマへのプログレッシブ拡張 (`/`・`/search`)
+従来のSearXNG画面（`/` および `/search`）もそのまま利用でき、画面上部のスリムな **AI Context Bar** と各検索結果カードのアクションボタン（`📄 本文抽出`・`📋 引用コピー`）によって、ページ遷移なしで本文プレビューやLLM向けMarkdownコピーが可能です。
 
 ---
 
@@ -101,11 +123,17 @@ GET http://127.0.0.1:8888/scrape?url=https://example.com/article
 
 
 ### ⚡ Agentic Deep Search (Exa / Tavily スタイル検索)
-**1 回のリクエストで検索・並列スクレイピング・BM25ハイライト抽出・ドメイン評価を完結**させる、AI エージェント特化の革新的な検索ロジックです。
+**1 回のリクエストで検索・並列スクレイピング・BM25ハイライト抽出・ドメイン評価を完結**させる、AI エージェント特化の革新的な検索ロジックです。CLI・MCP だけでなく、HTTP API（`GET/POST /deep_search`）および WebUI（`/ai`）からも直接呼び出せます。
 - **One-Pass 完結**: 従来の「検索 → URL 選定 → 個別スクレイピング」のマルチターン往復を廃止。
 - **Smart Highlighting**: 1万文字の長文から、クエリに最も関連するパラグラフ（200〜400文字）をBM25スコアリングでピンポイント抽出。
 - **Domain Authority & Anti-SEO Spam**: 公式ドキュメント（Python, MDN, GitHub等）を自動加点し、低品質コピペファーム・広告まとめサイトを自動除外・ペナルティ。
 - **Token Budgeting**: 指定したトークン予算（`max_tokens`）内に収まるよう重要度順に構造化パッキング。
+
+**HTTP API での実行例 (JSON または Markdown 直接取得):**
+```http
+GET http://127.0.0.1:8888/deep_search?q=FastAPI+lifespan&count=3&max_tokens=3000
+GET http://127.0.0.1:8888/deep_search?q=FastAPI+lifespan&count=3&format=markdown
+```
 
 **CLI での実行例:**
 ```bash
@@ -260,6 +288,8 @@ class Tools:
 ##  構成ファイル
 
 - **`SearXNG for Windows.bat`**: メインの起動スクリプト。
+- **`tools/webui_next.py`**: 超軽量 AI-First WebUI (`/ai`)、クラシックテーマ拡張アセット (`/ai/embed.*`)、および `/deep_search`・`/api/scrape_analyze`・`/api/ai_info` エンドポイント実装。
+- **`tools/agentic_search.py`**: BM25 ハイライト抽出・ドメイン権威性評価・トークン予算パッキングを行う Deep Search エンジン。
 - **`tools/mcp_server.py`**: AI コーディングエージェント用 MCP (Model Context Protocol) stdio サーバー。
 - **`tools/searxng_cli.py`**: ターミナルおよびエージェント向けコマンドライン検索・スクレイピングツール。
 - **`tools/searxng.bat`**: Windows 用 CLI 実行ラッパー。

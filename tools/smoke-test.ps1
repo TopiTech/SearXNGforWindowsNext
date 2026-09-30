@@ -257,6 +257,42 @@ try {
         Write-Host ""
     }
 
+    # Test 36: AI-First WebUI (/ai) and progressive enhancement assets
+    Write-Host "Test 36: AI-First WebUI (/ai) & embed assets..." -ForegroundColor Cyan
+    $aiResponse = Invoke-WebRequest -Uri "$base/ai" -UseBasicParsing -ErrorAction Stop
+    if ($aiResponse.StatusCode -ne 200 -or $aiResponse.Content -notmatch 'id="q"[^>]*aria-label="[^"]+"') {
+        throw "[FAIL] /ai WebUI returned unexpected response"
+    }
+    Assert-HttpStatusCode -Uri "$base/ai/embed.css" -ExpectedStatusCode 200 -Label "AI embed CSS"
+    Assert-HttpStatusCode -Uri "$base/ai/embed.js" -ExpectedStatusCode 200 -Label "AI embed JS"
+    Write-Host "  [OK] /ai WebUI returned 200 with accessible search input and embed assets" -ForegroundColor Green
+    Write-Host ""
+
+    # Test 37: /api/ai_info endpoint
+    Write-Host "Test 37: /api/ai_info endpoint..." -ForegroundColor Cyan
+    $aiInfo = Invoke-RestMethod -Method Get -Uri "$base/api/ai_info" -ErrorAction Stop
+    Assert-JsonProperty -Value $aiInfo -PropertyName "endpoints" -Label "/api/ai_info"
+    Assert-JsonProperty -Value $aiInfo -PropertyName "snippets" -Label "/api/ai_info"
+    Write-Host "  [OK] /api/ai_info returned endpoint metadata and MCP/CLI snippets" -ForegroundColor Green
+    Write-Host ""
+
+    # Test 38: /deep_search endpoint (JSON + validation)
+    Write-Host "Test 38: /deep_search endpoint..." -ForegroundColor Cyan
+    Assert-HttpStatusCode -Uri "$base/deep_search?q=" -ExpectedStatusCode 400 -Label "/deep_search rejects empty query"
+    $deepResp = Invoke-RestMethod -Method Get -Uri "$base/deep_search?q=SearXNG&count=2&max_tokens=1500" -ErrorAction Stop
+    Assert-JsonProperty -Value $deepResp -PropertyName "markdown" -Label "/deep_search"
+    Assert-JsonProperty -Value $deepResp -PropertyName "rag_prompt" -Label "/deep_search"
+    Write-Host "  [OK] /deep_search returned $(@($deepResp.results).Count) result(s) (~$($deepResp.estimated_tokens) tokens)" -ForegroundColor Green
+    Write-Host ""
+
+    # Test 39: /api/scrape_analyze endpoint
+    Write-Host "Test 39: /api/scrape_analyze endpoint..." -ForegroundColor Cyan
+    Assert-Blocked -Uri "$base/api/scrape_analyze?url=http://127.0.0.1/" -Label "/api/scrape_analyze SSRF block"
+    $scrapeAnalyze = Invoke-RestMethod -Method Get -Uri "$base/api/scrape_analyze?url=https://example.com&q=example" -ErrorAction Stop
+    Assert-JsonProperty -Value $scrapeAnalyze -PropertyName "content" -Label "/api/scrape_analyze"
+    Write-Host "  [OK] /api/scrape_analyze extracted $($scrapeAnalyze.char_count) chars (~$($scrapeAnalyze.estimated_tokens) tokens)" -ForegroundColor Green
+    Write-Host ""
+
     Write-Host "=====================================" -ForegroundColor Green
     Write-Host "[OK] All smoke tests PASSED" -ForegroundColor Green
     Write-Host "=====================================" -ForegroundColor Green
