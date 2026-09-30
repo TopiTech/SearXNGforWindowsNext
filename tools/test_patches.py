@@ -2612,6 +2612,54 @@ class TestPatchDiagnosticsAndResilience(unittest.TestCase):
             self.assertIn("pwd.getpwuid", missing[0])
             self.assertTrue(any("Hint: pwd module missing on Windows." in s for s in suggestions))
 
+    def test_safe_relpath_handles_cross_drive_and_same_drive(self):
+        """_safe_relpath must gracefully handle cross-drive paths without raising ValueError."""
+        if sys.platform == "win32":
+            res_same = apply_patches._safe_relpath("C:\\repo\\sub\\file.py", "C:\\repo")
+            self.assertEqual(res_same, "sub/file.py")
+
+            res_cross = apply_patches._safe_relpath("C:\\Users\\Temp\\file.py", "D:\\a\\repo")
+            self.assertEqual(res_cross, "C:/Users/Temp/file.py")
+
+            with mock.patch("os.path.relpath", side_effect=ValueError("path is on mount 'C:', start on mount 'D:'")):
+                fallback = apply_patches._safe_relpath("C:\\temp\\file.py", "D:\\repo")
+                self.assertEqual(fallback, "C:/temp/file.py")
+
+    def test_diagnose_patch_failure_resilient_to_cross_drive(self):
+        """diagnose_patch_failure must not crash when file and REPO_ROOT are on different drives."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fpath = os.path.join(tmpdir, "test_file.py")
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write("def dummy(): pass\n")
+
+            with mock.patch.object(apply_patches, "REPO_ROOT", "Z:\\VirtualWorkspace\\Repo"):
+                missing, suggestions = apply_patches.diagnose_patch_failure(
+                    fpath,
+                    "Cross Drive Test Patch",
+                    expected_anchors=["missing_anchor()"],
+                    diagnostic_hint="testing cross-drive resilience",
+                )
+                self.assertEqual(len(missing), 1)
+                self.assertTrue(any("git log -p -n 3" in s for s in suggestions))
+
+    def test_patch_transaction_persist_backups_cross_drive(self):
+        """PatchTransaction.persist_backups must succeed even if files are on another drive."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fpath = os.path.join(tmpdir, "cross_drive.py")
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write("original code")
+
+            tx = apply_patches.PatchTransaction(backup_dir=os.path.join(tmpdir, ".backups"))
+            tx.record_original(fpath, "original code")
+            with mock.patch.object(apply_patches, "REPO_ROOT", "Z:\\VirtualWorkspace\\Repo"):
+                tx.persist_backups()
+
+            manifest_path = os.path.join(tmpdir, ".backups", "manifest.json")
+            self.assertTrue(os.path.exists(manifest_path))
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            self.assertIn(os.path.abspath(fpath), manifest)
+
     def test_patch_transaction_backup_and_rollback(self):
         """PatchTransaction should back up files and restore them completely upon rollback."""
         with tempfile.TemporaryDirectory() as tmpdir:

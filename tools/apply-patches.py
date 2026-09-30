@@ -23,6 +23,20 @@ BACKUP_DIR = os.path.join(REPO_ROOT, "python", ".patches_backup")
 REPORT_FILE = os.path.join(REPO_ROOT, "python", ".patches_report.json")
 
 
+def _safe_relpath(path: str, start: str | None = None) -> str:
+    """Compute relative path safely across drive boundaries on Windows.
+
+    If path and start are on different drives/mounts (which occurs frequently in
+    CI environments like GitHub Actions where tempfile is on C: and workspace on D:),
+    os.path.relpath raises ValueError. Fall back cleanly to normalized absolute path.
+    """
+    base = REPO_ROOT if start is None else start
+    try:
+        return os.path.relpath(path, base).replace("\\", "/")
+    except ValueError:
+        return os.path.abspath(path).replace("\\", "/")
+
+
 class PatchSeverity:
     CRITICAL = "CRITICAL"  # Essential for Windows runtime (e.g., pwd bypass)
     FEATURE = "FEATURE"  # Custom project features (/scrape, json_lite, Retry-After)
@@ -94,8 +108,8 @@ class PatchTransaction:
             os.makedirs(self.backup_dir, exist_ok=True)
             manifest = {}
             for path, content in self.originals.items():
-                rel = os.path.relpath(path, REPO_ROOT).replace("\\", "_").replace("/", "_")
-                backup_file = os.path.join(self.backup_dir, f"{rel}.bak")
+                safe_rel = _safe_relpath(path, REPO_ROOT).replace(":", "_").replace("/", "_")
+                backup_file = os.path.join(self.backup_dir, f"{safe_rel}.bak")
                 with open(backup_file, "w", encoding="utf-8") as f:
                     f.write(content)
                 manifest[path] = backup_file
@@ -214,7 +228,7 @@ def diagnose_patch_failure(
     upstream_info = get_upstream_version_info()
     commit = upstream_info.get("resolved_commit", "unknown")
     date = upstream_info.get("resolved_commit_date", "unknown")
-    rel_path = os.path.relpath(file_path, REPO_ROOT).replace("\\", "/")
+    rel_path = _safe_relpath(file_path, REPO_ROOT)
     suggestions.append(f"Upstream commit: {commit} ({date}). Check upstream diff: 'git log -p -n 3 -- {rel_path}'")
 
     return missing_anchors, suggestions
@@ -255,7 +269,7 @@ def _compute_fingerprints() -> dict[str, dict[str, int]]:
     for p in _get_tracked_targets():
         if os.path.exists(p):
             st = os.stat(p)
-            rel_p = os.path.relpath(p, REPO_ROOT).replace("\\", "/")
+            rel_p = _safe_relpath(p, REPO_ROOT)
             fp[rel_p] = {"mtime_ns": st.st_mtime_ns, "size": st.st_size}
     return fp
 
