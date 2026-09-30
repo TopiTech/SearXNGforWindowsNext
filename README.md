@@ -15,7 +15,8 @@
 ##  主な特徴
 
 -  Windows Native: 組み込みPython環境により、DockerなしでWindows上で直接動作。
--  GenAI Optimized: LLMのトークン消費を抑える専用の `json_lite` フォーマットを搭載。
+-  **AI-First WebUI (`/ai` & ネイティブ統合)**: 外部CDN・フレームワーク不要の超軽量「AI Search & Context Studio」と、既存の `simple` テーマ上でのインライン本文抽出・ワンクリックMarkdown/RAGコピー機能を搭載。
+-  GenAI Optimized: LLMのトークン消費を抑える専用の `json_lite` フォーマットおよび HTTP `/deep_search` エンドポイントを搭載。
 - High-Quality Engines: Bing, DuckDuckGo, Mojeekなどの信頼性の高いエンジンを標準で最適化。
 - Auto-Sync Architecture: `searxng/searxng` 本家の最新コードを追従しつつ、Windows固有のパッチを自動適用。常に最新の状態に。
 - Secure & Local: ローカルホストでの動作に特化したセキュアなデフォルト設定。
@@ -33,19 +34,23 @@
 ```
 
 ### 2. 起動
-`SearXNG for Windows.bat` を実行します。起動後、ブラウザで [http://127.0.0.1:8888](http://127.0.0.1:8888) にアクセスできれば成功です。
+`SearXNG for Windows.bat` を実行します。起動後、ブラウザで以下にアクセスできます：
+- **AI Search & Context Studio (AIファースト専用UI)**: [http://127.0.0.1:8888/ai](http://127.0.0.1:8888/ai)
+- **Classic SearXNG (AI拡張バー付き)**: [http://127.0.0.1:8888](http://127.0.0.1:8888)
 
 ### 3. 動作確認 (Testing)
-以下のコマンドを実行して、特に `json_lite` 形式のレスポンスが正しく返ってくるか確認できます。
+以下のコマンドを実行して、特に `json_lite` 形式や `/deep_search` のレスポンスが正しく返ってくるか確認できます。
 
 **PowerShell:**
 ```powershell
 Invoke-RestMethod "http://127.0.0.1:8888/search?q=SearXNG&format=json_lite" | ConvertTo-Json -Depth 5
+Invoke-RestMethod "http://127.0.0.1:8888/deep_search?q=SearXNG&count=3" | ConvertTo-Json -Depth 5
 ```
 
 **curl:**
 ```bash
 curl -G "http://127.0.0.1:8888/search" --data-urlencode "q=SearXNG" --data-urlencode "format=json_lite"
+curl -G "http://127.0.0.1:8888/deep_search" --data-urlencode "q=SearXNG" --data-urlencode "format=markdown"
 ```
 
 ### 4. キャッシュのクリーンアップ (軽量化)
@@ -56,9 +61,32 @@ PowerShell -File .\tools\clean-cache.ps1
 
 ---
 
-##  GenAI / LLM での活用例
+## 🖥️ AI-First WebUI (`/ai` & Classic 統合)
 
-このプロジェクトの最大の特徴は、AIエージェント向けの**超軽量JSONレスポンス**です。
+本プロジェクトでは、人間とAIエージェントの双方にとって直感的かつ超軽量（外部JS/CSS依存ゼロ・単一ファイル完結）な2つのUI体験を提供します。検索ロジック（`json_lite` 高速スニペット・`/scrape` 本文抽出・`Agentic Deep Search`）は単一の統合パイプライン（`tools/agentic_search.py`）に集約されています。
+
+### 1. AI Search & Context Studio (`/ai` または `/next`)
+ブラウザで `http://127.0.0.1:8888/ai` を開くと、**単一の統合検索＆本文抽出バー**を備えたAIコンテキスト生成ワークスペースが起動します。
+- **🔍 入力自動判別 (Keyword vs URL)**:
+  - **キーワードや質問を入力**: 選択した `Mode / Depth`（`Deep: Advanced` / `Deep: Code & Docs` / `Basic` / `Fast: json_lite`）で統合検索を実行。
+  - **URL (`https://...`) を貼り付け**: 自動的に **URL 本文抽出モード** に切り替わり、SSRF保護付き本文抽出（`trafilatura`）と任意キーワードによる BM25 重要段落ハイライト抽出を実行。
+- **🤖 Agent & MCP Hub モード**: Claude Code / Cursor / OpenCode 用の設定JSONやCLIコマンドを、稼働中サーバーのURLに合わせて自動生成・ワンクリックコピー。
+- **コンテキスト予算＆ワンクリック出力**: 推定トークン数のプログレスバー表示、`📋 AI用Markdownをコピー`、`💬 RAGプロンプト形式でコピー`（情報源引用ルール付きプロンプト）、`{ } JSONをコピー`、`💾 .md 保存` を完備。
+
+### 2. 標準 `simple` テーマへのプログレッシブ拡張 (`/`・`/search`)
+従来のSearXNG画面（`/` および `/search`）もそのまま利用でき、ホーム画面の `⚡ AI Search & Scrape Studio` ボタンや検索結果画面上部のスリムな **AI Toolkit** と各検索結果カードのアクションボタン（`📄 本文抽出`・`📋 引用コピー`）によって、ページ遷移なしで本文プレビューやLLM向けMarkdownコピーが可能です。
+
+---
+
+##  GenAI / LLM での活用例 (統合検索パイプライン)
+
+従来バラバラだった **`json_lite`（高速スニペット検索）**・**`/scrape`（URL本文抽出）**・**`Agentic Deep Search`（並列本文抽出＋BM25ハイライト）** は、共通の統合エンジン（`execute_unified_search` / `/deep_search` / `/api/search`）に統合されつつ、すべての既存エンドポイントとの100%後方互換性を維持しています。
+
+| モード / エンドポイント | 特徴・用途 |
+|---|---|
+| **Unified Deep Search** (`/deep_search`, `/api/search`) | 1リクエストで「メタ検索 → ドメイン権威スコアリング → 並列本文抽出 → BM25ハイライト抽出 → トークン予算パッキング」を実行。`depth=fast` 指定で `json_lite` 相当の高速検索、`mode=scrape`（またはURL指定）で単一URL本文抽出＋BM25ハイライトも実行可能。 |
+| **Fast Search (`json_lite`)** (`/search?format=json_lite`) | 通常のJSONに含まれる膨大なメタデータを削ぎ落とし、タイトル・URL・スニペット・エンジン名のみを最速で返却。 |
+| **URL Scrape** (`/scrape`, `/api/scrape_analyze`) | 特定URLのWebページ本文のみを `trafilatura` でクリーン抽出（DNSピニング＆SSRF防御付き）。`/api/scrape_analyze` では `?q=` 指定によるBM25ハイライト抽出にも対応。 |
 
 ### `json_lite` フォーマット
 通常のJSONレスポンスに含まれる膨大なメタデータを削ぎ落とし、AIが必要とする情報（タイトル・URL・内容）のみを返します。
@@ -100,16 +128,28 @@ GET http://127.0.0.1:8888/scrape?url=https://example.com/article
 
 
 
-### ⚡ Agentic Deep Search (Exa / Tavily スタイル検索)
-**1 回のリクエストで検索・並列スクレイピング・BM25ハイライト抽出・ドメイン評価を完結**させる、AI エージェント特化の革新的な検索ロジックです。
-- **One-Pass 完結**: 従来の「検索 → URL 選定 → 個別スクレイピング」のマルチターン往復を廃止。
+### ⚡ Agentic Deep Search / Unified Search (`/deep_search` & `/api/search`)
+**1 回のリクエストで検索・並列スクレイピング・BM25ハイライト抽出・ドメイン評価を完結**させる統合検索エンドポイントです。CLI・MCP だけでなく、HTTP API（`GET/POST /deep_search` または `/api/search`）および WebUI（`/ai`）から直接呼び出せます。
+- **One-Pass 完結 & URL 自動判別**: キーワードを渡せば深層検索、URL（`https://...`）を渡せば本文抽出＋BM25ハイライトを自動実行。
 - **Smart Highlighting**: 1万文字の長文から、クエリに最も関連するパラグラフ（200〜400文字）をBM25スコアリングでピンポイント抽出。
 - **Domain Authority & Anti-SEO Spam**: 公式ドキュメント（Python, MDN, GitHub等）を自動加点し、低品質コピペファーム・広告まとめサイトを自動除外・ペナルティ。
 - **Token Budgeting**: 指定したトークン予算（`max_tokens`）内に収まるよう重要度順に構造化パッキング。
 
+**HTTP API での実行例 (JSON または Markdown 直接取得):**
+```http
+GET http://127.0.0.1:8888/deep_search?q=FastAPI+lifespan&count=3&max_tokens=3000
+GET http://127.0.0.1:8888/deep_search?q=FastAPI+lifespan&count=3&format=markdown
+GET http://127.0.0.1:8888/api/search?q=FastAPI+lifespan&depth=fast
+```
+
 **CLI での実行例:**
 ```bash
+# Deep Search (並列本文抽出 + BM25 ハイライト)
 python tools/searxng_cli.py deep "FastAPI lifespan context manager syntax" -n 3
+
+# 統合 search コマンドでも --mode deep や URL 自動判別に対応
+python tools/searxng_cli.py search "FastAPI lifespan" --mode deep -d code
+python tools/searxng_cli.py search "https://docs.searxng.org"
 ```
 
 ---
@@ -123,8 +163,8 @@ SearXNG for Windows Next は **OpenCode**, **Claude Code**, **Cursor**, **Windsu
 #### 1. MCP (Model Context Protocol) サーバーとして呼び出す
 エージェント設定ファイルに登録するだけで、以下のツールが利用可能になります：
 - `searxng_deep_search`: **【推奨】** Exa/Tavily スタイルのワンパス深層検索（並列本文抽出＋BM25ハイライト＋ドメイン重み付け）
-- `searxng_search`: 高速メタ検索（スニペットとURLの取得）
-- `searxng_scrape`: 特定URLの本文抽出（Markdown化）
+- `searxng_search`: 統合Web検索（既定は高速 `json_lite`、`mode="deep"` や `search_depth` 指定で深層検索、URL入力で自動本文抽出に対応）
+- `searxng_scrape`: 特定URLの本文抽出（`query` 指定でBM25ハイライト抽出にも対応）
 - `searxng_health`: SearXNG サーバーの稼働確認
 
 - **OpenCode (`opencode.json`):**
@@ -164,11 +204,12 @@ SearXNG for Windows Next は **OpenCode**, **Claude Code**, **Cursor**, **Windsu
 MCP 非対応のエージェントやスクリプトからでも、付属の CLI ツールで簡単に検索・本文抽出を行えます。
 
 ```bash
-# Web 検索 (AI 向け Markdown 形式)
+# Web 検索 (既定: json_lite 高速スニペット / --mode deep で深層検索 / URL 渡すと自動スクレイプ)
 python tools/searxng_cli.py search "FastAPI lifespan events" -n 5
+python tools/searxng_cli.py search "FastAPI lifespan events" --mode deep -n 3
 
-# Web ページの本文抽出
-python tools/searxng_cli.py scrape "https://docs.searxng.org" --max-chars 3000
+# Web ページの本文抽出 (-q で BM25 ハイライト抽出も可)
+python tools/searxng_cli.py scrape "https://docs.searxng.org" --max-chars 3000 -q "json_lite"
 
 # サーバー稼働確認 (Windows バッチラッパー)
 tools\searxng.bat health
@@ -260,6 +301,8 @@ class Tools:
 ##  構成ファイル
 
 - **`SearXNG for Windows.bat`**: メインの起動スクリプト。
+- **`tools/webui_next.py`**: 超軽量 AI-First WebUI (`/ai`)、クラシックテーマ拡張アセット (`/ai/embed.*`)、および `/deep_search`・`/api/scrape_analyze`・`/api/ai_info` エンドポイント実装。
+- **`tools/agentic_search.py`**: BM25 ハイライト抽出・ドメイン権威性評価・トークン予算パッキングを行う Deep Search エンジン。
 - **`tools/mcp_server.py`**: AI コーディングエージェント用 MCP (Model Context Protocol) stdio サーバー。
 - **`tools/searxng_cli.py`**: ターミナルおよびエージェント向けコマンドライン検索・スクレイピングツール。
 - **`tools/searxng.bat`**: Windows 用 CLI 実行ラッパー。

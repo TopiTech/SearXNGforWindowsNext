@@ -15,6 +15,7 @@ from __future__ import annotations
 import concurrent.futures
 import math
 import re
+import time
 import urllib.error
 import urllib.parse
 from collections.abc import Callable
@@ -126,12 +127,52 @@ def extract_domain(url: str) -> str:
     """Extract lowercase netloc/domain from a URL."""
     try:
         parsed = urllib.parse.urlparse(url)
-        netloc = parsed.netloc.lower().split(":")[0]
+        host = (parsed.hostname or "").lower()
         # Remove leading www.
-        netloc = netloc.removeprefix("www.")
-        return netloc
+        return host.removeprefix("www.")
     except (ValueError, AttributeError):
         return ""
+
+
+def is_url_input(text: str) -> bool:
+    """Return True if text is a single HTTP/HTTPS URL rather than a search query."""
+    s = (text or "").strip()
+    if not s or " " in s or "\n" in s or "\t" in s:
+        return False
+    if not (s.lower().startswith("http://") or s.lower().startswith("https://")):
+        return False
+    try:
+        parsed = urllib.parse.urlparse(s)
+        return bool(parsed.scheme in ("http", "https") and parsed.netloc)
+    except ValueError:
+        return False
+
+
+def parse_domain_list(val: Any) -> list[str]:
+    """Normalize a comma-separated string or iterable of domain names/URLs."""
+    if not val:
+        return []
+    raw_items: list[str] = []
+    if isinstance(val, (list, tuple, set)):
+        for item in val:
+            if item:
+                raw_items.extend(str(item).split(","))
+    elif isinstance(val, str):
+        raw_items.extend(val.split(","))
+    cleaned: list[str] = []
+    for d in raw_items:
+        dom = (
+            d.strip()
+            .lower()
+            .removeprefix("https://")
+            .removeprefix("http://")
+            .split("/")[0]
+            .split(":")[0]
+            .removeprefix("www.")
+        )
+        if dom and dom not in cleaned:
+            cleaned.append(dom)
+    return cleaned
 
 
 class QueryOptimizer:
@@ -172,15 +213,13 @@ class QueryOptimizer:
         for token in tokens:
             lower = token.lower()
             if lower.startswith("site:") and len(token) > 5:
-                raw_domain = token[5:].strip()
-                domain = extract_domain(raw_domain) or raw_domain.lower().removeprefix("www.").rstrip("/")
-                if domain:
-                    include_domains.append(domain)
+                for domain in parse_domain_list(token[5:]):
+                    if domain not in include_domains:
+                        include_domains.append(domain)
             elif lower.startswith("-site:") and len(token) > 6:
-                raw_domain = token[6:].strip()
-                domain = extract_domain(raw_domain) or raw_domain.lower().removeprefix("www.").rstrip("/")
-                if domain:
-                    exclude_domains.append(domain)
+                for domain in parse_domain_list(token[6:]):
+                    if domain not in exclude_domains:
+                        exclude_domains.append(domain)
             else:
                 remaining_tokens.append(token)
 
@@ -290,7 +329,9 @@ class DomainScorer:
         total = len(raw_results)
 
         for rank, r in enumerate(raw_results):
-            url = r.get("url", "").strip()
+            if not isinstance(r, dict):
+                continue
+            url = str(r.get("url") or "").strip()
             if not url:
                 continue
 
@@ -309,20 +350,20 @@ class DomainScorer:
 
             # Engine score if provided by SearXNG
             raw_score = r.get("score")
-            if isinstance(raw_score, (int, float)) and raw_score > 0:
+            if isinstance(raw_score, (int, float)) and not math.isnan(raw_score) and not math.isinf(raw_score) and raw_score > 0:
                 base_score = (base_score + min(float(raw_score), 5.0) / 5.0) / 2.0
 
             dom_weight = self.get_domain_weight(dom)
             final_score = base_score * dom_weight
 
             item = SearchResultItem(
-                title=r.get("title", "").strip(),
+                title=str(r.get("title") or "").strip() or "Untitled",
                 url=url,
                 domain=dom,
-                content=r.get("content", "").strip(),
-                source=str(r.get("source", "")).strip(),
+                content=str(r.get("content") or "").strip(),
+                source=str(r.get("source") or "").strip(),
                 score=final_score,
-                published_date=str(r.get("published_date") or "").strip(),
+                published_date=str(r.get("published_date") or r.get("publishedDate") or "").strip(),
             )
             items.append(item)
 
@@ -460,34 +501,63 @@ class SpeculativeFetcher:
         max_fetch: int = 5,
         scrape_length: int = 12000,
         timeout: float = 6.0,
+        base_url: str | None = None,
     ) -> list[SearchResultItem]:
-        """Concurrently scrape top items and populate full_content."""
+        """Concurrently scrape top items and populate full_content without blocking on hung threads."""
         to_fetch = items[:max_fetch]
         if not to_fetch:
             return items
 
-        def _do_scrape(item: SearchResultItem) -> SearchResultItem:
-            try:
-                res = self.scrape_func(item.url, max_length=scrape_length, timeout=timeout)
-                err = res.get("error")
-                content = res.get("content", "").strip()
-                if err:
-                    item.scrape_error = err
-                    item.is_scraped = False
-                elif content:
-                    item.full_content = content
-                    item.is_scraped = True
-                else:
-                    item.scrape_error = "本文が見つかりませんでした"
-                    item.is_scraped = False
-            except Exception as e:  # noqa: BLE001
-                item.scrape_error = str(e)
-                item.is_scraped = False
-            return item
+        eff_timeout = float(timeout) if timeout is not None and timeout > 0 else 6.0
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = [executor.submit(_do_scrape, it) for it in to_fetch]
-            concurrent.futures.wait(futures, timeout=timeout + 2.0)
+        def _do_scrape(target_url: str) -> dict[str, Any]:
+            try:
+                if base_url is not None:
+                    try:
+                        res = self.scrape_func(
+                            target_url,
+                            max_length=scrape_length,
+                            timeout=eff_timeout,
+                            base_url=base_url,
+                        )
+                    except TypeError:
+                        res = self.scrape_func(target_url, max_length=scrape_length, timeout=eff_timeout)
+                else:
+                    res = self.scrape_func(target_url, max_length=scrape_length, timeout=eff_timeout)
+                err = res.get("error") if isinstance(res, dict) else "Invalid scrape response"
+                content = (res.get("content") or "").strip() if isinstance(res, dict) else ""
+                if err:
+                    return {"is_scraped": False, "full_content": "", "scrape_error": str(err)}
+                if content:
+                    return {"is_scraped": True, "full_content": content, "scrape_error": ""}
+                return {"is_scraped": False, "full_content": "", "scrape_error": "本文が見つかりませんでした"}
+            except Exception as e:  # noqa: BLE001
+                return {"is_scraped": False, "full_content": "", "scrape_error": str(e)}
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers)
+        try:
+            future_to_item = {executor.submit(_do_scrape, it.url): it for it in to_fetch}
+            done, not_done = concurrent.futures.wait(
+                future_to_item.keys(),
+                timeout=eff_timeout,
+            )
+            for fut in done:
+                item = future_to_item[fut]
+                try:
+                    outcome = fut.result()
+                    item.is_scraped = bool(outcome.get("is_scraped", False))
+                    item.full_content = str(outcome.get("full_content") or "")
+                    item.scrape_error = str(outcome.get("scrape_error") or "")
+                except Exception as exc:  # noqa: BLE001
+                    item.is_scraped = False
+                    item.scrape_error = str(exc)
+            for fut in not_done:
+                fut.cancel()
+                item = future_to_item[fut]
+                item.is_scraped = False
+                item.scrape_error = "Scrape timed out"
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         return items
 
@@ -498,9 +568,61 @@ class TokenBudgeter:
     @staticmethod
     def estimate_tokens(text: str) -> int:
         """Roughly estimate token count (English ~4 chars/token, CJK ~1.5 chars/token)."""
+        if not text:
+            return 0
         cjk_chars = len(re.findall(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]", text))
         other_chars = len(text) - cjk_chars
         return int(cjk_chars / 1.5 + other_chars / 4.0)
+
+    @staticmethod
+    def build_rag_prompt(query: str, markdown_context: str) -> str:
+        """Wrap packed search or scrape markdown into a ready-to-paste LLM RAG prompt."""
+        q = (query or "").strip()
+        md = (markdown_context or "").strip()
+        return (
+            "以下のWeb検索結果および抽出された本文ハイライト（引用番号 [1]〜）を根拠として、"
+            "質問に対して正確・体系的に回答してください。\n"
+            "回答内で事実やコード・数値を参照する際は、対応する引用元 `[1]` などを明記してください。\n\n"
+            f"## 質問・調査テーマ\n{q}\n\n"
+            f"## 検索コンテキスト\n{md}\n"
+        )
+
+    @classmethod
+    def pack_scrape_markdown(
+        cls,
+        url: str,
+        content: str,
+        query: str = "",
+        highlights: list[str] | None = None,
+        is_truncated: bool = False,
+        original_length: int = 0,
+    ) -> str:
+        """Format scraped URL content and optional BM25 highlights into AI-friendly Markdown."""
+        clean_url = (url or "").strip()
+        dom = extract_domain(clean_url)
+        orig_len = original_length or len(content or "")
+        md_lines = [f"## 抽出本文: [{dom or clean_url}]({clean_url})\n"]
+        if not content or not content.strip():
+            md_lines.append("抽出可能な本文が見つかりませんでした。")
+            return "\n".join(md_lines).strip()
+
+        if is_truncated:
+            md_lines.append(
+                f"> ⚠️ *コンテキスト長制限のため、先頭 {len(content)} 文字を表示しています (全 {orig_len} 文字)。*\n"
+            )
+        if highlights:
+            q_label = f" (`{query}`)" if query else ""
+            md_lines.append(f"### 🎯 BM25 ハイライト{q_label}\n")
+            for idx, h in enumerate(highlights, 1):
+                if h.startswith("```"):
+                    md_lines.append(f"**[{idx}]**\n{h}\n")
+                else:
+                    quoted = "\n".join(f"> {line}" for line in h.split("\n"))
+                    md_lines.append(f"**[{idx}]**\n{quoted}\n")
+            md_lines.append("---\n### 📄 抽出本文\n")
+
+        md_lines.append(content.strip())
+        return "\n".join(md_lines).strip()
 
     @classmethod
     def pack_markdown(
@@ -510,9 +632,10 @@ class TokenBudgeter:
         max_tokens: int = 3000,
         direct_answers: list[str] | None = None,
         intent: str = "general",
+        header_label: str = "Deep Search Results",
     ) -> str:
         """Pack search highlights and sources into concise, high-density Markdown."""
-        lines: list[str] = [f"## Deep Search Results: `{query}` (Intent: `{intent}`)\n"]
+        lines: list[str] = [f"## {header_label}: `{query}` (Intent: `{intent}`)\n"]
 
         if direct_answers:
             for ans in direct_answers:
@@ -530,7 +653,7 @@ class TokenBudgeter:
             title = item.title or "Untitled"
             url = item.url
             source_tag = f" `[{item.source}]`" if item.source else ""
-            score_str = f" `[relevance: {item.score:.2f}]`"
+            score_str = f" `[relevance: {item.score:.2f}]`" if item.score > 0 else ""
 
             item_header = f"### [{i}] [{title}]({url}){source_tag}{score_str}\n"
 
@@ -563,6 +686,376 @@ class TokenBudgeter:
         return "\n".join(lines).strip()
 
 
+def build_rag_prompt(query: str, markdown_context: str) -> str:
+    """Module-level helper for building an LLM RAG prompt from search/scrape Markdown."""
+    return TokenBudgeter.build_rag_prompt(query, markdown_context)
+
+
+def execute_scrape_pipeline(
+    url: str,
+    scrape_func: Callable[..., dict[str, Any]],
+    focus_query: str = "",
+    max_length: int = 8000,
+    base_url: str | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Execute unified URL scraping with token estimation, BM25 highlights, and RAG prompt."""
+    t0 = time.perf_counter()
+    clean_url = (url or "").strip()
+    clean_q = (focus_query or "").strip()
+    try:
+        max_len = max(500, min(int(max_length), 50000))
+    except (ValueError, TypeError):
+        max_len = 8000
+
+    if not clean_url:
+        err_msg = "URL が指定されていません。"
+        return {
+            "mode": "scrape",
+            "url": "",
+            "domain": "",
+            "query": clean_q,
+            "content": "",
+            "highlights": [],
+            "results": [],
+            "results_count": 0,
+            "scraped_count": 0,
+            "char_count": 0,
+            "estimated_tokens": 0,
+            "elapsed_ms": 0.0,
+            "error": err_msg,
+            "markdown": f"### 本文抽出エラー\n\n{err_msg}",
+            "rag_prompt": "",
+        }
+
+    scrape_kwargs: dict[str, Any] = {"max_length": max_len}
+    if timeout is not None:
+        scrape_kwargs["timeout"] = timeout
+    try:
+        if base_url is not None:
+            try:
+                scrape_res = scrape_func(clean_url, base_url=base_url, **scrape_kwargs)
+            except TypeError:
+                scrape_res = scrape_func(clean_url, **scrape_kwargs)
+        else:
+            scrape_res = scrape_func(clean_url, **scrape_kwargs)
+    except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError) as exc:
+        scrape_res = {"error": str(exc)}
+
+    elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+    dom = extract_domain(clean_url)
+
+    if scrape_res.get("error"):
+        err_msg = str(scrape_res["error"])
+        return {
+            "mode": "scrape",
+            "url": clean_url,
+            "domain": dom,
+            "query": clean_q,
+            "content": "",
+            "highlights": [],
+            "results": [],
+            "results_count": 0,
+            "scraped_count": 0,
+            "char_count": 0,
+            "estimated_tokens": 0,
+            "elapsed_ms": elapsed_ms,
+            "error": err_msg,
+            "markdown": f"### 本文抽出エラー\n\n{err_msg}",
+            "rag_prompt": "",
+        }
+
+    content = scrape_res.get("content", "")
+    is_truncated = bool(scrape_res.get("is_truncated", False))
+    orig_len = int(scrape_res.get("original_length", len(content)))
+
+    highlights: list[str] = []
+    if clean_q and content:
+        extractor = BM25PassageExtractor()
+        highlights = extractor.extract_highlights(content, clean_q, top_k=3)
+
+    markdown_out = TokenBudgeter.pack_scrape_markdown(
+        url=clean_url,
+        content=content,
+        query=clean_q,
+        highlights=highlights,
+        is_truncated=is_truncated,
+        original_length=orig_len,
+    )
+    est_tokens = TokenBudgeter.estimate_tokens(markdown_out)
+    rag_prompt = TokenBudgeter.build_rag_prompt(clean_q or clean_url, markdown_out)
+
+    result_item = SearchResultItem(
+        title=dom or clean_url,
+        url=clean_url,
+        domain=dom,
+        content=content[:400] + ("..." if len(content) > 400 else ""),
+        source="scrape",
+        score=1.0,
+        highlights=highlights or ([content[:600]] if content else []),
+        full_content=content,
+        is_scraped=True,
+    )
+
+    return {
+        "mode": "scrape",
+        "url": clean_url,
+        "domain": dom,
+        "query": clean_q or clean_url,
+        "intent": "scrape",
+        "content": content,
+        "highlights": highlights,
+        "results": [result_item.to_dict()],
+        "results_count": 1 if content else 0,
+        "scraped_count": 1 if content else 0,
+        "is_truncated": is_truncated,
+        "original_length": orig_len,
+        "char_count": len(content),
+        "estimated_tokens": est_tokens,
+        "elapsed_ms": elapsed_ms,
+        "markdown": markdown_out,
+        "rag_prompt": rag_prompt,
+    }
+
+
+def execute_unified_search(
+    query: str,
+    search_func: Callable[..., dict[str, Any]],
+    scrape_func: Callable[..., dict[str, Any]],
+    mode: str = "auto",
+    search_depth: str = "advanced",
+    max_results: int = 5,
+    include_highlights: bool = True,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+    categories: str = "",
+    engines: str = "",
+    time_range: str = "",
+    focus_query: str = "",
+    max_tokens: int = 3000,
+    max_scrape_length: int = 8000,
+    base_url: str | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Execute the unified search & scrape pipeline.
+
+    Supports:
+    - Automatic URL vs Query detection (`mode='auto'`)
+    - Direct URL extraction with BM25 highlights (`mode='scrape'`)
+    - Fast `json_lite` search with domain scoring & Markdown packing (`mode='fast'` or `search_depth='fast'`)
+    - Deep Agentic Search with parallel scraping & BM25 highlights (`mode='deep'`)
+    """
+    t0 = time.perf_counter()
+    raw_input = (query or "").strip()
+    norm_mode = (mode or "auto").strip().lower()
+    norm_depth = (search_depth or "advanced").strip().lower()
+
+    # Resolve mode when set to 'auto'
+    if norm_mode == "auto":
+        if is_url_input(raw_input):
+            norm_mode = "scrape"
+        elif norm_depth in ("fast", "json_lite"):
+            norm_mode = "fast"
+        else:
+            norm_mode = "deep"
+    elif norm_mode == "fast":
+        norm_depth = "fast"
+    elif norm_mode not in ("deep", "fast", "scrape"):
+        norm_mode = "deep"
+
+    # 1. URL Scrape Pipeline
+    if norm_mode == "scrape":
+        return execute_scrape_pipeline(
+            url=raw_input,
+            scrape_func=scrape_func,
+            focus_query=focus_query,
+            max_length=max_scrape_length,
+            base_url=base_url,
+            timeout=timeout,
+        )
+
+    # 2. Search Pipeline (Fast json_lite or Deep BM25 + Parallel Scrape)
+    clean_q, explicit_inc, explicit_exc = QueryOptimizer.parse_query(raw_input)
+    if not clean_q:
+        return {
+            "mode": norm_mode,
+            "search_depth": norm_depth,
+            "query": "",
+            "intent": "general",
+            "results": [],
+            "results_count": 0,
+            "scraped_count": 0,
+            "estimated_tokens": 0,
+            "max_tokens": max_tokens,
+            "elapsed_ms": 0.0,
+            "error": "検索クエリが空です。検索したいキーワードを指定してください。",
+            "markdown": "検索クエリが空です。",
+            "rag_prompt": "",
+        }
+
+    try:
+        max_res = max(1, min(int(max_results), 50))
+    except (ValueError, TypeError):
+        max_res = 5
+
+    try:
+        max_tok = max(500, min(int(max_tokens), 16000))
+    except (ValueError, TypeError):
+        max_tok = 3000
+
+    try:
+        scrape_len = max(500, min(int(max_scrape_length), 50000))
+    except (ValueError, TypeError):
+        scrape_len = 8000
+
+    # Merge explicit domain filters deterministically
+    final_inc = sorted(set(parse_domain_list(include_domains) + explicit_inc))
+    final_exc = sorted(set(parse_domain_list(exclude_domains) + explicit_exc))
+
+    intent = QueryOptimizer.classify_intent(clean_q)
+    routed_cats, routed_engs = QueryOptimizer.get_routing(intent)
+
+    # In fast mode, only use explicit categories/engines unless none are specified
+    if norm_mode == "fast" and not (categories.strip() or engines.strip()):
+        target_cats = ""
+        target_engs = ""
+        fetch_count = max_res if not (final_inc or final_exc) else max(max_res * 2, 10)
+    else:
+        target_cats = categories.strip() or routed_cats
+        target_engs = engines.strip() or routed_engs
+        fetch_count = max(max_res * 3, 15)
+
+    search_kwargs: dict[str, Any] = {
+        "query": clean_q,
+        "count": fetch_count,
+        "categories": target_cats,
+        "engines": target_engs,
+        "base_url": base_url,
+        "timeout": timeout,
+    }
+    if time_range.strip():
+        search_kwargs["time_range"] = time_range.strip()
+
+    try:
+        search_res = search_func(**search_kwargs)
+    except TypeError:
+        search_kwargs.pop("time_range", None)
+        try:
+            search_res = search_func(**search_kwargs)
+        except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError) as exc:
+            search_res = {"error": str(exc)}
+    except (OSError, ValueError, RuntimeError, KeyError, AttributeError) as exc:
+        search_res = {"error": str(exc)}
+
+    elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+
+    if search_res.get("error"):
+        err_text = str(search_res["error"])
+        return {
+            "mode": norm_mode,
+            "search_depth": norm_depth,
+            "query": clean_q,
+            "intent": intent,
+            "results": [],
+            "results_count": 0,
+            "scraped_count": 0,
+            "estimated_tokens": 0,
+            "max_tokens": max_tok,
+            "elapsed_ms": elapsed_ms,
+            "error": err_text,
+            "markdown": f"### 検索エラー\n\n{err_text}",
+            "rag_prompt": "",
+        }
+
+    raw_results = search_res.get("results", [])
+    direct_answers = search_res.get("answers", [])
+    infoboxes = search_res.get("infoboxes", [])
+
+    if not raw_results:
+        empty_md = f"## Deep Search Results: `{clean_q}`\n\n該当する検索結果が見つかりませんでした。"
+        return {
+            "mode": norm_mode,
+            "search_depth": norm_depth,
+            "query": clean_q,
+            "intent": intent,
+            "results": [],
+            "results_count": 0,
+            "scraped_count": 0,
+            "answers": direct_answers,
+            "infoboxes": infoboxes,
+            "estimated_tokens": TokenBudgeter.estimate_tokens(empty_md),
+            "max_tokens": max_tok,
+            "elapsed_ms": elapsed_ms,
+            "markdown": empty_md,
+            "rag_prompt": TokenBudgeter.build_rag_prompt(clean_q, empty_md),
+        }
+
+    # Domain authority & spam filtering
+    scorer = DomainScorer()
+    scored_items = scorer.score_results(
+        raw_results,
+        include_domains=final_inc,
+        exclude_domains=final_exc,
+    )
+    top_candidates = scored_items[:max_res]
+
+    # Speculative fetching & BM25 highlight extraction (for deep advanced/code modes)
+    should_scrape = (
+        norm_mode == "deep"
+        and norm_depth in ("advanced", "code")
+        and include_highlights
+    )
+    if should_scrape:
+        fetcher = SpeculativeFetcher(scrape_func=scrape_func)
+        extractor = BM25PassageExtractor()
+        fetcher.fetch_pages(
+            top_candidates,
+            max_fetch=max_res,
+            scrape_length=scrape_len,
+            timeout=float(timeout) if timeout is not None and timeout > 0 else 6.0,
+            base_url=base_url,
+        )
+
+        for item in top_candidates:
+            if item.is_scraped and item.full_content:
+                item.highlights = extractor.extract_highlights(item.full_content, clean_q, top_k=2)
+            else:
+                item.highlights = [item.content] if item.content else []
+    else:
+        for item in top_candidates:
+            item.highlights = [item.content] if item.content else []
+
+    header_label = "Fast Search Results" if norm_mode == "fast" else "Deep Search Results"
+    packed_markdown = TokenBudgeter.pack_markdown(
+        query=clean_q,
+        items=top_candidates,
+        max_tokens=max_tok,
+        direct_answers=direct_answers,
+        intent=intent,
+        header_label=header_label,
+    )
+    elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+    est_tokens = TokenBudgeter.estimate_tokens(packed_markdown)
+    scraped_count = sum(1 for it in top_candidates if it.is_scraped)
+
+    return {
+        "mode": norm_mode,
+        "search_depth": norm_depth,
+        "query": clean_q,
+        "intent": intent,
+        "results_count": len(top_candidates),
+        "scraped_count": scraped_count,
+        "results": [it.to_dict() for it in top_candidates],
+        "answers": direct_answers,
+        "infoboxes": infoboxes,
+        "max_tokens": max_tok,
+        "estimated_tokens": est_tokens,
+        "elapsed_ms": elapsed_ms,
+        "markdown": packed_markdown,
+        "rag_prompt": TokenBudgeter.build_rag_prompt(clean_q, packed_markdown),
+    }
+
+
 def execute_deep_search(
     query: str,
     search_func: Callable[..., dict[str, Any]],
@@ -576,112 +1069,22 @@ def execute_deep_search(
     base_url: str | None = None,
     timeout: float | None = None,
 ) -> dict[str, Any]:
-    """Execute the full deep search pipeline (Exa/Tavily-like one-pass search).
-
-    Pipeline:
-    1. Parse query and extract domain operators.
-    2. Classify query intent and determine optimal engine routing.
-    3. Perform SearXNG meta-search using json_lite.
-    4. Score and filter results with DomainScorer.
-    5. Speculatively fetch top N pages in parallel.
-    6. Extract BM25 highlights from full page text.
-    7. Return structured dictionary with packed markdown.
-    """
-    clean_q, explicit_inc, explicit_exc = QueryOptimizer.parse_query(query)
-    if not clean_q:
-        return {
-            "query": "",
-            "intent": "general",
-            "results": [],
-            "error": "検索クエリが空です。検索したいキーワードを指定してください。",
-            "markdown": "検索クエリが空です。",
-        }
-
-    # Merge explicit domain filters deterministically
-    final_inc = sorted(set((include_domains or []) + explicit_inc))
-    final_exc = sorted(set((exclude_domains or []) + explicit_exc))
-
-    intent = QueryOptimizer.classify_intent(clean_q)
-    categories, engines = QueryOptimizer.get_routing(intent)
-
-    # Perform initial meta-search
-    # Fetch slightly more (e.g. 15) to allow domain filtering and reranking
-    search_res = search_func(
-        query=clean_q,
-        count=max(max_results * 3, 15),
-        categories=categories,
-        engines=engines,
+    """Execute the deep search pipeline (delegates to the unified search pipeline)."""
+    depth_norm = (search_depth or "advanced").strip().lower()
+    mode = "fast" if depth_norm in ("fast", "json_lite") else "deep"
+    return execute_unified_search(
+        query=query,
+        search_func=search_func,
+        scrape_func=scrape_func,
+        mode=mode,
+        search_depth=depth_norm,
+        max_results=max_results,
+        include_highlights=include_highlights,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
+        max_tokens=max_tokens,
         base_url=base_url,
         timeout=timeout,
     )
 
-    if search_res.get("error"):
-        return {
-            "query": clean_q,
-            "intent": intent,
-            "results": [],
-            "error": search_res["error"],
-            "markdown": f"### 検索エラー\n\n{search_res['error']}",
-        }
 
-    raw_results = search_res.get("results", [])
-    direct_answers = search_res.get("answers", [])
-
-    if not raw_results:
-        return {
-            "query": clean_q,
-            "intent": intent,
-            "results": [],
-            "answers": direct_answers,
-            "markdown": f"## Deep Search Results: `{clean_q}`\n\n該当する検索結果が見つかりませんでした。",
-        }
-
-    # Step 4: Domain authority & spam filtering
-    scorer = DomainScorer()
-    scored_items = scorer.score_results(
-        raw_results,
-        include_domains=final_inc,
-        exclude_domains=final_exc,
-    )
-
-    # Select top candidates for deep scraping
-    top_candidates = scored_items[:max_results]
-
-    # Step 5 & 6: Speculative fetching & Highlight extraction
-    if search_depth in ("advanced", "code") and include_highlights:
-        fetcher = SpeculativeFetcher(scrape_func=scrape_func)
-        extractor = BM25PassageExtractor()
-
-        # Fetch in parallel
-        fetch_timeout = timeout if timeout is not None else 6.0
-        fetcher.fetch_pages(top_candidates, max_fetch=max_results, timeout=fetch_timeout)
-
-        for item in top_candidates:
-            if item.is_scraped and item.full_content:
-                # Extract 1-3 highlights using BM25
-                item.highlights = extractor.extract_highlights(item.full_content, clean_q, top_k=2)
-            else:
-                # Fallback to search snippet
-                item.highlights = [item.content] if item.content else []
-    else:
-        # Basic depth uses snippets only
-        for item in top_candidates:
-            item.highlights = [item.content] if item.content else []
-
-    # Step 7: Pack results and Markdown
-    packed_markdown = TokenBudgeter.pack_markdown(
-        query=clean_q,
-        items=top_candidates,
-        max_tokens=max_tokens,
-        direct_answers=direct_answers,
-        intent=intent,
-    )
-
-    return {
-        "query": clean_q,
-        "intent": intent,
-        "results_count": len(top_candidates),
-        "results": [it.to_dict() for it in top_candidates],
-        "answers": direct_answers,
-        "markdown": packed_markdown,
-    }

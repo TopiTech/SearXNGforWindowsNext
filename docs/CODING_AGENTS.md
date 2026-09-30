@@ -167,14 +167,19 @@ MCP 非対応の環境や、ターミナルコマンド実行能力を持つコ�
 #### コマンド例
 
 ```powershell
-# Web 検索 (Markdown 形式で最新情報を取得)
+# 統合検索 (既定: json_lite 高速スニペット / --mode deep で並列スクレイプ+BM25 / URL入力で自動スクレイプ)
 python tools/searxng_cli.py search "Next.js 15 breaking changes" -n 5
+python tools/searxng_cli.py search "FastAPI lifespan" --mode deep -d code -n 3
+python tools/searxng_cli.py search "https://docs.searxng.org"
+
+# Deep Search 専用サブコマンド
+python tools/searxng_cli.py deep "FastAPI lifespan context manager" -n 3
 
 # JSON 形式で結果取得
 python tools/searxng_cli.py search "Python 3.12 syntax" --json
 
-# Web ページの本文抽出
-python tools/searxng_cli.py scrape "https://docs.searxng.org" --max-chars 3000
+# Web ページの本文抽出 (-q で BM25 ハイライト抽出も同時実行)
+python tools/searxng_cli.py scrape "https://docs.searxng.org" --max-chars 3000 -q "json_lite"
 
 # バッチラッパーを使用する場合
 .\tools\searxng.bat search "FastAPI async SQLAlchemy"
@@ -186,9 +191,9 @@ python tools/searxng_cli.py scrape "https://docs.searxng.org" --max-chars 3000
 ```markdown
 ### 外部情報の検索ルール
 最新のライブラリ仕様、エラー解決策、公式ドキュメントを調べる必要がある場合は、以下のローカルコマンドを実行して情報を取得してください：
-- 深層検索 (推奨): `python tools/searxng_cli.py deep "<検索キーワード/質問>" -n 5`
+- 深層検索 (推奨): `python tools/searxng_cli.py deep "<検索キーワード/質問>" -n 5` または `python tools/searxng_cli.py search "<検索キーワード/URL>" --mode deep -n 5`
   (※自動で上位サイトを並列スクレイプし、BM25で最も関連するハイライト段落を抽出して返します)
-- 通常検索: `python tools/searxng_cli.py search "<検索キーワード>" -n 5`
+- 高速検索 (`json_lite`): `python tools/searxng_cli.py search "<検索キーワード>" -n 5`
 - 個別ページ本文の取得: `python tools/searxng_cli.py scrape "<URL>" --max-chars 3000`
 ```
 
@@ -202,34 +207,40 @@ python tools/searxng_cli.py scrape "https://docs.searxng.org" --max-chars 3000
 
 | パラメータ | 型 | 既定値 | 説明 |
 |---|---|---|---|
-| `query` | `string` | *(必須)* | 検索キーワードまたは自然言語の質問。 |
-| `search_depth` | `string` | `"advanced"` | 検索深度。`"advanced"` (並列スクレイプ+BM25ハイライト), `"code"` (公式ドキュメント・GitHub優先), `"basic"` (スニペットのみ)。 |
+| `query` | `string` | *(必須)* | 検索キーワード、自然言語の質問、または URL。 |
+| `search_depth` | `string` | `"advanced"` | 検索深度。`"advanced"` (並列スクレイプ+BM25ハイライト), `"code"` (公式ドキュメント・GitHub優先), `"basic"` (スニペット+ドメイン評価), `"fast"` (`json_lite` 高速スニペット)。 |
 | `max_results` | `integer` | `5` | 取得対象の上位件数 (1〜20件)。 |
 | `include_highlights` | `boolean` | `true` | 本文から最もクエリに関連する段落（ハイライト）を抽出するかどうか。 |
 | `include_domains` | `array[string]` | `null` | 検索対象を限定するドメインのリスト（例: `["docs.python.org", "github.com"]`）。 |
 | `exclude_domains` | `array[string]` | `null` | 除外するドメインのリスト（コピペサイト、不要なドメイン等）。 |
 | `max_tokens` | `integer` | `3000` | 生成される Markdown コンテキストの最大トークン予算 (500〜16000)。 |
 
-### 2. `searxng_search` (Web 検索)
+### 2. `searxng_search` (統合 Web 検索 & URL 自動判別)
 
-SearXNG の `json_lite` 形式を使用して Web 検索を行います。
+既定では SearXNG の高速 `json_lite` 形式で検索を行い、`mode="deep"` や `search_depth` を指定すると統合深層検索を実行します。また `query` に URL（`https://...`）を渡すと自動的に本文抽出を実行します。
 
 | パラメータ | 型 | 既定値 | 説明 |
 |---|---|---|---|
-| `query` | `string` | *(必須)* | 検索キーワード。 |
+| `query` | `string` | *(必須)* | 検索キーワード、質問、または URL (`https://...`)。 |
 | `count` | `integer` | `5` | 取得件数 (1〜20件)。コンテキスト効率のため 5件 推奨。 |
+| `mode` | `string` | `"auto"` | `"auto"` (URL自動判別 / 既定は高速検索), `"fast"` (`json_lite`), `"deep"` (BM25深層検索), `"scrape"` (URL抽出)。 |
+| `search_depth` | `string` | `null` | `"advanced"`, `"code"`, `"basic"`, `"fast"` のいずれかを指定すると統合パイプラインで実行。 |
 | `categories` | `string` | `""` | カテゴリ指定（例: `"it"`, `"general"`, `"science"`）。 |
 | `engines` | `string` | `""` | 検索エンジン指定（例: `"duckduckgo,bing"`）。 |
 | `time_range` | `string` | `""` | 期間指定（`"day"`, `"week"`, `"month"`, `"year"`）。 |
+| `include_domains` | `array[string]` | `null` | 検索対象を限定するドメインのリスト。 |
+| `exclude_domains` | `array[string]` | `null` | 除外するドメインのリスト。 |
+| `max_tokens` | `integer` | `3000` | 深層検索時の最大トークン予算。 |
 
-### 3. `searxng_scrape` (本文抽出)
+### 3. `searxng_scrape` (本文抽出 + BM25 ハイライト)
 
-指定された URL の Web ページから本文テキストを抽出します。
+指定された URL の Web ページから本文テキストを抽出し、必要に応じてフォーカスキーワードによる BM25 ハイライト段落も抽出します。
 
 | パラメータ | 型 | 既定値 | 説明 |
 |---|---|---|---|
 | `url` | `string` | *(必須)* | 抽出対象の Web ページ URL。 |
 | `max_length` | `integer` | `4000` | 抽出文字数の上限（コンテキスト溢れ防止）。 |
+| `query` | `string` | `""` | 任意。指定するとページ本文からクエリに関連する BM25 ハイライト段落を抽出。 |
 
 ### 4. `searxng_health` (ヘルスチェック)
 
