@@ -321,6 +321,18 @@ engines:
     shortcut: sc
     disabled: false
 
+  - name: github
+    engine: github
+    shortcut: gh
+    categories: [it, repos]
+    disabled: false
+
+  - name: arxiv
+    engine: arxiv
+    shortcut: arx
+    categories: science
+    disabled: false
+
   # Engines disabled due to persistent CAPTCHA / anti-bot blocking
   - name: baidu
     baidu_category: general

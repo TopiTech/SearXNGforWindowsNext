@@ -895,6 +895,114 @@ def patch_preferences_accessibility(content, path):
     return patched if count > 0 else content
 
 
+# --- Patch 3e: preferences.py (safe category validation & non-fatal parse_dict) ---
+def patch_preferences_validation(content, path):
+    """Ensure MultipleChoiceSetting safely filters choices and parse_dict handles ValidationException."""
+    if (
+        "self.value = [x for x in elements if x in self.choices]" in content
+        and "except ValidationException as e:" in content
+    ):
+        return "ALREADY_APPLIED"
+
+    # 1. Update MultipleChoiceSetting.parse to filter choices instead of raising ValidationException
+    old_parse = (
+        "        elements = data.split(',')\n"
+        "        self._validate_selections(elements)\n"
+        "        self.value = elements"
+    )
+    new_parse = (
+        "        elements = [x.strip() for x in data.split(',') if x.strip()]\n"
+        "        self.value = [x for x in elements if x in self.choices]"
+    )
+    if old_parse in content:
+        content = content.replace(old_parse, new_parse, 1)
+
+    # 2. Update parse_dict to catch ValidationException per setting
+    old_parse_dict = (
+        "            if user_setting_name in self.key_value_settings:\n"
+        "                if self.key_value_settings[user_setting_name].locked:\n"
+        "                    continue\n"
+        "                self.key_value_settings[user_setting_name].parse(user_setting)"
+    )
+    new_parse_dict = (
+        "            if user_setting_name in self.key_value_settings:\n"
+        "                if self.key_value_settings[user_setting_name].locked:\n"
+        "                    continue\n"
+        "                try:\n"
+        "                    self.key_value_settings[user_setting_name].parse(user_setting)\n"
+        "                except ValidationException as e:\n"
+        "                    logger.debug('Ignored invalid preference for %s: %s', user_setting_name, e)"
+    )
+    if old_parse_dict in content:
+        content = content.replace(old_parse_dict, new_parse_dict, 1)
+
+    return content
+
+
+# --- Patch 3f: webadapter.py (safe categories.get lookup) ---
+def patch_webadapter_categories(content, path):
+    """Use categories.get(categ, []) in get_engineref_from_category_list to prevent KeyError."""
+    if "categories.get(categ, [])" in content:
+        return "ALREADY_APPLIED"
+
+    target = "for engine in categories[categ]"
+    replacement = "for engine in categories.get(categ, [])"
+    if target in content:
+        return content.replace(target, replacement, 1)
+    return content
+
+
+# --- Patch 3g: webapp.py (tab categories in Preferences & safe pre_request) ---
+def patch_webapp_preferences_validation(content, path):
+    """Ensure webapp.py includes categories_as_tabs in Preferences choices and catches ValidationException."""
+    if (
+        "all_categories = sorted(set(list(categories.keys()) + list(settings.get('categories_as_tabs', {}).keys())))"
+        in content
+    ):
+        return "ALREADY_APPLIED"
+
+    old_pref_init = "    preferences = Preferences(themes, list(categories.keys()), engines, searx.plugins.STORAGE, client_pref)"
+    new_pref_init = (
+        "    all_categories = sorted(set(list(categories.keys()) + list(settings.get('categories_as_tabs', {}).keys())))\n"
+        "    preferences = Preferences(themes, all_categories, engines, searx.plugins.STORAGE, client_pref)"
+    )
+    if old_pref_init in content:
+        content = content.replace(old_pref_init, new_pref_init, 1)
+
+    # Catch ValidationException in pre_request cookies and form
+    old_cookie_try = (
+        "    try:\n"
+        "        preferences.parse_dict(sxng_request.cookies)\n\n"
+        "    except Exception as e:"
+    )
+    new_cookie_try = (
+        "    try:\n"
+        "        preferences.parse_dict(sxng_request.cookies)\n"
+        "    except ValidationException as e:\n"
+        "        logger.debug('Invalid settings in cookies: %s', e)\n"
+        "    except Exception as e:"
+    )
+    if old_cookie_try in content:
+        content = content.replace(old_cookie_try, new_cookie_try, 1)
+
+    old_form_try = (
+        "        else:\n"
+        "            preferences.parse_dict(sxng_request.form)\n"
+        "    except Exception as e:"
+    )
+    new_form_try = (
+        "        else:\n"
+        "            preferences.parse_dict(sxng_request.form)\n"
+        "    except ValidationException as e:\n"
+        "        logger.debug('Invalid settings in request: %s', e)\n"
+        "    except Exception as e:"
+    )
+    if old_form_try in content:
+        content = content.replace(old_form_try, new_form_try, 1)
+
+    return content
+
+
 # --- Patch 4: webapp.py (json_lite handler + ipaddress import + event loop policy) ---
 def patch_webapp_json_handler(content, path):
     checks = [
@@ -2316,6 +2424,43 @@ PATCH_SPECS = [
         severity=PatchSeverity.OPTIONAL,
         required_file=False,
         diagnostic_hint="Reduces suspension times in user config/settings.yml while preserving custom overrides.",
+    ),
+    PatchSpec(
+        name="preferences_validation",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "preferences.py"),
+        description="preferences.py (safe category validation & non-fatal parse_dict)",
+        patch_func=patch_preferences_validation,
+        severity=PatchSeverity.CRITICAL,
+        required_file=True,
+        expected_anchors=[
+            "class MultipleChoiceSetting",
+            "def parse_dict",
+        ],
+        diagnostic_hint="Ensures MultipleChoiceSetting filters valid selections and parse_dict handles ValidationException gracefully.",
+    ),
+    PatchSpec(
+        name="webadapter_categories",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "webadapter.py"),
+        description="webadapter.py (safe categories lookup)",
+        patch_func=patch_webadapter_categories,
+        severity=PatchSeverity.CRITICAL,
+        required_file=True,
+        expected_anchors=[
+            "def get_engineref_from_category_list",
+        ],
+        diagnostic_hint="Safely looks up engine categories using .get() to prevent KeyError on unconfigured categories.",
+    ),
+    PatchSpec(
+        name="webapp_preferences_validation",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "webapp.py"),
+        description="webapp.py (tab categories in Preferences & safe pre_request)",
+        patch_func=patch_webapp_preferences_validation,
+        severity=PatchSeverity.CRITICAL,
+        required_file=True,
+        expected_anchors=[
+            "preferences = Preferences",
+        ],
+        diagnostic_hint="Includes categories_as_tabs in Preferences choices and catches ValidationException gracefully.",
     ),
 ]
 

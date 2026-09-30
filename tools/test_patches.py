@@ -2831,6 +2831,64 @@ class TestPatchDiagnosticsAndResilience(unittest.TestCase):
             exit_code = apply_patches.main()
             self.assertEqual(exit_code, 1)
 
+    def test_patch_preferences_validation(self):
+        sample = (
+            "    def parse(self, data: str):\n"
+            "        \"\"\"Parse and validate ``data`` and store the result at ``self.value``\"\"\"\n"
+            "        if data == '':\n"
+            "            self.value: list[str] = []\n"
+            "            return\n"
+            "\n"
+            "        elements = data.split(',')\n"
+            "        self._validate_selections(elements)\n"
+            "        self.value = elements\n"
+            "\n"
+            "        for user_setting_name, user_setting in input_data.items():\n"
+            "            if user_setting_name in self.key_value_settings:\n"
+            "                if self.key_value_settings[user_setting_name].locked:\n"
+            "                    continue\n"
+            "                self.key_value_settings[user_setting_name].parse(user_setting)\n"
+        )
+        patched = apply_patches.patch_preferences_validation(sample, "preferences.py")
+        self.assertIn("self.value = [x for x in elements if x in self.choices]", patched)
+        self.assertIn("except ValidationException as e:", patched)
+        # Verify idempotency
+        self.assertEqual(apply_patches.patch_preferences_validation(patched, "preferences.py"), "ALREADY_APPLIED")
+
+    def test_patch_webadapter_categories(self):
+        sample = (
+            "    for categ in category_list:\n"
+            "        result.extend(\n"
+            "            EngineRef(engine.name, categ)\n"
+            "            for engine in categories[categ]\n"
+            "            if (engine.name, categ) not in disabled_engines\n"
+            "        )\n"
+        )
+        patched = apply_patches.patch_webadapter_categories(sample, "webadapter.py")
+        self.assertIn("for engine in categories.get(categ, [])", patched)
+        # Verify idempotency
+        self.assertEqual(apply_patches.patch_webadapter_categories(patched, "webadapter.py"), "ALREADY_APPLIED")
+
+    def test_patch_webapp_preferences_validation(self):
+        sample = (
+            "    preferences = Preferences(themes, list(categories.keys()), engines, searx.plugins.STORAGE, client_pref)\n"
+            "    try:\n"
+            "        preferences.parse_dict(sxng_request.cookies)\n"
+            "\n"
+            "    except Exception as e:\n"
+            "        logger.exception(e, exc_info=True)\n"
+            "        else:\n"
+            "            preferences.parse_dict(sxng_request.form)\n"
+            "    except Exception as e:\n"
+            "        logger.exception(e, exc_info=True)\n"
+        )
+        patched = apply_patches.patch_webapp_preferences_validation(sample, "webapp.py")
+        self.assertIn("all_categories = sorted(set(list(categories.keys()) + list(settings.get('categories_as_tabs', {}).keys())))", patched)
+        self.assertIn("except ValidationException as e:\n        logger.debug('Invalid settings in cookies: %s', e)", patched)
+        self.assertIn("except ValidationException as e:\n        logger.debug('Invalid settings in request: %s', e)", patched)
+        # Verify idempotency
+        self.assertEqual(apply_patches.patch_webapp_preferences_validation(patched, "webapp.py"), "ALREADY_APPLIED")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
