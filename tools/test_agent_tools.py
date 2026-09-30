@@ -477,11 +477,52 @@ class TestSearXNGCLI(unittest.TestCase):
         args = parser.parse_args(["deep", "fastapi", "-n", "3", "-d", "advanced"])
 
         with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            code = searxng_cli.cmd_deep(args)
+            code = searxng_cli.cmd_search(args) if args.command == "search" else searxng_cli.cmd_deep(args)
             self.assertEqual(code, 0)
             self.assertIn("Deep Search Results", mock_out.getvalue())
+
+    @patch("searxng_client.unified_search")
+    def test_cmd_search_url_auto_detect_and_deep_mode(self, mock_unified: MagicMock) -> None:
+        mock_unified.return_value = {
+            "mode": "scrape",
+            "url": "https://docs.searxng.org",
+            "markdown": "## Extracted Content: https://docs.searxng.org\n\nSearXNG documentation body.",
+        }
+        parser = searxng_cli.build_parser()
+        args = parser.parse_args(["search", "https://docs.searxng.org"])
+
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            code = searxng_cli.cmd_search(args)
+            self.assertEqual(code, 0)
+            self.assertIn("Extracted Content", mock_out.getvalue())
+            mock_unified.assert_called_once()
+
+    @patch("searxng_client.unified_search")
+    def test_mcp_search_with_deep_mode_or_url(self, mock_unified: MagicMock) -> None:
+        mock_unified.return_value = {
+            "mode": "deep",
+            "query": "fastapi",
+            "markdown": "## Deep Search Results: `fastapi`",
+        }
+        raw_msg = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 42,
+                "method": "tools/call",
+                "params": {
+                    "name": "searxng_search",
+                    "arguments": {"query": "fastapi", "mode": "deep", "search_depth": "code"},
+                },
+            }
+        )
+        resp = mcp_server.process_message(raw_msg)
+        self.assertIsNotNone(resp)
+        self.assertFalse(resp["result"]["isError"])
+        self.assertIn("Deep Search Results", resp["result"]["content"][0]["text"])
+        mock_unified.assert_called_once()
 
 
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -260,6 +260,75 @@ class TestExecuteDeepSearch(unittest.TestCase):
         self.assertIn("markdown", res)
         self.assertIn("Direct Answer", res["markdown"])
 
+    def test_is_url_input_and_parse_domain_list(self) -> None:
+        self.assertTrue(agentic_search.is_url_input("https://docs.searxng.org/admin"))
+        self.assertTrue(agentic_search.is_url_input("http://example.com"))
+        self.assertFalse(agentic_search.is_url_input("FastAPI lifespan tutorial"))
+        self.assertFalse(agentic_search.is_url_input("https://example.com with spaces"))
+
+        domains = agentic_search.parse_domain_list(["https://www.github.com/foo, docs.python.org", "github.com"])
+        self.assertEqual(domains, ["github.com", "docs.python.org"])
+
+    def test_execute_unified_search_auto_scrape_url(self) -> None:
+        mock_search = MagicMock()
+        mock_scrape = MagicMock()
+        mock_scrape.return_value = {
+            "url": "https://docs.searxng.org/guide",
+            "content": (
+                "Introduction to SearXNG metasearch engine.\n\n"
+                "The json_lite format returns compact token-optimized search results for AI agents."
+            ),
+        }
+
+        res = agentic_search.execute_unified_search(
+            query="https://docs.searxng.org/guide",
+            search_func=mock_search,
+            scrape_func=mock_scrape,
+            mode="auto",
+            focus_query="json_lite format",
+        )
+        mock_search.assert_not_called()
+        mock_scrape.assert_called_once()
+        self.assertEqual(res["mode"], "scrape")
+        self.assertEqual(res["url"], "https://docs.searxng.org/guide")
+        self.assertEqual(res["scraped_count"], 1)
+        self.assertGreater(len(res["highlights"]), 0)
+        self.assertIn("rag_prompt", res)
+
+    def test_execute_unified_search_fast_mode(self) -> None:
+        mock_search = MagicMock()
+        mock_search.return_value = {
+            "query": "python asyncio",
+            "results": [
+                {
+                    "title": "Asyncio Docs",
+                    "url": "https://docs.python.org/3/library/asyncio.html",
+                    "content": "Asyncio is used as a foundation for multiple Python asynchronous frameworks.",
+                    "source": "duckduckgo",
+                    "score": 1.0,
+                }
+            ],
+            "answers": [],
+        }
+        mock_scrape = MagicMock()
+
+        res = agentic_search.execute_unified_search(
+            query="python asyncio",
+            search_func=mock_search,
+            scrape_func=mock_scrape,
+            mode="fast",
+            max_results=3,
+        )
+        mock_search.assert_called_once()
+        mock_scrape.assert_not_called()
+        self.assertEqual(res["mode"], "fast")
+        self.assertEqual(res["search_depth"], "fast")
+        self.assertEqual(res["scraped_count"], 0)
+        self.assertEqual(len(res["results"]), 1)
+        self.assertIn("Fast Search Results", res["markdown"])
+        self.assertIn("rag_prompt", res)
+
 
 if __name__ == "__main__":
     unittest.main()
+

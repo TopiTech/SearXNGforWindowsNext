@@ -361,6 +361,64 @@ def format_scrape_markdown(scrape_data: dict[str, Any]) -> str:
     return "\n".join(lines).strip()
 
 
+def _load_agentic_search() -> Any:
+    """Import and return the agentic_search module safely regardless of working directory."""
+    try:
+        import agentic_search
+    except ImportError:
+        import sys
+
+        sys_path = os.path.dirname(os.path.abspath(__file__))
+        if sys_path not in sys.path:
+            sys.path.insert(0, sys_path)
+        import agentic_search
+    return agentic_search
+
+
+def unified_search(
+    query: str,
+    mode: str = "auto",
+    search_depth: str = "advanced",
+    max_results: int = 5,
+    include_highlights: bool = True,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+    categories: str = "",
+    engines: str = "",
+    time_range: str = "",
+    focus_query: str = "",
+    max_tokens: int = 3000,
+    max_scrape_length: int = 8000,
+    base_url: str | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Execute unified search or URL scraping (`auto`, `deep`, `fast`, or `scrape`).
+
+    Automatically detects if `query` is a URL and extracts its content + BM25 highlights,
+    or runs either fast (`json_lite`) or deep (parallel scrape + BM25) meta-search.
+    """
+    agentic_mod = _load_agentic_search()
+    return agentic_mod.execute_unified_search(
+        query=query,
+        search_func=search,
+        scrape_func=scrape,
+        mode=mode,
+        search_depth=search_depth,
+        max_results=max_results,
+        include_highlights=include_highlights,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
+        categories=categories,
+        engines=engines,
+        time_range=time_range,
+        focus_query=focus_query,
+        max_tokens=max_tokens,
+        max_scrape_length=max_scrape_length,
+        base_url=base_url,
+        timeout=timeout,
+    )
+
+
 def search_deep(
     query: str,
     search_depth: str = "advanced",
@@ -376,7 +434,7 @@ def search_deep(
 
     Args:
         query: Search query or research topic.
-        search_depth: 'basic' (snippets only), 'advanced' (speculative scrape + highlights),
+        search_depth: 'basic'/'fast' (snippets only), 'advanced' (speculative scrape + highlights),
                       or 'code' (prioritize technical docs and code repositories).
         max_results: Number of top results to return (default 5, min 1, max 20).
         include_highlights: Whether to extract relevant passage highlights (default True).
@@ -389,17 +447,8 @@ def search_deep(
     Returns:
         dict: Standardized deep search result dictionary with markdown representation.
     """
-    try:
-        import agentic_search
-    except ImportError:
-        # Fallback if imported from a different path
-        import sys
-        sys_path = os.path.dirname(os.path.abspath(__file__))
-        if sys_path not in sys.path:
-            sys.path.insert(0, sys_path)
-        import agentic_search
-
-    return agentic_search.execute_deep_search(
+    agentic_mod = _load_agentic_search()
+    return agentic_mod.execute_deep_search(
         query=query,
         search_func=search,
         scrape_func=scrape,
@@ -427,4 +476,24 @@ def format_deep_search_markdown(deep_data: dict[str, Any]) -> str:
 
     # Fallback to standard search markdown
     return format_search_markdown(deep_data)
+
+
+def format_markdown(data: dict[str, Any]) -> str:
+    """Unified Markdown formatter handling `deep`, `fast` (`json_lite`), and `scrape` results."""
+    mode = str(data.get("mode", "")).lower()
+    if mode == "scrape" or ("url" in data and "results" not in data):
+        md = data.get("markdown")
+        if md and not data.get("error"):
+            return str(md)
+        return format_scrape_markdown(data)
+
+    md = data.get("markdown")
+    if md and not data.get("error"):
+        return str(md)
+
+    if mode == "deep":
+        return format_deep_search_markdown(data)
+
+    return format_search_markdown(data)
+
 

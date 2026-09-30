@@ -2360,6 +2360,26 @@ class TestAiWebuiPatches(unittest.TestCase):
             self.assertTrue(len(scrape_res["highlights"]) >= 1)
             self.assertIn("FastAPI lifespan", scrape_res["markdown"])
 
+            # Verify fast mode and URL auto-detection in execute_server_deep_search
+            fast_res = webui_next.execute_server_deep_search(
+                query="fastapi lifespan",
+                search_depth="fast",
+                max_results=3,
+            )
+            self.assertEqual(fast_res["mode"], "fast")
+            self.assertEqual(fast_res["scraped_count"], 0)
+            self.assertIn("Fast Search Results", fast_res["markdown"])
+
+            auto_url_res = webui_next.execute_server_deep_search(
+                query="https://fastapi.tiangolo.com/advanced/events/",
+                mode="auto",
+                focus_query="lifespan startup",
+            )
+            self.assertEqual(auto_url_res["mode"], "scrape")
+            self.assertEqual(auto_url_res["scraped_count"], 1)
+            self.assertIn("FastAPI lifespan", auto_url_res["markdown"])
+
+
 
 class TestPatchCache(unittest.TestCase):
     """Tests for patch caching and fast-path verification."""

@@ -32,17 +32,17 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "searxng_search",
         "description": (
-            "Web search using SearXNG with token-optimized json_lite output. "
-            "Returns search result titles, URLs, snippets, and engine attribution. "
-            "Use this when you need up-to-date web documentation, API references, "
-            "libraries, or solutions to coding errors."
+            "Unified web search & URL content extraction using SearXNG. "
+            "Supports fast token-optimized json_lite snippets (default), one-pass deep search "
+            "(parallel scraping + BM25 highlights via mode='deep' or search_depth), and automatic "
+            "URL scraping when a URL (https://...) is passed as query."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The search keywords or query string.",
+                    "description": "The search keywords, research question, or target URL (https://...).",
                 },
                 "count": {
                     "type": "integer",
@@ -50,6 +50,17 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                     "default": 5,
                     "minimum": 1,
                     "maximum": 20,
+                },
+                "mode": {
+                    "type": "string",
+                    "description": "Optional execution mode: 'auto' (default), 'fast' (json_lite), 'deep' (BM25 + scrape), or 'scrape'.",
+                    "enum": ["auto", "fast", "deep", "scrape"],
+                    "default": "auto",
+                },
+                "search_depth": {
+                    "type": "string",
+                    "description": "Optional search depth ('basic', 'advanced', 'code', 'fast'). Setting this activates the unified pipeline.",
+                    "enum": ["basic", "advanced", "code", "fast"],
                 },
                 "categories": {
                     "type": "string",
@@ -64,6 +75,23 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                     "description": "Optional time filter.",
                     "enum": ["day", "week", "month", "year"],
                 },
+                "include_domains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of domains to restrict search to (e.g. ['docs.python.org', 'github.com']).",
+                },
+                "exclude_domains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of domains to exclude.",
+                },
+                "max_tokens": {
+                    "type": "integer",
+                    "description": "Maximum token budget when using deep/unified mode (default 3000).",
+                    "default": 3000,
+                    "minimum": 500,
+                    "maximum": 16000,
+                },
             },
             "required": ["query"],
         },
@@ -71,7 +99,7 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "searxng_scrape",
         "description": (
-            "Extract readable text and article content from a web page URL. "
+            "Extract readable text, optional BM25 passage highlights, and article content from a web page URL. "
             "Use this when search snippets are insufficient and you need the full "
             "body text or documentation from a specific webpage."
         ),
@@ -88,6 +116,10 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                     "default": 4000,
                     "minimum": 500,
                     "maximum": 20000,
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Optional focus keywords for BM25 highlight extraction from the scraped page.",
                 },
             },
             "required": ["url"],
@@ -106,15 +138,15 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The search keywords or research question.",
+                    "description": "The search keywords, research question, or URL.",
                 },
                 "search_depth": {
                     "type": "string",
                     "description": (
                         "Search depth: 'basic' (snippets only), 'advanced' (speculative scrape + highlights), "
-                        "or 'code' (prioritize code/docs)."
+                        "'code' (prioritize code/docs), or 'fast' (json_lite)."
                     ),
-                    "enum": ["basic", "advanced", "code"],
+                    "enum": ["basic", "advanced", "code", "fast"],
                     "default": "advanced",
                 },
                 "max_results": {
@@ -218,6 +250,11 @@ def handle_tools_list(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_url_query(text: str) -> bool:
+    s = (text or "").strip()
+    return (" " not in s) and s.lower().startswith(("http://", "https://"))
+
+
 def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
     """Handle tools/call request by executing the specified SearXNG tool."""
     tool_name = params.get("name")
@@ -234,16 +271,51 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         categories = str(arguments.get("categories", ""))
         engines = str(arguments.get("engines", ""))
         time_range = str(arguments.get("time_range", ""))
+        mode = str(arguments.get("mode", "auto")).strip().lower()
+        search_depth = arguments.get("search_depth")
+        raw_inc = arguments.get("include_domains")
+        include_domains = [str(d) for d in raw_inc] if isinstance(raw_inc, list) else None
+        raw_exc = arguments.get("exclude_domains")
+        exclude_domains = [str(d) for d in raw_exc] if isinstance(raw_exc, list) else None
 
-        data = searxng_client.search(
-            query=query,
-            count=count,
-            categories=categories,
-            engines=engines,
-            time_range=time_range,
+        use_unified = (
+            mode in ("deep", "scrape")
+            or search_depth is not None
+            or bool(include_domains)
+            or bool(exclude_domains)
+            or (mode == "auto" and _is_url_query(query))
         )
-        is_error = bool(data.get("error"))
-        formatted_text = searxng_client.format_search_markdown(data)
+
+        if use_unified:
+            try:
+                max_tokens = int(arguments.get("max_tokens", 3000))
+            except (ValueError, TypeError):
+                max_tokens = 3000
+            effective_mode = "scrape" if (mode == "scrape" or _is_url_query(query)) else ("fast" if search_depth == "fast" else "deep")
+            data = searxng_client.unified_search(
+                query=query,
+                mode=effective_mode,
+                search_depth=str(search_depth or "advanced"),
+                max_results=count,
+                categories=categories,
+                engines=engines,
+                time_range=time_range,
+                include_domains=include_domains,
+                exclude_domains=exclude_domains,
+                max_tokens=max_tokens,
+            )
+            is_error = bool(data.get("error"))
+            formatted_text = searxng_client.format_markdown(data)
+        else:
+            data = searxng_client.search(
+                query=query,
+                count=count,
+                categories=categories,
+                engines=engines,
+                time_range=time_range,
+            )
+            is_error = bool(data.get("error"))
+            formatted_text = searxng_client.format_search_markdown(data)
 
         return {
             "jsonrpc": "2.0",
@@ -260,10 +332,21 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
             max_length = int(arguments.get("max_length", 4000))
         except (ValueError, TypeError):
             max_length = 4000
+        focus_query = str(arguments.get("query", "")).strip()
 
-        data = searxng_client.scrape(url=url, max_length=max_length)
-        is_error = bool(data.get("error"))
-        formatted_text = searxng_client.format_scrape_markdown(data)
+        if focus_query:
+            data = searxng_client.unified_search(
+                query=url,
+                mode="scrape",
+                focus_query=focus_query,
+                max_scrape_length=max_length,
+            )
+            is_error = bool(data.get("error"))
+            formatted_text = searxng_client.format_markdown(data)
+        else:
+            data = searxng_client.scrape(url=url, max_length=max_length)
+            is_error = bool(data.get("error"))
+            formatted_text = searxng_client.format_scrape_markdown(data)
 
         return {
             "jsonrpc": "2.0",

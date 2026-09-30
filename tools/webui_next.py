@@ -66,34 +66,12 @@ def _parse_int(val: Any, default: int, minimum: int, maximum: int) -> int:
 
 def _parse_domain_list(val: Any) -> list[str]:
     """Normalize comma-separated string or list of domains."""
-    if not val:
-        return []
-    raw_items: list[str] = []
-    if isinstance(val, (list, tuple, set)):
-        for item in val:
-            if item:
-                raw_items.extend(str(item).split(","))
-    elif isinstance(val, str):
-        raw_items.extend(val.split(","))
-    cleaned: list[str] = []
-    for d in raw_items:
-        dom = d.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0].removeprefix("www.")
-        if dom and dom not in cleaned:
-            cleaned.append(dom)
-    return cleaned
+    return agentic_search.parse_domain_list(val)
 
 
 def build_rag_prompt(query: str, markdown_context: str) -> str:
     """Wrap packed search markdown into a ready-to-paste LLM RAG prompt."""
-    q = (query or "").strip()
-    md = (markdown_context or "").strip()
-    return (
-        "以下のWeb検索結果および抽出された本文ハイライト（引用番号 [1]〜）を根拠として、"
-        "質問に対して正確・体系的に回答してください。\n"
-        "回答内で事実やコード・数値を参照する際は、対応する引用元 `[1]` などを明記してください。\n\n"
-        f"## 質問・調査テーマ\n{q}\n\n"
-        f"## 検索コンテキスト\n{md}\n"
-    )
+    return agentic_search.build_rag_prompt(query, markdown_context)
 
 
 def _scrape_url_direct(
@@ -147,30 +125,8 @@ def _scrape_url_direct(
         if p_url.scheme not in ("http", "https"):
             raise blocked_exc_cls(f"Blocked invalid scheme: {p_url.scheme}")
         host = p_url.hostname
-        if not host:
-            raise blocked_exc_cls("Empty hostname")
-        host_clean = host.strip().rstrip(".").lower()
-        if webapp_mod._is_reserved_scrape_host(host_clean):
-            raise blocked_exc_cls(f"Blocked: {host} is a private/reserved host")
-        if "%" in host_clean:
-            host_clean = host_clean.split("%", 1)[0]
-        try:
-            ip_direct = ipaddress.ip_address(host_clean)
-            if webapp_mod._is_ip_blocked(ip_direct):
-                raise blocked_exc_cls(f"Blocked: {host} is a private/reserved IP")
-        except ValueError:
-            if host_clean.isdigit():
-                try:
-                    ip_int = int(host_clean)
-                    if 0 <= ip_int <= 0xFFFFFFFF:
-                        v4 = ipaddress.IPv4Address(ip_int)
-                        if webapp_mod._is_ip_blocked(v4):
-                            raise blocked_exc_cls(f"Blocked: {host} is a private/reserved IP")
-                except blocked_exc_cls:
-                    raise
-                except Exception:
-                    pass
-
+        if not host or webapp_mod._is_blocked_scrape_host(host):
+            raise blocked_exc_cls(f"Blocked: {host} is a private/reserved host or IP")
         port = p_url.port or (443 if p_url.scheme == "https" else 80)
         try:
             addr_info = socket.getaddrinfo(host, port)
@@ -376,13 +332,15 @@ def execute_server_deep_search(
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
     max_tokens: int = 3000,
+    mode: str = "auto",
+    focus_query: str = "",
+    max_scrape_length: int = 8000,
     base_url: str | None = None,
     timeout: float | None = None,
 ) -> dict[str, Any]:
-    """Run the full Agentic Deep Search pipeline and enrich with token & timing telemetry."""
-    t0 = time.perf_counter()
+    """Run the unified Search & Scrape pipeline in-process with token & timing telemetry."""
     depth = (search_depth or "advanced").strip().lower()
-    if depth not in ("basic", "advanced", "code"):
+    if depth not in ("basic", "advanced", "code", "fast"):
         depth = "advanced"
 
     max_res = _parse_int(max_results, default=5, minimum=1, maximum=20)
@@ -418,33 +376,22 @@ def execute_server_deep_search(
             timeout=timeout,
         )
 
-    res = agentic_search.execute_deep_search(
+    return agentic_search.execute_unified_search(
         query=query,
         search_func=_s_func,
         scrape_func=_sc_func,
+        mode=mode,
         search_depth=depth,
         max_results=max_res,
         include_highlights=include_highlights,
         include_domains=include_domains,
         exclude_domains=exclude_domains,
+        focus_query=focus_query,
         max_tokens=max_tok,
+        max_scrape_length=max_scrape_length,
         base_url=base_url,
         timeout=timeout,
     )
-
-    elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
-    md = res.get("markdown", "")
-    est_tokens = agentic_search.TokenBudgeter.estimate_tokens(md)
-    results_list = res.get("results", [])
-    scraped_count = sum(1 for item in results_list if isinstance(item, dict) and item.get("is_scraped"))
-
-    res["search_depth"] = depth
-    res["max_tokens"] = max_tok
-    res["estimated_tokens"] = est_tokens
-    res["scraped_count"] = scraped_count
-    res["elapsed_ms"] = elapsed_ms
-    res["rag_prompt"] = build_rag_prompt(res.get("query") or query, md)
-    return res
 
 
 def execute_scrape_analyze(
@@ -455,67 +402,23 @@ def execute_scrape_analyze(
     timeout: float = 10.0,
 ) -> dict[str, Any]:
     """Scrape a URL, estimate tokens, and optionally extract BM25 highlights matching a focus query."""
-    t0 = time.perf_counter()
-    clean_url = (url or "").strip()
-    clean_q = (query or "").strip()
     max_len = _parse_int(max_length, default=8000, minimum=500, maximum=50000)
 
-    scrape_res = _scrape_url_direct(webapp_mod, clean_url, max_length=max_len, timeout=timeout)
-    elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+    def _sc_func(
+        target_url: str,
+        max_length: int = 8000,
+        timeout: float = 10.0,
+    ) -> dict[str, Any]:
+        return _scrape_url_direct(webapp_mod, target_url, max_length=max_length, timeout=timeout)
 
-    if scrape_res.get("error"):
-        return {
-            "url": clean_url,
-            "query": clean_q,
-            "content": "",
-            "highlights": [],
-            "char_count": 0,
-            "estimated_tokens": 0,
-            "elapsed_ms": elapsed_ms,
-            "error": scrape_res["error"],
-            "markdown": f"### 本文抽出エラー\n\n{scrape_res['error']}",
-        }
+    return agentic_search.execute_scrape_pipeline(
+        url=url,
+        scrape_func=_sc_func,
+        focus_query=query,
+        max_length=max_len,
+        timeout=timeout,
+    )
 
-    content = scrape_res.get("content", "")
-    highlights: list[str] = []
-    if clean_q and content:
-        extractor = agentic_search.BM25PassageExtractor()
-        highlights = extractor.extract_highlights(content, clean_q, top_k=3)
-
-    dom = agentic_search.extract_domain(clean_url)
-    est_tokens = agentic_search.TokenBudgeter.estimate_tokens(content)
-
-    md_lines = [f"## 抽出本文: [{dom or clean_url}]({clean_url})\n"]
-    if scrape_res.get("is_truncated"):
-        md_lines.append(
-            f"> ⚠️ *先頭 {len(content)} 文字を表示中 (全 {scrape_res.get('original_length', len(content))} 文字)*\n"
-        )
-    if highlights:
-        md_lines.append(f"### 🎯 BM25 ハイライト (`{clean_q}`)\n")
-        for idx, h in enumerate(highlights, 1):
-            if h.startswith("```"):
-                md_lines.append(f"**[{idx}]**\n{h}\n")
-            else:
-                quoted = "\n".join(f"> {line}" for line in h.split("\n"))
-                md_lines.append(f"**[{idx}]**\n{quoted}\n")
-        md_lines.append("---\n### 📄 抽出本文\n")
-
-    md_lines.append(content)
-    markdown_out = "\n".join(md_lines).strip()
-
-    return {
-        "url": clean_url,
-        "domain": dom,
-        "query": clean_q,
-        "content": content,
-        "highlights": highlights,
-        "is_truncated": bool(scrape_res.get("is_truncated", False)),
-        "original_length": int(scrape_res.get("original_length", len(content))),
-        "char_count": len(content),
-        "estimated_tokens": est_tokens,
-        "elapsed_ms": elapsed_ms,
-        "markdown": markdown_out,
-    }
 
 
 def get_ai_info(webapp_mod: Any = None, host_url: str = "http://127.0.0.1:8888") -> dict[str, Any]:
@@ -1670,9 +1573,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
     </div>
 
     <nav class="nav-tabs" role="tablist" aria-label="Workspace Modes">
-      <button type="button" class="nav-tab active" data-mode="deep" id="tab-deep">⚡ Deep Search (BM25 + Scrape)</button>
-      <button type="button" class="nav-tab" data-mode="fast" id="tab-fast">🚀 Fast Search (json_lite)</button>
-      <button type="button" class="nav-tab" data-mode="scrape" id="tab-scrape">📄 URL Scrape (本文抽出)</button>
+      <button type="button" class="nav-tab active" data-mode="deep" id="tab-deep">⚡ Unified Search &amp; Scrape</button>
       <button type="button" class="nav-tab" data-mode="agent" id="tab-agent">🤖 Agent &amp; MCP Hub</button>
     </nav>
 
@@ -1695,25 +1596,26 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
               type="text"
               class="search-input"
               aria-label="Search query or target URL"
-              placeholder="調査したい技術トピック・エラー・質問を入力 (例: FastAPI lifespan context manager)..."
+              placeholder="キーワード・質問 または URL (https://...) を入力 — URLは自動で本文抽出モードに切替..."
               autocomplete="off"
               autofocus
             >
             <span class="kbd-hint">/ or Ctrl+K</span>
           </div>
           <button type="submit" class="btn btn-primary" id="run-btn" style="padding:0.72rem 1.25rem;font-size:0.9rem;">
-            ⚡ 実行
+            ⚡ 統合検索
           </button>
         </div>
 
-        <!-- Deep & Fast Search Options -->
+        <!-- Unified Search Options (Deep / Basic / Fast json_lite) -->
         <div class="options-row" id="search-options-row">
           <div class="opt-group" id="opt-depth-group">
-            <label for="opt-depth">Depth:</label>
+            <label for="opt-depth">Mode / Depth:</label>
             <select id="opt-depth" class="opt-select">
-              <option value="advanced" selected>Advanced (並列本文抽出 + BM25)</option>
-              <option value="code">Code &amp; Docs (技術・GitHub優先)</option>
-              <option value="basic">Basic (高速スニペット + ドメイン評価)</option>
+              <option value="advanced" selected>⚡ Deep: Advanced (並列本文抽出 + BM25)</option>
+              <option value="code">💻 Deep: Code &amp; Docs (技術・GitHub優先)</option>
+              <option value="basic">📊 Basic (スニペット + ドメイン評価)</option>
+              <option value="fast">🚀 Fast: json_lite (最速スニペットのみ)</option>
             </select>
           </div>
 
@@ -1751,7 +1653,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           </div>
         </div>
 
-        <!-- Scrape Mode Options -->
+        <!-- Scrape Mode Options (Auto-shown when URL is entered) -->
         <div class="options-row" id="scrape-options-row" style="display:none;">
           <div class="opt-group">
             <label for="opt-scrape-len">最大文字数:</label>
@@ -1766,7 +1668,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
             <label for="opt-scrape-query">BM25 抽出キーワード (任意):</label>
             <input id="opt-scrape-query" type="text" class="opt-input" style="width:100%;max-width:24rem;" placeholder="ページ内からピンポイント抽出したい語句 (空欄なら全文のみ)">
           </div>
-          <span class="pill pill-emerald">🛡️ DNS-Pinned &amp; SSRF Protected</span>
+          <span class="pill pill-emerald">🛡️ URL自動検知 · DNS-Pinned &amp; SSRF Protected</span>
         </div>
       </form>
     </section>
@@ -1786,12 +1688,12 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
     <section class="split-grid" id="main-split-view">
       <div class="results-list" id="results-container">
         <div class="empty-state" id="initial-empty-state">
-          <h2>⚡ AI-First Web Search &amp; Context Extraction</h2>
-          <p>並列スクレイピング・BM25ハイライト抽出・ドメイン権威スコアリングを1パスで実行し、LLMに最適なコンテキストを生成します。</p>
+          <h2>⚡ AI-First Unified Search &amp; Context Extraction</h2>
+          <p>検索キーワードを入力すると Deep Search / Fast (json_lite) を実行し、URL (https://...) を貼り付けると自動で本文抽出 + BM25 ハイライト抽出に切り替わります。</p>
           <div class="sample-queries">
             <button type="button" class="chip sample-q" data-q="FastAPI lifespan context manager syntax">🔎 FastAPI lifespan context manager</button>
             <button type="button" class="chip sample-q" data-q="Python asyncio TaskGroup exception handling">🔎 Python asyncio.TaskGroup</button>
-            <button type="button" class="chip sample-q" data-q="SearXNG json_lite agentic search">🔎 SearXNG json_lite</button>
+            <button type="button" class="chip sample-q" data-q="https://docs.searxng.org">📄 https://docs.searxng.org (URL抽出デモ)</button>
           </div>
         </div>
       </div>
@@ -1855,6 +1757,11 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         localStorage.setItem('sxng_ai_theme', cur);
       });
 
+      function isUrlText(text) {
+        var s = (text || '').trim();
+        return /^https?:\\/\\/\\S+$/i.test(s);
+      }
+
       function estimateTokens(text) {
         if (!text) return 0;
         var cjk = (text.match(/[\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff]/g) || []).length;
@@ -1882,23 +1789,40 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         }
       }
 
+      function syncInputOptionsVisibility() {
+        if (state.mode === 'agent') return;
+        var qVal = document.getElementById('q').value.trim();
+        var searchOpts = document.getElementById('search-options-row');
+        var scrapeOpts = document.getElementById('scrape-options-row');
+        var runBtn = document.getElementById('run-btn');
+        var isUrl = (state.mode === 'scrape') || isUrlText(qVal);
+
+        if (isUrl) {
+          searchOpts.style.display = 'none';
+          scrapeOpts.style.display = 'flex';
+          runBtn.innerHTML = '📄 URL 本文抽出';
+        } else {
+          searchOpts.style.display = 'flex';
+          scrapeOpts.style.display = 'none';
+          var depthVal = document.getElementById('opt-depth').value;
+          runBtn.innerHTML = depthVal === 'fast' ? '🚀 Fast Search' : '⚡ 統合検索';
+        }
+      }
+
       function setMode(mode) {
+        if (mode === 'fast') {
+          document.getElementById('opt-depth').value = 'fast';
+          mode = 'deep';
+        }
         state.mode = mode;
         document.querySelectorAll('.nav-tab').forEach(function (t) {
-          t.classList.toggle('active', t.dataset.mode === mode);
+          var activeTab = (mode === 'agent') ? 'agent' : 'deep';
+          t.classList.toggle('active', t.dataset.mode === activeTab);
         });
 
         var inputPanel = document.getElementById('input-panel');
-        var searchOpts = document.getElementById('search-options-row');
-        var scrapeOpts = document.getElementById('scrape-options-row');
-        var depthGroup = document.getElementById('opt-depth-group');
-        var tokensGroup = document.getElementById('opt-tokens-group');
-        var siteGroup = document.getElementById('opt-site-group');
-        var presetChips = document.getElementById('preset-chips');
         var mainSplit = document.getElementById('main-split-view');
         var agentHub = document.getElementById('agent-hub-view');
-        var qInput = document.getElementById('q');
-        var runBtn = document.getElementById('run-btn');
 
         if (mode === 'agent') {
           inputPanel.style.display = 'none';
@@ -1911,32 +1835,19 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         inputPanel.style.display = 'block';
         mainSplit.style.display = 'grid';
         agentHub.style.display = 'none';
-
-        if (mode === 'scrape') {
-          searchOpts.style.display = 'none';
-          scrapeOpts.style.display = 'flex';
-          qInput.placeholder = '本文を抽出したいWebページのURLを入力 (例: https://docs.searxng.org)...';
-          runBtn.innerHTML = '📄 本文抽出';
-        } else {
-          searchOpts.style.display = 'flex';
-          scrapeOpts.style.display = 'none';
-          if (mode === 'deep') {
-            depthGroup.style.display = 'inline-flex';
-            tokensGroup.style.display = 'inline-flex';
-            siteGroup.style.display = 'inline-flex';
-            presetChips.style.display = 'inline-flex';
-            qInput.placeholder = 'Deep Search: 質問・エラー・技術キーワードを入力 (並列本文抽出 + BM25)...';
-            runBtn.innerHTML = '⚡ Deep Search';
-          } else {
-            depthGroup.style.display = 'none';
-            tokensGroup.style.display = 'none';
-            siteGroup.style.display = 'none';
-            presetChips.style.display = 'none';
-            qInput.placeholder = 'Fast Search (json_lite): 検索キーワードを入力...';
-            runBtn.innerHTML = '🚀 Fast Search';
-          }
-        }
+        syncInputOptionsVisibility();
       }
+
+      document.getElementById('q').addEventListener('input', function () {
+        if (state.mode === 'scrape' && !isUrlText(this.value)) {
+          state.mode = 'deep';
+        }
+        syncInputOptionsVisibility();
+      });
+
+      document.getElementById('opt-depth').addEventListener('change', function () {
+        syncInputOptionsVisibility();
+      });
 
       document.querySelectorAll('.nav-tab').forEach(function (btn) {
         btn.addEventListener('click', function () {
@@ -1958,6 +1869,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       document.querySelectorAll('.sample-q').forEach(function (chip) {
         chip.addEventListener('click', function () {
           document.getElementById('q').value = chip.dataset.q;
+          syncInputOptionsVisibility();
           executeCurrentAction();
         });
       });
@@ -2164,7 +2076,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         });
       }
 
-      function runDeepSearch(query) {
+      function runUnifiedSearch(query) {
         var depth = document.getElementById('opt-depth').value;
         var count = document.getElementById('opt-count').value;
         var maxTok = parseInt(document.getElementById('opt-tokens').value, 10) || 3000;
@@ -2172,7 +2084,10 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         state.maxTokens = maxTok;
 
         var container = document.getElementById('results-container');
-        container.innerHTML = '<div class="empty-state"><h2>⚡ Deep Search 実行中...</h2><p>メタ検索 → ドメイン権威スコアリング → 並列本文抽出 (trafilatura) → BM25 パッセージ抽出を実行しています。</p></div>';
+        var isFast = (depth === 'fast');
+        container.innerHTML = isFast
+          ? '<div class="empty-state"><h2>🚀 Fast Search (json_lite) 実行中...</h2><p>高速メタ検索とトークン予算パッキングを実行しています。</p></div>'
+          : '<div class="empty-state"><h2>⚡ Unified Search 実行中...</h2><p>メタ検索 → ドメイン権威スコアリング → 並列本文抽出 (trafilatura) → BM25 パッセージ抽出を実行しています。</p></div>';
 
         var params = new URLSearchParams({
           q: query,
@@ -2201,58 +2116,12 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
             var badges = document.getElementById('telemetry-badges');
             telBar.classList.add('visible');
             badges.innerHTML =
-              '<span class="pill pill-accent">Intent: ' + (res.intent || 'general') + '</span>' +
+              '<span class="pill pill-accent">Mode: ' + (res.search_depth || depth) + ' (' + (res.intent || 'general') + ')</span>' +
               '<span class="pill pill-emerald">取得: ' + (res.results_count || 0) + '件 (本文抽出: ' + (res.scraped_count || 0) + '件)</span>' +
               '<span class="pill">~' + (res.estimated_tokens || 0) + ' tokens</span>' +
               '<span class="pill">' + (res.elapsed_ms || 0) + ' ms</span>';
 
             renderSearchResults(res.results || [], query);
-            updateContextView();
-          })
-          .catch(function (err) {
-            container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">⚠️ 通信エラー</h2><p>' + err + '</p></div>';
-          });
-      }
-
-      function runFastSearch(query) {
-        var count = parseInt(document.getElementById('opt-count').value, 10) || 5;
-        var container = document.getElementById('results-container');
-        container.innerHTML = '<div class="empty-state"><h2>🚀 Fast Search (json_lite) 実行中...</h2></div>';
-
-        var t0 = performance.now();
-        var url = '/search?q=' + encodeURIComponent(query) + '&format=json_lite';
-        state.curlStr = 'curl -sG "' + window.location.origin + '/search" --data-urlencode "q=' + query + '" --data-urlencode "format=json_lite"';
-
-        fetch(url)
-          .then(function (r) { return r.json(); })
-          .then(function (res) {
-            var elapsed = Math.round(performance.now() - t0);
-            var results = (res.results || []).slice(0, count);
-            var mdLines = ['## Fast Search Results: `' + query + '`\\n'];
-            if (res.answers && res.answers.length) {
-              res.answers.forEach(function (a) { mdLines.push('> 💡 **Direct Answer**: ' + a + '\\n'); });
-            }
-            results.forEach(function (r, i) {
-              var src = r.source ? ' `[' + r.source + ']`' : '';
-              mdLines.push('### [' + (i + 1) + '] [' + (r.title || r.url) + '](' + r.url + ')' + src);
-              if (r.content) mdLines.push('> ' + r.content + '\\n');
-            });
-            var md = mdLines.join('\\n').trim();
-            var tok = estimateTokens(md);
-            state.markdown = md;
-            state.prompt = '以下のWeb検索結果を参考に質問に回答してください。\\n\\n## 質問\\n' + query + '\\n\\n## 検索結果\\n' + md;
-            state.jsonStr = JSON.stringify(res, null, 2);
-
-            var telBar = document.getElementById('telemetry-bar');
-            var badges = document.getElementById('telemetry-badges');
-            telBar.classList.add('visible');
-            badges.innerHTML =
-              '<span class="pill pill-accent">Format: json_lite</span>' +
-              '<span class="pill pill-emerald">取得: ' + results.length + '件</span>' +
-              '<span class="pill">~' + tok + ' tokens</span>' +
-              '<span class="pill">' + elapsed + ' ms</span>';
-
-            renderSearchResults(results, query);
             updateContextView();
           })
           .catch(function (err) {
@@ -2278,7 +2147,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
               return;
             }
             state.markdown = res.markdown || res.content || '';
-            state.prompt = '以下のWebページ抽出本文を根拠として要点を解説してください。\\n\\nURL: ' + targetUrl + '\\n\\n' + state.markdown;
+            state.prompt = res.rag_prompt || ('以下のWebページ抽出本文を根拠として要点を解説してください。\\n\\nURL: ' + targetUrl + '\\n\\n' + state.markdown);
             state.jsonStr = JSON.stringify(res, null, 2);
 
             var telBar = document.getElementById('telemetry-bar');
@@ -2401,13 +2270,12 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         if (!qVal) return;
 
         // Auto-detect URL in search bar if user pastes http(s)://...
-        if (state.mode === 'scrape' || (/^https?:\\/\\//i.test(qVal) && qVal.indexOf(' ') === -1)) {
-          if (state.mode !== 'scrape') setMode('scrape');
+        if (state.mode === 'scrape' || isUrlText(qVal)) {
+          syncInputOptionsVisibility();
           runScrapeMode(qVal);
-        } else if (state.mode === 'fast') {
-          runFastSearch(qVal);
         } else {
-          runDeepSearch(qVal);
+          syncInputOptionsVisibility();
+          runUnifiedSearch(qVal);
         }
       }
 
@@ -2432,7 +2300,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       var initMode = urlParams.get('mode');
       var initDepth = urlParams.get('depth');
       var initQ = urlParams.get('q') || urlParams.get('url');
-      if (initDepth && ['advanced', 'code', 'basic'].indexOf(initDepth) !== -1) {
+      if (initDepth && ['advanced', 'code', 'basic', 'fast'].indexOf(initDepth) !== -1) {
         document.getElementById('opt-depth').value = initDepth;
       }
       if (initMode && ['deep', 'fast', 'scrape', 'agent'].indexOf(initMode) !== -1) {
@@ -2440,8 +2308,9 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       }
       if (initQ) {
         document.getElementById('q').value = initQ;
+        syncInputOptionsVisibility();
         var classicLink = document.getElementById('classic-ui-link');
-        if (classicLink && state.mode !== 'scrape') {
+        if (classicLink && !isUrlText(initQ)) {
           classicLink.href = '/search?q=' + encodeURIComponent(initQ);
         }
         executeCurrentAction();
@@ -2514,16 +2383,19 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         return jsonify(res), status_code
 
     @app.route("/deep_search", methods=["GET", "POST"])
+    @app.route("/api/search", methods=["GET", "POST"])
     def deep_search_route() -> Any:
-        """Exa/Tavily-style one-pass Deep Search HTTP endpoint."""
+        """Unified Search & Scrape HTTP endpoint (supports mode=auto|deep|fast|scrape)."""
         payload = request.get_json(silent=True) if request.is_json else None
         payload = payload if isinstance(payload, dict) else {}
 
         query = (
             request.values.get("q")
             or request.values.get("query")
+            or request.values.get("url")
             or payload.get("q")
             or payload.get("query")
+            or payload.get("url")
             or ""
         )
         out_fmt = (
@@ -2538,6 +2410,11 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                 return Response("### Error\n\nNo query provided.", status=400, mimetype="text/markdown; charset=utf-8")
             return jsonify({"error": "No query", "query": "", "results": []}), 400
 
+        mode = (
+            request.values.get("mode")
+            or payload.get("mode")
+            or "auto"
+        )
         depth = (
             request.values.get("depth")
             or request.values.get("search_depth")
@@ -2557,6 +2434,20 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             request.values.get("max_tokens")
             or payload.get("max_tokens")
             or 3000
+        )
+        focus_query = (
+            request.values.get("focus_query")
+            or request.values.get("focus_q")
+            or payload.get("focus_query")
+            or payload.get("focus_q")
+            or ""
+        )
+        max_scrape_length = (
+            request.values.get("max_scrape_length")
+            or request.values.get("max_length")
+            or payload.get("max_scrape_length")
+            or payload.get("max_length")
+            or 8000
         )
         inc_hl = _parse_bool(
             request.values.get("include_highlights", payload.get("include_highlights")),
@@ -2585,6 +2476,9 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             include_domains=inc_domains or None,
             exclude_domains=exc_domains or None,
             max_tokens=max_tokens,
+            mode=str(mode),
+            focus_query=str(focus_query),
+            max_scrape_length=max_scrape_length,
         )
 
         if out_fmt in ("markdown", "md"):

@@ -1482,6 +1482,7 @@ def patch_simple_index_ai_webui(content, path):
     required_anchors = (
         'class="sxng-ai-home-bar"',
         'class="sxng-next-badge"',
+        "⚡ AI Search &amp; Scrape Studio",
     )
     if all(anchor in content for anchor in required_anchors):
         return "ALREADY_APPLIED"
@@ -1494,21 +1495,32 @@ def patch_simple_index_ai_webui(content, path):
             1,
         )
 
-    if 'class="sxng-ai-home-bar"' not in patched and "{% include 'simple/simple_search.html' %}" in patched:
-        home_bar = (
-            "{% include 'simple/simple_search.html' %}\n"
-            '    <div class="sxng-ai-home-bar" role="region" aria-label="AI Search Actions">\n'
-            '        <button type="button" class="sxng-ai-btn sxng-ai-btn-primary" id="sxng-home-deep-btn" '
-            "onclick=\"var q=document.getElementById('q');window.location.href='/ai'+(q&&q.value.trim()?'?q='+encodeURIComponent(q.value.trim())+'&mode=deep':'');\">"
-            "⚡ AI Deep Search</button>\n"
-            '        <a href="/ai?mode=fast" class="sxng-ai-btn" id="sxng-home-fast-link">🚀 Fast Search (json_lite)</a>\n'
-            '        <a href="/ai?mode=scrape" class="sxng-ai-btn">📄 URL 本文抽出</a>\n'
-            '        <a href="/ai?mode=agent" class="sxng-ai-btn">🤖 MCP / API Hub</a>\n'
-            "    </div>"
+    new_home_bar = (
+        '    <div class="sxng-ai-home-bar" role="region" aria-label="AI Search Actions">\n'
+        '        <button type="button" class="sxng-ai-btn sxng-ai-btn-primary" id="sxng-home-deep-btn" '
+        "onclick=\"var q=document.getElementById('q');window.location.href='/ai'+(q&&q.value.trim()?'?q='+encodeURIComponent(q.value.trim()):'');\">"
+        "⚡ AI Search &amp; Scrape Studio</button>\n"
+        '        <a href="/ai?mode=agent" class="sxng-ai-btn">🤖 Agent &amp; MCP Hub</a>\n'
+        "    </div>"
+    )
+
+    if 'class="sxng-ai-home-bar"' in patched:
+        patched = re.sub(
+            r'\s*<div class="sxng-ai-home-bar"[^>]*>.*?</div>',
+            "\n" + new_home_bar,
+            patched,
+            count=1,
+            flags=re.DOTALL,
         )
-        patched = patched.replace("{% include 'simple/simple_search.html' %}", home_bar, 1)
+    elif "{% include 'simple/simple_search.html' %}" in patched:
+        patched = patched.replace(
+            "{% include 'simple/simple_search.html' %}",
+            "{% include 'simple/simple_search.html' %}\n" + new_home_bar,
+            1,
+        )
 
     return patched
+
 
 
 # --- Patch 16: templates/simple/results.html (inject AI Agent Toolkit Bar on search results) ---
