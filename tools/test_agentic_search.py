@@ -484,6 +484,36 @@ class TestExecuteDeepSearch(unittest.TestCase):
         self.assertIn("error", err_res)
         self.assertIn("search backend crashed", err_res["error"])
 
+    def test_execute_unified_search_handles_unexpected_backend_errors(self) -> None:
+        # Non-tuple exceptions (e.g. KeyboardInterrupt-style failures from a
+        # backend) must become error dicts, never propagate out of the HTTP
+        # pipeline. MemoryError/KeyboardInterrupt derive from BaseException,
+        # not Exception, so the pipeline needs a BaseException fallback.
+        def boom_search(query: str, **kwargs):
+            raise MemoryError("backend exploded")
+
+        def ok_scrape(url: str, **kwargs):
+            return {"url": url, "content": "body"}
+
+        err_res = agentic_search.execute_unified_search(
+            query="rust tokio",
+            search_func=boom_search,
+            scrape_func=ok_scrape,
+            mode="fast",
+        )
+        self.assertIn("error", err_res)
+        self.assertIn("backend exploded", err_res["error"])
+
+        def boom_scrape(url: str, **kwargs):
+            raise MemoryError("scraper exploded")
+
+        scrape_err = agentic_search.execute_scrape_pipeline(
+            url="https://example.com/page",
+            scrape_func=boom_scrape,
+        )
+        self.assertIn("error", scrape_err)
+        self.assertIn("scraper exploded", scrape_err["error"])
+
 
 class TestQueryOptimizerEdgeCases(unittest.TestCase):
     """Test URL formats and edge cases in query parsing."""

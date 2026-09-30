@@ -2502,14 +2502,14 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
     @app.route("/next", methods=["GET"])
     def ai_workspace() -> Any:
         """Render the lightweight AI Search & Context Studio."""
-        return Response(AI_WORKSPACE_HTML, mimetype="text/html; charset=utf-8")
+        return Response(AI_WORKSPACE_HTML, mimetype="text/html")
 
     @app.route("/ai/embed.css", methods=["GET"])
     def ai_embed_css() -> Any:
         """Serve lightweight CSS for SearXNG's native simple theme."""
         return Response(
             SIMPLE_EMBED_CSS,
-            mimetype="text/css; charset=utf-8",
+            mimetype="text/css",
             headers={"Cache-Control": "public, max-age=300"},
         )
 
@@ -2518,7 +2518,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         """Serve progressive AI enhancement JS for SearXNG's native simple theme."""
         return Response(
             SIMPLE_EMBED_JS,
-            mimetype="application/javascript; charset=utf-8",
+            mimetype="application/javascript",
             headers={"Cache-Control": "public, max-age=300"},
         )
 
@@ -2577,7 +2577,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
 
         if not isinstance(query, str) or not query.strip():
             if out_fmt in ("markdown", "md"):
-                return Response("### Error\n\nNo query provided.", status=400, mimetype="text/markdown; charset=utf-8")
+                return Response("### Error\n\nNo query provided.", status=400, mimetype="text/markdown")
             return jsonify({"error": "No query", "query": "", "results": []}), 400
 
         mode = request.values.get("mode") or payload.get("mode") or "auto"
@@ -2650,6 +2650,6 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         )
 
         if out_fmt in ("markdown", "md"):
-            return Response(res.get("markdown", ""), status=200, mimetype="text/markdown; charset=utf-8")
+            return Response(res.get("markdown", ""), status=200, mimetype="text/markdown")
 
         return jsonify(res), 200

@@ -519,6 +519,70 @@ class TestSearXNGCLI(unittest.TestCase):
         self.assertIn("Deep Search Results", resp["result"]["content"][0]["text"])
         mock_unified.assert_called_once()
 
+    def test_resolve_effective_mode_prefers_explicit_mode(self) -> None:
+        # Explicit mode wins over a conflicting search_depth.
+        self.assertEqual(mcp_server._resolve_effective_mode("fast", "advanced", "fastapi"), "fast")
+        self.assertEqual(mcp_server._resolve_effective_mode("deep", "fast", "fastapi"), "deep")
+        # Auto falls back to depth; URL inputs always scrape.
+        self.assertEqual(mcp_server._resolve_effective_mode("auto", "fast", "fastapi"), "fast")
+        self.assertEqual(mcp_server._resolve_effective_mode("auto", "advanced", "fastapi"), "deep")
+        self.assertEqual(mcp_server._resolve_effective_mode("fast", "advanced", "https://example.com"), "scrape")
+        # CLI helper shares the same semantics.
+        self.assertEqual(searxng_cli._resolve_effective_mode("fast", "advanced", "fastapi"), "fast")
+        self.assertEqual(searxng_cli._resolve_effective_mode("deep", "fast", "fastapi"), "deep")
+        self.assertEqual(searxng_cli._resolve_effective_mode("fast", "advanced", "https://example.com"), "scrape")
+
+    @patch("searxng_client.search")
+    def test_mcp_search_fast_mode_routes_unified(self, mock_search: MagicMock) -> None:
+        # mode="fast" is a unified mode: it must not fall through to the raw
+        # json_lite search path.
+        with patch("searxng_client.unified_search") as mock_unified:
+            mock_unified.return_value = {"mode": "fast", "query": "q", "markdown": "## Fast Search Results"}
+            raw_msg = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 43,
+                    "method": "tools/call",
+                    "params": {"name": "searxng_search", "arguments": {"query": "q", "mode": "fast"}},
+                },
+            )
+            resp = mcp_server.process_message(raw_msg)
+            self.assertIsNotNone(resp)
+            self.assertFalse(resp["result"]["isError"])
+            mock_unified.assert_called_once()
+            mock_search.assert_not_called()
+
+    def test_tools_call_handler_exception_returns_internal_error(self) -> None:
+        # A crashing tool handler must produce a JSON-RPC error, not kill stdio.
+        with patch.object(mcp_server, "handle_tools_call", side_effect=RuntimeError("boom")):
+            resp = mcp_server.process_message(
+                json.dumps({"jsonrpc": "2.0", "id": 44, "method": "tools/call", "params": {}})
+            )
+        self.assertIsNotNone(resp)
+        self.assertEqual(resp["id"], 44)
+        self.assertEqual(resp["error"]["code"], -32603)
+
+    @patch("searxng_client.unified_search")
+    def test_cli_search_fast_mode_uses_unified(self, mock_unified: MagicMock) -> None:
+        mock_unified.return_value = {"mode": "fast", "query": "q", "markdown": "## Fast Search Results"}
+        parser = searxng_cli.build_parser()
+        args = parser.parse_args(["search", "q", "--mode", "fast"])
+        with patch("sys.stdout", new_callable=io.StringIO):
+            code = searxng_cli.cmd_search(args)
+        self.assertEqual(code, 0)
+        mock_unified.assert_called_once()
+        self.assertEqual(mock_unified.call_args[1]["mode"], "fast")
+
+    @patch("searxng_client.unified_search")
+    def test_cli_search_fast_mode_not_overridden_by_depth(self, mock_unified: MagicMock) -> None:
+        mock_unified.return_value = {"mode": "fast", "query": "q", "markdown": "## Fast Search Results"}
+        parser = searxng_cli.build_parser()
+        args = parser.parse_args(["search", "q", "--mode", "fast", "-d", "advanced"])
+        with patch("sys.stdout", new_callable=io.StringIO):
+            searxng_cli.cmd_search(args)
+        self.assertEqual(mock_unified.call_args[1]["mode"], "fast")
+        self.assertEqual(mock_unified.call_args[1]["search_depth"], "advanced")
+
 
 if __name__ == "__main__":
     unittest.main()

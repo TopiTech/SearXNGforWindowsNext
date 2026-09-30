@@ -334,6 +334,9 @@ GitHub Actions（`.github/workflows/upstream-sync.yml`）により、本家の�
 
 ### 検索結果の文量をさらに増やしたい場合（オプション）
 
+> [!WARNING]
+> `python\Lib\site-packages\searx\` 配下は上流同期のたびに上書きされ、本リポジトリのパッチが再適用されます。直接手編集した内容は次回同期で失われます。永続化したい変更は `tools/apply-patches.py` のパッチ関数として実装してください（詳細は `DEVELOPMENT.md` の Patch System 章を参照）。
+
 `json_lite` 形式で取得できる情報量をさらに増やしたい場合は、以下の手順でコードを書き換えることができます。
 
 #### 方法1: スニペットの結合（コードの書き換え）

@@ -884,6 +884,8 @@ def execute_scrape_pipeline(
             scrape_res = scrape_func(clean_url, **scrape_kwargs)
     except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError) as exc:
         scrape_res = {"error": str(exc)}
+    except BaseException as exc:  # noqa: BLE001 - never let a scraper crash the HTTP pipeline
+        scrape_res = {"error": f"scrape backend failed: {exc}"}
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
     dom = extract_domain(clean_url)
@@ -1087,8 +1089,12 @@ def execute_unified_search(
             search_res = search_func(**search_kwargs)
         except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError) as exc:
             search_res = {"error": str(exc)}
+        except BaseException as exc:  # noqa: BLE001 - never let a search backend crash the HTTP pipeline
+            search_res = {"error": f"search backend failed: {exc}"}
     except (OSError, ValueError, RuntimeError, KeyError, AttributeError) as exc:
         search_res = {"error": str(exc)}
+    except BaseException as exc:  # noqa: BLE001 - never let a search backend crash the HTTP pipeline
+        search_res = {"error": f"search backend failed: {exc}"}
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
 

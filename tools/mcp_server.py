@@ -253,6 +253,23 @@ def _is_url_query(text: str) -> bool:
     return (" " not in s) and s.lower().startswith(("http://", "https://"))
 
 
+def _resolve_effective_mode(mode: str, search_depth: Any, query: str) -> str:
+    """Resolve the effective unified-search mode honoring an explicit ``mode``.
+
+    An explicit ``mode`` wins over ``search_depth``: ``mode="fast"`` stays
+    fast even if a depth like ``"advanced"`` is also present, and
+    ``mode="deep"`` stays deep even if ``search_depth="fast"`` is passed.
+    URL inputs still resolve to ``"scrape"``. ``"auto"`` falls back to depth
+    (``"fast"`` depth implies fast, otherwise deep).
+    """
+    norm = (mode or "auto").strip().lower()
+    if norm == "scrape" or _is_url_query(query):
+        return "scrape"
+    if norm in ("fast", "deep"):
+        return norm
+    return "fast" if search_depth == "fast" else "deep"
+
+
 def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
     """Handle tools/call request by executing the specified SearXNG tool."""
     tool_name = params.get("name")
@@ -277,7 +294,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         exclude_domains = [str(d) for d in raw_exc] if isinstance(raw_exc, list) else None
 
         use_unified = (
-            mode in ("deep", "scrape")
+            mode in ("fast", "deep", "scrape")
             or search_depth is not None
             or bool(include_domains)
             or bool(exclude_domains)
@@ -289,11 +306,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
                 max_tokens = int(arguments.get("max_tokens", 3000))
             except (ValueError, TypeError):
                 max_tokens = 3000
-            effective_mode = (
-                "scrape"
-                if (mode == "scrape" or _is_url_query(query))
-                else ("fast" if search_depth == "fast" else "deep")
-            )
+            effective_mode = _resolve_effective_mode(mode, search_depth, query)
             data = searxng_client.unified_search(
                 query=query,
                 mode=effective_mode,
@@ -453,7 +466,11 @@ def process_message(line: str) -> dict[str, Any] | None:
     elif method == "tools/list":
         return handle_tools_list(msg_id, params)
     elif method == "tools/call":
-        return handle_tools_call(msg_id, params)
+        try:
+            return handle_tools_call(msg_id, params)
+        except Exception as exc:  # noqa: BLE001 - keep stdio loop alive
+            log_debug(f"tools/call handler failed: {exc}")
+            return make_jsonrpc_error(msg_id, -32603, f"Internal error: {exc}")
     elif method == "resources/list":
         return {"jsonrpc": "2.0", "id": msg_id, "result": {"resources": []}}
     elif method == "prompts/list":

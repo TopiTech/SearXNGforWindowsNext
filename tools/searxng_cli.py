@@ -236,6 +236,21 @@ def _is_url_arg(text: str) -> bool:
     return (" " not in s) and s.lower().startswith(("http://", "https://"))
 
 
+def _resolve_effective_mode(mode: str, depth: str | None, query: str) -> str:
+    """Resolve the effective unified-search mode honoring an explicit ``mode``.
+
+    Shared semantics with ``mcp_server._resolve_effective_mode``: an explicit
+    ``mode`` wins over ``depth``; URL inputs resolve to ``"scrape"``;
+    ``"auto"`` falls back to depth (``"fast"`` depth implies fast).
+    """
+    norm = (mode or "auto").strip().lower()
+    if norm == "scrape" or _is_url_arg(query):
+        return "scrape"
+    if norm in ("fast", "deep"):
+        return norm
+    return "fast" if depth == "fast" else "deep"
+
+
 def cmd_search(args: argparse.Namespace) -> int:
     """Handle 'search' subcommand (routes to unified_search when URL/deep/filter options are used)."""
     mode = getattr(args, "mode", "auto") or "auto"
@@ -243,7 +258,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     inc_domains = getattr(args, "include_domains", None) or []
     exc_domains = getattr(args, "exclude_domains", None) or []
     use_unified = (
-        mode in ("deep", "scrape")
+        mode in ("fast", "deep", "scrape")
         or depth is not None
         or bool(inc_domains)
         or bool(exc_domains)
@@ -251,9 +266,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     )
 
     if use_unified:
-        effective_mode = (
-            "scrape" if (mode == "scrape" or _is_url_arg(args.query)) else ("fast" if depth == "fast" else "deep")
-        )
+        effective_mode = _resolve_effective_mode(mode, depth, args.query)
         res = searxng_client.unified_search(
             query=args.query,
             mode=effective_mode,

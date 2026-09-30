@@ -2248,6 +2248,31 @@ class TestAiWebuiPatches(unittest.TestCase):
         self.assertIn('id="sxng-ai-deep-drawer"', patched)
         self.assertEqual(apply_patches.patch_simple_results_ai_webui(patched, "results.html"), "ALREADY_APPLIED")
 
+    def test_webui_next_serves_single_charset_content_types(self):
+        import webui_next
+        from flask import Flask
+
+        app = Flask(__name__)
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+        cases = {
+            "/ai": "text/html",
+            "/ai/embed.css": "text/css",
+            "/ai/embed.js": "application/javascript",
+        }
+        for path, expected in cases.items():
+            resp = client.get(path)
+            self.assertEqual(resp.status_code, 200)
+            ctype = resp.headers.get("Content-Type", "")
+            self.assertIn(expected, ctype)
+            self.assertEqual(ctype.count("charset"), 1, f"{path} must not duplicate charset: {ctype}")
+
+        md_resp = client.get("/deep_search", query_string={"q": "", "format": "markdown"})
+        self.assertEqual(md_resp.status_code, 400)
+        md_ctype = md_resp.headers.get("Content-Type", "")
+        self.assertIn("text/markdown", md_ctype)
+        self.assertEqual(md_ctype.count("charset"), 1, f"markdown error must not duplicate charset: {md_ctype}")
+
     def test_webui_next_helpers_and_deep_search_pipeline(self):
         import webui_next
 
