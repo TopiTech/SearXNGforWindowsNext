@@ -1669,7 +1669,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         <span>⚡ SearXNG Next</span>
       </a>
       <span class="brand-badge">AI-First Studio</span>
-      <span class="status-dot" id="health-dot" role="img" aria-label="Server Online" title="Server Online"></span>
+      <span class="status-dot" id="health-dot" role="img" aria-label="Checking server status" title="Checking server status"></span>
     </div>
 
     <nav class="nav-tabs" role="tablist" aria-label="Workspace Modes">
@@ -1885,6 +1885,24 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         document.documentElement.setAttribute('data-theme', cur);
         localStorage.setItem('sxng_ai_theme', cur);
       });
+
+      // Server status indicator: verify /healthz instead of assuming "online".
+      (function checkServerHealth() {
+        var dot = document.getElementById('health-dot');
+        if (!dot) return;
+        fetch('/healthz')
+          .then(function (r) {
+            var online = r.ok;
+            dot.setAttribute('aria-label', online ? 'Server Online' : 'Server Error');
+            dot.setAttribute('title', online ? 'Server Online' : 'Server Error');
+            if (!online) dot.style.background = 'var(--danger)';
+          })
+          .catch(function () {
+            dot.setAttribute('aria-label', 'Server Offline');
+            dot.setAttribute('title', 'Server Offline');
+            dot.style.background = 'var(--danger)';
+          });
+      })();
 
       function isUrlText(text) {
         var s = (text || '').trim();

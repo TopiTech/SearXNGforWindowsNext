@@ -1,1 +1,59 @@
-{"blockers": [], "budget": {"max_elapsed_minutes": null, "max_iterations": 20}, "completion_criteria": ["Tracked files reviewed (tools/, config templates, workflows, docs)", "Critical/High issues fixed or reported unresolved with rationale", "Regression tests added for fixes", "tools/test_patches.py + test_agent_tools.py + test_agentic_search.py pass", "ruff check + format clean; py_compile clean; apply-patches --check all ALREADY_APPLIED", "Live Flask probes: SSRF matrix/json_lite/deep_search/a11y/content-type OK", "Final report covers scope, severity findings, changes, compatibility, tests, unresolved items"], "constraints": ["No destructive git operations; no commit unless asked", "Keep upstream-sync compatibility (patches idempotent)", "User override 2026-09-30: implement fixes (read-only taste constraint lifted for this goal)"], "created_at": "2026-09-08T00:00:00Z", "evidence": ["test_patches: 145 OK", "test_agent_tools: 42 OK", "test_agentic_search: 29 OK", "ruff check + format clean; py_compile clean", "apply-patches --check: 22/22 ALREADY_APPLIED (23 lines incl. header)", "Live endpoint matrix 25 checks all OK incl. single-charset Content-Types", "git diff: 10 files, no patch-system/upstream files touched"], "id": "goal-20260908-code-review", "non_goals": ["Redesigning patch system wholesale", "Deploying/publishing", "UI redesign beyond correctness"], "objective": "Full code review of the SearXNG for Windows fork; fix significant correctness, security, maintainability, and config-integration issues with regression tests, and run the project's own verification suite.", "progress": {"completed": ["baseline", "audit", "fixes A-F with regression tests", "full verification (unit+lint+format+compile+patches+live endpoints)"], "last_action": "Full verification green; ready for final report", "last_result": "216 unit tests pass (145+42+29); live matrix 25/25 OK", "remaining": ["final report"]}, "status": "active", "updated_at": "2026-09-30T12:10:00Z", "verification": ["python tools/test_patches.py -> 145 OK", "python tools/test_agent_tools.py -> 42 OK", "python tools/test_agentic_search.py -> 29 OK", "ruff check + format --check clean", "py_compile clean", "apply-patches --check all ALREADY_APPLIED", "live Flask probes 25/25 OK"], "version": 1}
+{
+  "version": 1,
+  "id": "goal-20260930-000000",
+  "status": "completed",
+  "objective": "プロジェクト全体をコードレビューし、重大な不具合・セキュリティ問題を修正し、再発防止テストを追加して、既定の検証(Lint/ユニットテスト/パッチ検証)を通す",
+  "completion_criteria": [
+    "主要な処理経路・仕様・テスト・設定を精読し、問題を重要度付きで列挙した",
+    "重大な問題(正確性・セキュリティ・根本原因)を修正した",
+    "修正箇所に対応する再発防止テストを追加した",
+    "プロジェクト既定の検証(ruff check / ruff format --check / 3テストスイート / apply-patches --check)が成功",
+    "互換性への影響と未解決事項が明示された最終レポートを提示"
+  ],
+  "constraints": [
+    "無関係な変更を避ける",
+    "既存ユーザー変更を破棄しない",
+    "破壊的操作・本番変更・公開操作は行わない"
+  ],
+  "non_goals": [
+    "依存ライブラリの大規模バージョン更新",
+    "機能追加やデザイン刷新"
+  ],
+  "verification": [
+    "ruff check . -> passed",
+    "ruff format --check . -> passed (20 files)",
+    "python tools/test_patches.py -> 146 tests OK",
+    "python tools/test_agent_tools.py -> 42 tests OK",
+    "python tools/test_agentic_search.py -> 31 tests OK (計219)",
+    "python tools/apply-patches.py --check -> exit 0 (全パッチ ALREADY_APPLIED)",
+    "node --check (配信JS 2種) -> syntax OK"
+  ],
+  "budget": {
+    "max_iterations": 20,
+    "max_elapsed_minutes": null
+  },
+  "progress": {
+    "iteration": 6,
+    "completed": [
+      "ベースライン取得",
+      "精読",
+      "問題列挙",
+      "修正(SpeculativeFetcher daemon化)",
+      "修正(/ai status-dot実ヘルスチェック化)",
+      "再発防止テスト追加",
+      "全検証成功"
+    ],
+    "remaining": [],
+    "last_action": "最終レポート作成",
+    "last_result": "219 tests OK, lint clean, patch check exit 0"
+  },
+  "evidence": [
+    "修正前実測: fetch_pages(timeout=1s)後にプロセス終了が7.0秒ブロック / 修正後: 0.0秒",
+    "node --check により配信JS(SIMPLE_EMBED_JS, AI_WORKSPACE_HTML script)の構文正当性を確認(初期仮説の'リテラル\\n混入'はJSエスケープとして正当と判明し撤回)",
+    "SSRF防御は ipaddress(is_global等)+6to4/Teredo+数値/16進/8進表記で実測ブロックを確認",
+    "/healthz は webapp.py:614 に実在し smoke-test も検証"
+  ],
+  "blockers": [],
+  "created_at": "2026-09-30T00:00:00Z",
+  "updated_at": "2026-09-30T00:00:00Z"
+}

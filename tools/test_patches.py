@@ -2384,6 +2384,23 @@ class TestAiWebuiPatches(unittest.TestCase):
         self.assertIn(":focus-visible", html_doc)
         self.assertIn(":focus-visible", embed_css)
 
+    def test_webui_next_health_dot_reflects_real_status(self):
+        """Regression: the /ai header status-dot used to hard-code aria-label="Server Online"
+        without ever contacting /healthz, asserting a false status to screen readers.
+        It must start with a neutral state and update from the /healthz response."""
+        import webui_next
+
+        html_doc = webui_next.AI_WORKSPACE_HTML
+        self.assertIn('id="health-dot"', html_doc)
+        self.assertNotIn('aria-label="Server Online" title="Server Online"></span>', html_doc)
+        # Neutral initial state for screen readers before the check resolves
+        self.assertIn('aria-label="Checking server status"', html_doc)
+        # A real health probe must exist and update the label from the response
+        self.assertIn("fetch('/healthz')", html_doc)
+        self.assertIn("'Server Online'", html_doc)
+        self.assertIn("'Server Offline'", html_doc)
+        self.assertIn("'Server Error'", html_doc)
+
     def test_webui_next_ssrf_shorthand_ip_and_single_dns_resolution(self):
         import ipaddress
 

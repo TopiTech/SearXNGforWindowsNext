@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 import unittest
 from unittest.mock import MagicMock
 
@@ -188,6 +190,52 @@ class TestSpeculativeFetcher(unittest.TestCase):
         self.assertEqual(len(updated), 1)
         self.assertFalse(updated[0].is_scraped)
         self.assertIn("Connection refused", updated[0].scrape_error)
+
+    def test_fetch_pages_timeout_marks_items_and_returns_promptly(self) -> None:
+        """Regression: scrapes exceeding the wall-clock budget must be marked as timed out
+        without waiting for their internal completion."""
+        release = threading.Event()
+
+        def hung_scrape(url: str, **kwargs):
+            # Simulate a backend that ignores its timeout argument (e.g. a stuck socket).
+            release.wait(timeout=10.0)
+            return {"content": "late"}
+
+        fetcher = agentic_search.SpeculativeFetcher(scrape_func=hung_scrape, max_workers=2)
+        items = [
+            agentic_search.SearchResultItem(
+                title="Slow", url="https://slow.example", domain="slow.example", content=""
+            ),
+        ]
+        t0 = time.perf_counter()
+        updated = fetcher.fetch_pages(items, max_fetch=1, timeout=0.5)
+        elapsed = time.perf_counter() - t0
+        try:
+            self.assertLess(elapsed, 5.0, "fetch_pages must return near the wall-clock timeout")
+            self.assertFalse(updated[0].is_scraped)
+            self.assertEqual(updated[0].scrape_error, "Scrape timed out")
+        finally:
+            release.set()
+
+    def test_fetch_pages_worker_threads_are_daemons(self) -> None:
+        """Regression: abandoned scrapes ran on non-daemon ThreadPoolExecutor workers, so the
+        interpreter's atexit join blocked process exit (CLI deep search hung for seconds after
+        results were printed). Workers must be daemon threads so a hung scrape can never keep
+        the process alive."""
+        observed: list[bool] = []
+        seen = threading.Event()
+
+        def inspecting_scrape(url: str, **kwargs):
+            observed.append(threading.current_thread().daemon)
+            seen.set()
+            return {"content": "ok"}
+
+        fetcher = agentic_search.SpeculativeFetcher(scrape_func=inspecting_scrape, max_workers=1)
+        items = [agentic_search.SearchResultItem(title="t", url="https://ok.example", domain="ok.example", content="")]
+        updated = fetcher.fetch_pages(items, max_fetch=1, timeout=5.0)
+        self.assertTrue(seen.wait(timeout=5.0))
+        self.assertTrue(updated[0].is_scraped)
+        self.assertEqual(observed, [True], "scrape workers must run as daemon threads")
 
 
 class TestTokenBudgeter(unittest.TestCase):

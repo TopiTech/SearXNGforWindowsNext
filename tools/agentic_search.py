@@ -15,10 +15,12 @@ from __future__ import annotations
 import concurrent.futures
 import math
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
 from collections.abc import Callable
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -677,30 +679,54 @@ class SpeculativeFetcher:
             except Exception as e:  # noqa: BLE001
                 return {"is_scraped": False, "full_content": "", "scrape_error": str(e)}
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers)
-        try:
-            future_to_item = {executor.submit(_do_scrape, it.url): it for it in to_fetch}
-            done, not_done = concurrent.futures.wait(
-                future_to_item.keys(),
-                timeout=eff_timeout,
-            )
-            for fut in done:
-                item = future_to_item[fut]
+        # Daemon threads are essential here: futures that exceed the wall-clock
+        # budget are abandoned, but their underlying scrapes keep running. With the
+        # standard ThreadPoolExecutor (non-daemon workers) the interpreter's atexit
+        # join would block process exit - e.g. a CLI deep search could hang for the
+        # full per-page scrape timeout (10-15s) after results were already printed.
+        # Daemon workers let the process exit immediately; the stale scrape simply
+        # dies with it. Each scrape runs on a dedicated daemon thread whose outcome
+        # is marshalled back through a plain Future, keeping concurrent.futures.wait
+        # semantics (and the public behaviour of this method) unchanged.
+        def _daemonized_run(fut: Future, target_url: str) -> None:
+            try:
+                fut.set_result(_do_scrape(target_url))
+            except BaseException as exc:  # noqa: BLE001 - mirror Future.result() semantics
                 try:
-                    outcome = fut.result()
-                    item.is_scraped = bool(outcome.get("is_scraped", False))
-                    item.full_content = str(outcome.get("full_content") or "")
-                    item.scrape_error = str(outcome.get("scrape_error") or "")
-                except Exception as exc:  # noqa: BLE001
-                    item.is_scraped = False
-                    item.scrape_error = str(exc)
-            for fut in not_done:
-                fut.cancel()
-                item = future_to_item[fut]
+                    fut.set_exception(exc)
+                except concurrent.futures.InvalidStateError:
+                    pass
+
+        future_to_item: dict[Future, SearchResultItem] = {}
+        for it in to_fetch:
+            fut: Future = Future()
+            worker = threading.Thread(
+                target=_daemonized_run,
+                args=(fut, it.url),
+                name=f"sxng-speculative-{it.url[:40]}",
+                daemon=True,
+            )
+            worker.start()
+            future_to_item[fut] = it
+        done, not_done = concurrent.futures.wait(
+            future_to_item.keys(),
+            timeout=eff_timeout,
+        )
+        for fut in done:
+            item = future_to_item[fut]
+            try:
+                outcome = fut.result()
+                item.is_scraped = bool(outcome.get("is_scraped", False))
+                item.full_content = str(outcome.get("full_content") or "")
+                item.scrape_error = str(outcome.get("scrape_error") or "")
+            except Exception as exc:  # noqa: BLE001
                 item.is_scraped = False
-                item.scrape_error = "Scrape timed out"
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+                item.scrape_error = str(exc)
+        for fut in not_done:
+            fut.cancel()
+            item = future_to_item[fut]
+            item.is_scraped = False
+            item.scrape_error = "Scrape timed out"
 
         return items
 
