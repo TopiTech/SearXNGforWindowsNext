@@ -75,7 +75,7 @@ def parse_engines_fallback(yaml_content):
             continue
 
         # If indent is <= engines_indent and not a list item, engines section ended
-        if indent <= engines_indent and not line.lstrip().startswith("-"):
+        if engines_indent is not None and indent <= engines_indent and not line.lstrip().startswith("-"):
             break
 
         # Check for start of a new list item at engines list level
@@ -83,7 +83,7 @@ def parse_engines_fallback(yaml_content):
         if item_m and (
             item_indent is None
             or len(item_m.group(1)) == item_indent
-            or (item_indent is None and len(item_m.group(1)) > engines_indent)
+            or (engines_indent is not None and len(item_m.group(1)) > engines_indent)
         ):
             if current_item is not None and "name" in current_item:
                 if "engine" not in current_item:
@@ -104,7 +104,7 @@ def parse_engines_fallback(yaml_content):
                         current_item[k] = v
             continue
 
-        if current_item is not None and indent > item_indent:
+        if current_item is not None and item_indent is not None and indent > item_indent:
             kv_m = re.match(r"^[ \t]*([a-zA-Z0-9_-]+)\s*:\s*(.*)$", line)
             if kv_m:
                 k = kv_m.group(1)
@@ -262,7 +262,7 @@ def process_file(settings_path, engines_dir):
         engine_mod = engine_entry.get("engine", name)
 
         # Skip template or complex dynamic engines
-        if engine_mod and re.match(r"^[a-z0-9_.-]+$", engine_mod):
+        if isinstance(engine_mod, str) and re.match(r"^[a-z0-9_.-]+$", engine_mod):
             parts = engine_mod.split(".")
             mod_file = os.path.join(engines_dir, *parts) + ".py"
             pkg_init = os.path.join(engines_dir, *parts, "__init__.py")

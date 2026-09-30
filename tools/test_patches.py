@@ -26,6 +26,8 @@ import importlib.util
 # names, which prevents plain `import` statements. Load them via importlib.
 def _load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load module {name} from {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -1108,7 +1110,7 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
         thread_local.pin = {"host": "example.com", "ip": "93.184.216.34", "port": 443}
 
         def mock_original_gai(h, p, *args, **kwargs):
-            return [("live_dns", h, p)]
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "live_dns", (h, p))]
 
         # Mimic _safe_getaddrinfo implementation
         def test_safe_getaddrinfo(h, p, *args, **kwargs):
@@ -1141,7 +1143,7 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
 
         # 3. Unpinned host falls through to original resolver
         res_other = test_safe_getaddrinfo("other.com", 443, socket.AF_INET)
-        self.assertEqual(res_other, [("live_dns", "other.com", 443)])
+        self.assertEqual(res_other, [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "live_dns", ("other.com", 443))])
 
     def test_read_scrape_response_unknown_charset_fallback(self):
         # R4 verification: Malformed/bogus charset header must not crash with 500 LookupError
@@ -1481,7 +1483,7 @@ class TestUpdateFileNoopHandling(unittest.TestCase):
         # Without the opt-in flag, unchanged output still fails loudly.
         self.assertNotIn("legacy = True", rewrite("pristine\n", "x"))
 
-        rewrite._noop_when_unchanged = True
+        setattr(rewrite, "_noop_when_unchanged", True)  # noqa: B010
 
         # Never applied -> patched.
         result = apply_patches.update_file(target, "sample rewrite", rewrite)
@@ -1662,6 +1664,8 @@ class TestHardeningEnhancements(unittest.TestCase):
         now = datetime.datetime.now(datetime.UTC)
         future_hdr = email.utils.format_datetime(now + datetime.timedelta(seconds=60))
         res_future = parse_retry_after(DummyResp(future_hdr))
+        self.assertIsNotNone(res_future)
+        assert res_future is not None
         self.assertTrue(55 <= res_future <= 65)
 
         # 3. Past HTTP-date
@@ -1925,7 +1929,7 @@ class TestHardeningEnhancements(unittest.TestCase):
                         _ = ipaddress.ip_address(pin["ip"])
                         port_num = int(pin_port or 443)
                         return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (pin["ip"], port_num))]
-            return [("live", h, p)]
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "live", (h, p))]
 
         # Bytes host and port
         res = test_safe_gai(b"example.com", b"443")

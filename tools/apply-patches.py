@@ -815,7 +815,7 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
 # --- Patch 3b: webutils.py (normalize Windows paths used in URL lookups) ---
 def patch_webutils_windows_paths(content, path):
     # Pure replace() rewrite: unchanged output == anchors already normalized.
-    patch_webutils_windows_paths._noop_when_unchanged = True
+    setattr(patch_webutils_windows_paths, "_noop_when_unchanged", True)  # noqa: B010
     required = (
         "file_list.append(str(f.relative_to(static_path)).replace(os.sep, '/'))",
         "result_templates.add(f.replace(os.sep, '/'))",
@@ -870,7 +870,7 @@ def patch_simple_search_accessibility(content, path):
 # --- Patch 3d: simple preferences templates (accessible input name for cookie hash) ---
 def patch_preferences_accessibility(content, path):
     """Give the preferences hash input field an accessible, localized name."""
-    patch_preferences_accessibility._noop_when_unchanged = True
+    setattr(patch_preferences_accessibility, "_noop_when_unchanged", True)  # noqa: B010
     if 'id="pref-hash-input"' in content and "aria-label=" in content:
         return "ALREADY_APPLIED"
     if 'id="pref-hash-input"' not in content:
@@ -1667,7 +1667,7 @@ def scrape():
 # --- Patch 6: engines/__init__.py (restore upstream disabled-engine semantics) ---
 def patch_engines_init(content, path):
     # Pure replace() rewrite of legacy blocks; unchanged == already restored.
-    patch_engines_init._noop_when_unchanged = True
+    setattr(patch_engines_init, "_noop_when_unchanged", True)  # noqa: B010
     """Undo legacy patches that made ``disabled`` act like ``inactive``.
 
     SearXNG keeps disabled engines loaded so users can enable them in
@@ -1703,7 +1703,7 @@ def patch_engines_init(content, path):
 # --- Patch 7: search/processors/__init__.py (restore upstream disabled-engine semantics) ---
 def patch_processors_init(content, path):
     # Pure replace() rewrite of the legacy block; unchanged == already restored.
-    patch_processors_init._noop_when_unchanged = True
+    setattr(patch_processors_init, "_noop_when_unchanged", True)  # noqa: B010
     injected_block = """            if eng_settings.get("disabled", False) is True:
                 logger.debug("Engine '%s' is disabled in config, skipping processor init.", eng_name)
                 continue
@@ -1716,7 +1716,7 @@ def patch_processors_init(content, path):
 def patch_google_captcha(content, path):
     # replace() rewrite; unchanged means upstream no longer has the old block
     # (either fixed upstream or already patched). Nothing left to do.
-    patch_google_captcha._noop_when_unchanged = True
+    setattr(patch_google_captcha, "_noop_when_unchanged", True)  # noqa: B010
     if 'loc = (resp.headers.get("Location")' in content:
         return "ALREADY_APPLIED"
     old = (
@@ -1743,7 +1743,7 @@ def patch_google_captcha(content, path):
 # --- Patch 9: engines/sogou.py (robust CAPTCHA detection) ---
 def patch_sogou_captcha(content, path):
     # replace() rewrite; unchanged == nothing to do (see patch_google_captcha).
-    patch_sogou_captcha._noop_when_unchanged = True
+    setattr(patch_sogou_captcha, "_noop_when_unchanged", True)  # noqa: B010
     if "antispider" in content and "captcha" in content.lower() and "resp.headers.get" in content:
         return "ALREADY_APPLIED"
     old = (
@@ -1780,7 +1780,7 @@ def patch_sogou_captcha(content, path):
 # --- Patch 10: search/processors/abstract.py (restore configured suspension times) ---
 def patch_abstract_suspend(content, path):
     # Pure replace() rewrite of the legacy cap; unchanged == already restored.
-    patch_abstract_suspend._noop_when_unchanged = True
+    setattr(patch_abstract_suspend, "_noop_when_unchanged", True)  # noqa: B010
     """Undo the legacy global cap that overrode ``suspended_times``.
 
     ``max_ban_time_on_fail`` applies to ordinary engine failures.  Explicit

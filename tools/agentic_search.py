@@ -875,7 +875,7 @@ def build_rag_prompt(query: str, markdown_context: str) -> str:
 def execute_scrape_pipeline(
     url: str,
     scrape_func: Callable[..., dict[str, Any]],
-    focus_query: str = "",
+    focus_query: str | None = "",
     max_length: int = 8000,
     base_url: str | None = None,
     timeout: float | None = None,
@@ -1011,10 +1011,10 @@ def execute_unified_search(
     include_highlights: bool = True,
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
-    categories: str = "",
-    engines: str = "",
-    time_range: str = "",
-    focus_query: str = "",
+    categories: str | None = "",
+    engines: str | None = "",
+    time_range: str | None = "",
+    focus_query: str | None = "",
     max_tokens: int = 3000,
     max_scrape_length: int = 8000,
     base_url: str | None = None,
@@ -1051,7 +1051,7 @@ def execute_unified_search(
         return execute_scrape_pipeline(
             url=raw_input,
             scrape_func=scrape_func,
-            focus_query=focus_query,
+            focus_query=focus_query or "",
             max_length=max_scrape_length,
             base_url=base_url,
             timeout=timeout,
@@ -1158,9 +1158,12 @@ def execute_unified_search(
             "rag_prompt": "",
         }
 
-    raw_results = search_res.get("results", [])
-    direct_answers = search_res.get("answers", [])
-    infoboxes = search_res.get("infoboxes", [])
+    raw_results_val = search_res.get("results", [])
+    raw_results: list[dict[str, Any]] = [r for r in raw_results_val if isinstance(r, dict)] if isinstance(raw_results_val, list) else []
+    direct_answers_val = search_res.get("answers", [])
+    direct_answers: list[str] = [str(a) for a in direct_answers_val] if isinstance(direct_answers_val, list) else []
+    infoboxes_val = search_res.get("infoboxes", [])
+    infoboxes: list[Any] = infoboxes_val if isinstance(infoboxes_val, list) else []
 
     if not raw_results:
         empty_md = f"## Deep Search Results: `{clean_q}`\n\n該当する検索結果が見つかりませんでした。"

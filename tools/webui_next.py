@@ -165,7 +165,7 @@ def _scrape_url_direct(
             ip_raw = res[4][0]
             if webapp_mod._is_ip_blocked(ip_raw):
                 raise blocked_exc_cls(f"Blocked: {host} resolves to a private/reserved IP: {ip_raw}")
-            valid_ips.append(ip_raw)
+            valid_ips.append(str(ip_raw))
         if not valid_ips:
             raise blocked_exc_cls(f"Could not find a global IP for {host}")
         v4_ips = [ip for ip in valid_ips if ":" not in ip]
@@ -2561,7 +2561,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
 
         url = request.values.get("url") or payload.get("url") or ""
         query = request.values.get("q") or request.values.get("query") or payload.get("q") or payload.get("query") or ""
-        max_len = request.values.get("max_length") or payload.get("max_length") or 8000
+        max_len = _parse_int(request.values.get("max_length") or payload.get("max_length"), 8000, 500, 50000)
 
         if not isinstance(url, str) or not url.strip():
             return jsonify({"error": "No URL provided", "url": "", "content": ""}), 400
@@ -2622,15 +2622,15 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             or payload.get("depth")
             or "advanced"
         )
-        max_results = (
+        raw_max_results = (
             request.values.get("max_results")
             or request.values.get("count")
             or request.values.get("n")
             or payload.get("max_results")
             or payload.get("count")
-            or 5
         )
-        max_tokens = request.values.get("max_tokens") or payload.get("max_tokens") or 3000
+        max_results = _parse_int(raw_max_results, 5, 1, 50)
+        max_tokens = _parse_int(request.values.get("max_tokens") or payload.get("max_tokens"), 3000, 500, 20000)
         focus_query = (
             request.values.get("focus_query")
             or request.values.get("focus_q")
@@ -2638,13 +2638,13 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             or payload.get("focus_q")
             or ""
         )
-        max_scrape_length = (
+        raw_scrape_len = (
             request.values.get("max_scrape_length")
             or request.values.get("max_length")
             or payload.get("max_scrape_length")
             or payload.get("max_length")
-            or 8000
         )
+        max_scrape_length = _parse_int(raw_scrape_len, 8000, 500, 50000)
         categories = request.values.get("categories") or payload.get("categories") or ""
         engines = request.values.get("engines") or payload.get("engines") or ""
         time_range = request.values.get("time_range") or payload.get("time_range") or ""

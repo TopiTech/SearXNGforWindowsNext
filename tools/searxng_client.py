@@ -96,7 +96,7 @@ def check_health(base_url: str | None = None, timeout: float | None = None) -> t
 
 def search(
     query: str,
-    count: int = 5,
+    count: int | str = 5,
     categories: str = "",
     engines: str = "",
     time_range: str = "",
@@ -207,7 +207,7 @@ def search(
 
 def scrape(
     url: str,
-    max_length: int = 4000,
+    max_length: int | str = 4000,
     base_url: str | None = None,
     timeout: float | None = None,
 ) -> dict[str, Any]:

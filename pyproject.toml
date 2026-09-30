@@ -12,3 +12,14 @@ ignore = [
     "N999",  # Hyphenated script filenames in tools/
 ]
 
+[tool.pyrefly]
+python-interpreter-path = "python/python.exe"
+python-version = "3.11"
+python-platform = "windows"
+project-includes = [
+    "tools/**/*.py",
+]
+search-path = [
+    "tools",
+    "python/Lib/site-packages",
+]

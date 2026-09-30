@@ -160,8 +160,9 @@ class TestSearXNGClient(unittest.TestCase):
     @patch("urllib.request.urlopen")
     def test_health_404_fallback_to_root(self, mock_urlopen: MagicMock) -> None:
         import urllib.error
+        from email.message import Message
 
-        err_404 = urllib.error.HTTPError("http://127.0.0.1:8888/healthz", 404, "Not Found", {}, None)
+        err_404 = urllib.error.HTTPError("http://127.0.0.1:8888/healthz", 404, "Not Found", Message(), None)
         root_resp = MagicMock()
         root_resp.status = 200
         root_resp.read.return_value = b"<html>SearXNG</html>"
