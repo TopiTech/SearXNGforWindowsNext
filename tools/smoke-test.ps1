@@ -174,6 +174,9 @@ try {
     Assert-Blocked -Uri "$base/scrape?url=ws://example.com/socket" -Label "ws:// scheme"
     Assert-Blocked -Uri "$base/scrape?url=javascript:alert(1)" -Label "javascript: scheme"
     Assert-Blocked -Uri "$base/scrape?url=data:text/html,test" -Label "data: scheme"
+    Assert-Blocked -Uri "$base/scrape?url=http://2130706433/" -Label "integer loopback (2130706433)"
+    Assert-Blocked -Uri "$base/scrape?url=http://127.1/" -Label "shorthand loopback (127.1)"
+    Assert-Blocked -Uri "$base/scrape?url=http://0177.0.0.1/" -Label "octal loopback (0177.0.0.1)"
     Write-Host ""
 
     # Test 28: Autocomplete endpoint
@@ -240,6 +243,13 @@ try {
         }
         Assert-JsonProperty -Value $cliSearch -PropertyName "results" -Label "CLI search"
         Write-Host "  [OK] CLI search returned $(@($cliSearch.results).Count) result(s)" -ForegroundColor Green
+
+        $cliSearchNoHlRaw = & $pythonExe $cliPy --base-url $base search "SearXNG" --depth advanced --no-highlights -n 2 --json | Out-String
+        $cliSearchNoHl = $cliSearchNoHlRaw | ConvertFrom-Json
+        if ($cliSearchNoHl.error) {
+            throw "[FAIL] CLI search with --no-highlights returned error: $($cliSearchNoHl.error)"
+        }
+        Write-Host "  [OK] CLI unified search with --no-highlights returned $(@($cliSearchNoHl.results).Count) result(s)" -ForegroundColor Green
         Write-Host ""
 
         # Test 35: CLI scrape

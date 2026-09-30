@@ -1143,7 +1143,9 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
 
         # 3. Unpinned host falls through to original resolver
         res_other = test_safe_getaddrinfo("other.com", 443, socket.AF_INET)
-        self.assertEqual(res_other, [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "live_dns", ("other.com", 443))])
+        self.assertEqual(
+            res_other, [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "live_dns", ("other.com", 443))]
+        )
 
     def test_read_scrape_response_unknown_charset_fallback(self):
         # R4 verification: Malformed/bogus charset header must not crash with 500 LookupError
@@ -2390,6 +2392,10 @@ class TestAiWebuiPatches(unittest.TestCase):
         self.assertIn(":focus-visible", html_doc)
         self.assertIn(":focus-visible", embed_css)
 
+        # Accessibility & shell injection hardening
+        self.assertIn("active.isContentEditable", html_doc)
+        self.assertIn("function (ch) { return", html_doc)
+
     def test_webui_next_health_dot_reflects_real_status(self):
         """Regression: the /ai header status-dot used to hard-code aria-label="Server Online"
         without ever contacting /healthz, asserting a false status to screen readers.
@@ -2426,7 +2432,17 @@ class TestAiWebuiPatches(unittest.TestCase):
 
         # Shorthand, integer, and octal/hex IPv4 loopback must be statically blocked without DNS lookup
         with mock.patch("webui_next.socket.getaddrinfo") as mock_getaddrinfo:
-            for host in ("127.1", "127.0.1", "2130706433", "0177.0.0.1", "0x7f.0.0.1", "localhost"):
+            for host in (
+                "127.1",
+                "127.0.1",
+                "2130706433",
+                "0177.0.0.1",
+                "0x7f.0.0.1",
+                "0x7f000001",
+                "0b1111111000000000000000000000001",
+                "0o17700000001",
+                "localhost",
+            ):
                 res = webui_next._scrape_url_direct(fake_webapp, f"http://{host}/secret")
                 self.assertIn(
                     "スクレイピング拒否 (400)",
@@ -2838,7 +2854,7 @@ class TestPatchDiagnosticsAndResilience(unittest.TestCase):
     def test_patch_preferences_validation(self):
         sample = (
             "    def parse(self, data: str):\n"
-            "        \"\"\"Parse and validate ``data`` and store the result at ``self.value``\"\"\"\n"
+            '        """Parse and validate ``data`` and store the result at ``self.value``"""\n'
             "        if data == '':\n"
             "            self.value: list[str] = []\n"
             "            return\n"
@@ -2887,9 +2903,16 @@ class TestPatchDiagnosticsAndResilience(unittest.TestCase):
             "        logger.exception(e, exc_info=True)\n"
         )
         patched = apply_patches.patch_webapp_preferences_validation(sample, "webapp.py")
-        self.assertIn("all_categories = sorted(set(list(categories.keys()) + list(settings.get('categories_as_tabs', {}).keys())))", patched)
-        self.assertIn("except ValidationException as e:\n        logger.debug('Invalid settings in cookies: %s', e)", patched)
-        self.assertIn("except ValidationException as e:\n        logger.debug('Invalid settings in request: %s', e)", patched)
+        self.assertIn(
+            "all_categories = sorted(set(list(categories.keys()) + list(settings.get('categories_as_tabs', {}).keys())))",
+            patched,
+        )
+        self.assertIn(
+            "except ValidationException as e:\n        logger.debug('Invalid settings in cookies: %s', e)", patched
+        )
+        self.assertIn(
+            "except ValidationException as e:\n        logger.debug('Invalid settings in request: %s', e)", patched
+        )
         # Verify idempotency
         self.assertEqual(apply_patches.patch_webapp_preferences_validation(patched, "webapp.py"), "ALREADY_APPLIED")
 

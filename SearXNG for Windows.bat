@@ -25,7 +25,7 @@ if not exist ".\python\Lib\site-packages\searx\webapp.py" (
 )
 
 REM === Configure environment ===
-set "SEARXNG_SETTINGS_PATH=%CD%\config\settings.yml"
+if not defined SEARXNG_SETTINGS_PATH set "SEARXNG_SETTINGS_PATH=%CD%\config\settings.yml"
 if not defined SEARXNG_PORT set "SEARXNG_PORT=8888"
 if not defined SEARXNG_BIND_ADDRESS set "SEARXNG_BIND_ADDRESS=127.0.0.1"
 

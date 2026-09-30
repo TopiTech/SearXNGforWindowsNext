@@ -113,6 +113,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exclude specific domain(s) (activates unified deep pipeline)",
     )
     search_parser.add_argument(
+        "--no-highlights",
+        dest="include_highlights",
+        action="store_false",
+        default=True,
+        help="Disable passage highlight extraction (activates unified deep pipeline if applicable)",
+    )
+    search_parser.add_argument(
         "--max-tokens",
         dest="max_tokens",
         type=int,
@@ -232,8 +239,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _is_url_arg(text: str) -> bool:
-    s = (text or "").strip()
-    return (" " not in s) and s.lower().startswith(("http://", "https://"))
+    try:
+        from agentic_search import is_url_input
+
+        return is_url_input(text)
+    except ImportError:
+        s = (text or "").strip()
+        return (" " not in s) and s.lower().startswith(("http://", "https://"))
 
 
 def _resolve_effective_mode(mode: str, depth: str | None, query: str) -> str:
@@ -272,6 +284,7 @@ def cmd_search(args: argparse.Namespace) -> int:
             mode=effective_mode,
             search_depth=depth or "advanced",
             max_results=args.count,
+            include_highlights=getattr(args, "include_highlights", True),
             categories=args.category,
             engines=args.engines,
             time_range=args.time_range,

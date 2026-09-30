@@ -906,9 +906,7 @@ def patch_preferences_validation(content, path):
 
     # 1. Update MultipleChoiceSetting.parse to filter choices instead of raising ValidationException
     old_parse = (
-        "        elements = data.split(',')\n"
-        "        self._validate_selections(elements)\n"
-        "        self.value = elements"
+        "        elements = data.split(',')\n        self._validate_selections(elements)\n        self.value = elements"
     )
     new_parse = (
         "        elements = [x.strip() for x in data.split(',') if x.strip()]\n"
@@ -961,7 +959,9 @@ def patch_webapp_preferences_validation(content, path):
     ):
         return "ALREADY_APPLIED"
 
-    old_pref_init = "    preferences = Preferences(themes, list(categories.keys()), engines, searx.plugins.STORAGE, client_pref)"
+    old_pref_init = (
+        "    preferences = Preferences(themes, list(categories.keys()), engines, searx.plugins.STORAGE, client_pref)"
+    )
     new_pref_init = (
         "    all_categories = sorted(set(list(categories.keys()) + list(settings.get('categories_as_tabs', {}).keys())))\n"
         "    preferences = Preferences(themes, all_categories, engines, searx.plugins.STORAGE, client_pref)"
@@ -970,11 +970,7 @@ def patch_webapp_preferences_validation(content, path):
         content = content.replace(old_pref_init, new_pref_init, 1)
 
     # Catch ValidationException in pre_request cookies and form
-    old_cookie_try = (
-        "    try:\n"
-        "        preferences.parse_dict(sxng_request.cookies)\n\n"
-        "    except Exception as e:"
-    )
+    old_cookie_try = "    try:\n        preferences.parse_dict(sxng_request.cookies)\n\n    except Exception as e:"
     new_cookie_try = (
         "    try:\n"
         "        preferences.parse_dict(sxng_request.cookies)\n"
@@ -985,11 +981,7 @@ def patch_webapp_preferences_validation(content, path):
     if old_cookie_try in content:
         content = content.replace(old_cookie_try, new_cookie_try, 1)
 
-    old_form_try = (
-        "        else:\n"
-        "            preferences.parse_dict(sxng_request.form)\n"
-        "    except Exception as e:"
-    )
+    old_form_try = "        else:\n            preferences.parse_dict(sxng_request.form)\n    except Exception as e:"
     new_form_try = (
         "        else:\n"
         "            preferences.parse_dict(sxng_request.form)\n"

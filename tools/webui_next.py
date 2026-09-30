@@ -129,9 +129,15 @@ def _scrape_url_direct(
                     ip_int = int(host_clean)
                     if 0 <= ip_int <= 0xFFFFFFFF:
                         return bool(webapp_mod._is_ip_blocked(ipaddress.IPv4Address(ip_int)))
-            with contextlib.suppress(OSError, ValueError):
-                packed = socket.inet_aton(host_clean)
-                return bool(webapp_mod._is_ip_blocked(ipaddress.IPv4Address(packed)))
+            if host_clean.startswith(("0x", "0X", "0o", "0O", "0b", "0B")):
+                with contextlib.suppress(ValueError, TypeError, OverflowError):
+                    ip_int = int(host_clean, 0)
+                    if 0 <= ip_int <= 0xFFFFFFFF:
+                        return bool(webapp_mod._is_ip_blocked(ipaddress.IPv4Address(ip_int)))
+            if ":" not in host_clean:
+                with contextlib.suppress(OSError, ValueError):
+                    packed = socket.inet_aton(host_clean)
+                    return bool(webapp_mod._is_ip_blocked(ipaddress.IPv4Address(packed)))
         return False
 
     try:
@@ -195,6 +201,13 @@ def _scrape_url_direct(
                 )
                 webapp_mod._scrape_client_verify_ssl = verify_ssl
 
+        eff_stream_timeout = float(timeout or 10.0)
+        req_timeout = httpx_mod.Timeout(
+            eff_stream_timeout,
+            connect=min(eff_stream_timeout, 5.0),
+            read=eff_stream_timeout,
+            write=min(eff_stream_timeout, 5.0),
+        )
         current_url = clean_url
         downloaded = ""
         for _ in range(5):
@@ -205,7 +218,7 @@ def _scrape_url_direct(
             headers = {"User-Agent": ua}
             with (
                 webapp_mod.pinned_dns(original_host, safe_ips, port),
-                webapp_mod._scrape_client.stream("GET", current_url, headers=headers) as response,
+                webapp_mod._scrape_client.stream("GET", current_url, headers=headers, timeout=req_timeout) as response,
             ):
                 if response.status_code not in (301, 302, 303, 307, 308):
                     response.raise_for_status()
@@ -1873,10 +1886,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
       function escapeShellDoubleQuoted(str) {
         return String(str == null ? '' : str)
-          .replace(/\\\\/g, '\\\\\\\\')
-          .replace(/"/g, '\\\\"')
-          .replace(/\\$/g, '\\\\$')
-          .replace(/`/g, '\\\\`');
+          .replace(/[\\\\$"\\`!]/g, function (ch) { return '\\\\' + ch; });
       }
 
       // Theme initialization
@@ -2479,8 +2489,9 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
       // Global keyboard shortcuts
       document.addEventListener('keydown', function (e) {
-        var qInput = document.getElementById('q');
-        if ((e.key === '/' && document.activeElement !== qInput && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) ||
+        var active = document.activeElement;
+        var isEditing = active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable);
+        if ((e.key === '/' && active !== qInput && !isEditing) ||
             ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) {
           e.preventDefault();
           qInput.focus();

@@ -248,9 +248,31 @@ def handle_tools_list(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _parse_bool(val: Any, default: bool = True) -> bool:
+    """Parse a boolean value supporting booleans, integers, and common string values."""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if s in ("true", "1", "yes", "on"):
+            return True
+        if s in ("false", "0", "no", "off"):
+            return False
+    return bool(val)
+
+
 def _is_url_query(text: str) -> bool:
-    s = (text or "").strip()
-    return (" " not in s) and s.lower().startswith(("http://", "https://"))
+    try:
+        from agentic_search import is_url_input
+
+        return is_url_input(text)
+    except ImportError:
+        s = (text or "").strip()
+        return (" " not in s) and s.lower().startswith(("http://", "https://"))
 
 
 def _resolve_effective_mode(mode: str, search_depth: Any, query: str) -> str:
@@ -290,7 +312,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         mode = str(arguments.get("mode") or "auto").strip().lower()
         search_depth = arguments.get("search_depth")
         raw_hl = arguments.get("include_highlights")
-        include_highlights = True if raw_hl is None else bool(raw_hl)
+        include_highlights = _parse_bool(raw_hl, default=True)
         raw_inc = arguments.get("include_domains")
         include_domains = [str(d) for d in raw_inc] if isinstance(raw_inc, list) else None
         raw_exc = arguments.get("exclude_domains")
@@ -384,7 +406,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         except (ValueError, TypeError):
             max_results = 5
         raw_hl = arguments.get("include_highlights")
-        include_highlights = True if raw_hl is None else bool(raw_hl)
+        include_highlights = _parse_bool(raw_hl, default=True)
         raw_inc = arguments.get("include_domains")
         include_domains = [str(d) for d in raw_inc] if isinstance(raw_inc, list) else None
         raw_exc = arguments.get("exclude_domains")

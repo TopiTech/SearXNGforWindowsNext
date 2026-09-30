@@ -674,6 +674,38 @@ class TestRegressionHardening(unittest.TestCase):
         self.assertNotIn("error", res)
         self.assertEqual(res["results_count"], 1)
 
+    def test_bm25_split_passages_oversized_single_block_is_bounded(self) -> None:
+        """Verify that a single paragraph larger than max_chars is split on sentences and strictly bounded."""
+        extractor = agentic_search.BM25PassageExtractor()
+        # Generate an oversized single block without double newlines
+        sentences = [
+            f"Sentence {i} with some detailed explanation about Python concurrency and async programming."
+            for i in range(25)
+        ]
+        oversized_block = " ".join(sentences)
+        self.assertGreater(len(oversized_block), 1500)
+
+        passages = extractor.split_passages(oversized_block, max_chars=400, min_chars=50)
+        self.assertGreater(len(passages), 1)
+        for p in passages:
+            self.assertLessEqual(len(p), 400, f"Passage length {len(p)} exceeds max_chars 400: '{p[:40]}...'")
+
+    def test_domain_scorer_string_and_invalid_scores(self) -> None:
+        """Verify DomainScorer handles string-encoded and invalid engine scores safely."""
+        scorer = agentic_search.DomainScorer()
+        results = [
+            {"url": "https://example.com/1", "title": "1", "score": "3.5"},
+            {"url": "https://example.com/2", "title": "2", "score": "not-a-number"},
+            {"url": "https://example.com/3", "title": "3", "score": None},
+        ]
+        scored = scorer.score_results(results)
+        self.assertEqual(len(scored), 3)
+        # Result with positive score 3.5 should score higher than default 1.0 base score
+        self.assertGreater(scored[0].score, scored[1].score)
+        # Invalid and None scores should decay solely based on rank position without crashing
+        self.assertAlmostEqual(scored[1].score, 1.0 - (1 / 3) * 0.7)
+        self.assertAlmostEqual(scored[2].score, 1.0 - (2 / 3) * 0.7)
+
 
 if __name__ == "__main__":
     unittest.main()

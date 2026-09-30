@@ -159,15 +159,21 @@ def search(
         with urllib.request.urlopen(req, timeout=t) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
 
-        results = data.get("results", [])
+        raw_results = data.get("results", []) if isinstance(data, dict) else []
+        results = [r for r in raw_results if isinstance(r, dict)] if isinstance(raw_results, list) else []
         if count and len(results) > count:
             results = results[:count]
+
+        answers_val = data.get("answers", []) if isinstance(data, dict) else []
+        answers = answers_val if isinstance(answers_val, list) else []
+        infoboxes_val = data.get("infoboxes", []) if isinstance(data, dict) else []
+        infoboxes = infoboxes_val if isinstance(infoboxes_val, list) else []
 
         return {
             "query": clean_query,
             "results": results,
-            "answers": data.get("answers", []),
-            "infoboxes": data.get("infoboxes", []),
+            "answers": answers,
+            "infoboxes": infoboxes,
         }
 
     except urllib.error.HTTPError as e:
@@ -246,7 +252,9 @@ def scrape(
         with urllib.request.urlopen(req, timeout=t) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
 
-        content = data.get("content", "")
+        raw_content = data.get("content", "") if isinstance(data, dict) else ""
+        content = str(raw_content) if raw_content is not None else ""
+        original_length = len(content)
         is_truncated = False
         if max_length and len(content) > max_length:
             content = content[:max_length]
@@ -256,7 +264,7 @@ def scrape(
             "url": clean_url,
             "content": content,
             "is_truncated": is_truncated,
-            "original_length": len(data.get("content", "")),
+            "original_length": original_length,
         }
 
     except urllib.error.HTTPError as e:

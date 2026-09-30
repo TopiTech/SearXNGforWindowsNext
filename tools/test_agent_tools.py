@@ -702,6 +702,97 @@ class TestSearXNGCLI(unittest.TestCase):
         self.assertIn("environment", opencode_cfg["mcp"]["searxng"])
         self.assertEqual(opencode_cfg["mcp"]["searxng"]["environment"]["SEARXNG_BASE_URL"], "http://127.0.0.1:8888")
 
+    @patch("urllib.request.urlopen")
+    def test_search_malformed_payload_resilience(self, mock_urlopen: MagicMock) -> None:
+        """Verify searxng_client.search gracefully filters non-dict items and handles None fields."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {
+                "results": [{"title": "Valid", "url": "https://example.com"}, None, "string-result", 42],
+                "answers": None,
+                "infoboxes": None,
+            }
+        ).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        res = searxng_client.search("python")
+        self.assertNotIn("error", res)
+        self.assertEqual(len(res["results"]), 1)
+        self.assertEqual(res["results"][0]["title"], "Valid")
+        self.assertEqual(res["answers"], [])
+        self.assertEqual(res["infoboxes"], [])
+
+    @patch("urllib.request.urlopen")
+    def test_scrape_null_content_resilience(self, mock_urlopen: MagicMock) -> None:
+        """Verify searxng_client.scrape handles null content field without crashing."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"content": None}).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        res = searxng_client.scrape("https://example.com")
+        self.assertNotIn("error", res)
+        self.assertEqual(res["content"], "")
+        self.assertFalse(res["is_truncated"])
+        self.assertEqual(res["original_length"], 0)
+
+    def test_mcp_parse_bool_and_is_url_query(self) -> None:
+        """Verify MCP boolean parser and URL query detection."""
+        self.assertTrue(mcp_server._parse_bool("true"))
+        self.assertTrue(mcp_server._parse_bool("1"))
+        self.assertTrue(mcp_server._parse_bool(True))
+        self.assertFalse(mcp_server._parse_bool("false"))
+        self.assertFalse(mcp_server._parse_bool("0"))
+        self.assertFalse(mcp_server._parse_bool("no"))
+        self.assertFalse(mcp_server._parse_bool(False))
+        self.assertTrue(mcp_server._parse_bool(None, default=True))
+
+        self.assertTrue(mcp_server._is_url_query("https://example.com/page"))
+        self.assertFalse(mcp_server._is_url_query("https://example.com keyword"))
+        self.assertFalse(mcp_server._is_url_query("plain query"))
+
+    @patch("searxng_client.search_deep")
+    def test_mcp_deep_search_string_false_highlights(self, mock_deep: MagicMock) -> None:
+        """Verify searxng_deep_search with include_highlights='false' parses as False."""
+        mock_deep.return_value = {"query": "python", "markdown": "## Deep Results"}
+        raw_msg = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 101,
+                "method": "tools/call",
+                "params": {
+                    "name": "searxng_deep_search",
+                    "arguments": {
+                        "query": "python",
+                        "include_highlights": "false",
+                    },
+                },
+            }
+        )
+        resp = mcp_server.process_message(raw_msg)
+        self.assertIsNotNone(resp)
+        self.assertFalse(resp["result"]["isError"])
+        mock_deep.assert_called_once()
+        self.assertFalse(mock_deep.call_args[1]["include_highlights"])
+
+    def test_cli_search_no_highlights_flag(self) -> None:
+        """Verify CLI search subcommand supports --no-highlights flag."""
+        parser = searxng_cli.build_parser()
+        args = parser.parse_args(["search", "python", "--depth", "advanced", "--no-highlights"])
+        self.assertFalse(args.include_highlights)
+
+        with patch("searxng_client.unified_search") as mock_unified:
+            mock_unified.return_value = {"markdown": "results"}
+            ret = searxng_cli.cmd_search(args)
+            self.assertEqual(ret, 0)
+            mock_unified.assert_called_once()
+            self.assertFalse(mock_unified.call_args[1]["include_highlights"])
+
+    def test_cli_is_url_arg_delegation(self) -> None:
+        """Verify CLI _is_url_arg properly detects single URLs vs query text."""
+        self.assertTrue(searxng_cli._is_url_arg("https://example.com/test"))
+        self.assertFalse(searxng_cli._is_url_arg("https://example.com test query"))
+        self.assertFalse(searxng_cli._is_url_arg("normal text"))
+
 
 if __name__ == "__main__":
     unittest.main()

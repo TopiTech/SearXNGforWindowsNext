@@ -493,13 +493,16 @@ class DomainScorer:
 
             # Engine score if provided by SearXNG
             raw_score = r.get("score")
-            if (
-                isinstance(raw_score, (int, float))
-                and not math.isnan(raw_score)
-                and not math.isinf(raw_score)
-                and raw_score > 0
-            ):
-                base_score = (base_score + min(float(raw_score), 5.0) / 5.0) / 2.0
+            score_val = None
+            if isinstance(raw_score, (int, float)):
+                score_val = float(raw_score)
+            elif isinstance(raw_score, str):
+                try:
+                    score_val = float(raw_score)
+                except ValueError:
+                    pass
+            if score_val is not None and not math.isnan(score_val) and not math.isinf(score_val) and score_val > 0:
+                base_score = (base_score + min(score_val, 5.0) / 5.0) / 2.0
 
             dom_weight = self.get_domain_weight(dom)
             final_score = base_score * dom_weight
@@ -558,6 +561,27 @@ class BM25PassageExtractor:
                     passages.append(buffer.strip())
                     buffer = ""
                 passages.append(b)
+                continue
+
+            # If a single text block exceeds max_chars, split on sentence boundaries
+            if len(b) > max_chars:
+                if buffer:
+                    passages.append(buffer.strip())
+                    buffer = ""
+                sentences = re.split(r"(?<=[.!?。！？\n])\s+", b)
+                for s in sentences:
+                    s_clean = s.strip()
+                    if not s_clean:
+                        continue
+                    if len(buffer) + len(s_clean) + 1 <= max_chars:
+                        buffer = f"{buffer}\n\n{s_clean}" if buffer else s_clean
+                    else:
+                        if buffer:
+                            passages.append(buffer.strip())
+                        while len(s_clean) > max_chars:
+                            passages.append(s_clean[:max_chars].strip())
+                            s_clean = s_clean[max_chars:].strip()
+                        buffer = s_clean
                 continue
 
             # Normal text block
@@ -1159,7 +1183,9 @@ def execute_unified_search(
         }
 
     raw_results_val = search_res.get("results", [])
-    raw_results: list[dict[str, Any]] = [r for r in raw_results_val if isinstance(r, dict)] if isinstance(raw_results_val, list) else []
+    raw_results: list[dict[str, Any]] = (
+        [r for r in raw_results_val if isinstance(r, dict)] if isinstance(raw_results_val, list) else []
+    )
     direct_answers_val = search_res.get("answers", [])
     direct_answers: list[str] = [str(a) for a in direct_answers_val] if isinstance(direct_answers_val, list) else []
     infoboxes_val = search_res.get("infoboxes", [])
