@@ -172,11 +172,13 @@ class QueryOptimizer:
         for token in tokens:
             lower = token.lower()
             if lower.startswith("site:") and len(token) > 5:
-                domain = token[5:].strip().lower().removeprefix("www.")
+                raw_domain = token[5:].strip()
+                domain = extract_domain(raw_domain) or raw_domain.lower().removeprefix("www.").rstrip("/")
                 if domain:
                     include_domains.append(domain)
             elif lower.startswith("-site:") and len(token) > 6:
-                domain = token[6:].strip().lower().removeprefix("www.")
+                raw_domain = token[6:].strip()
+                domain = extract_domain(raw_domain) or raw_domain.lower().removeprefix("www.").rstrip("/")
                 if domain:
                     exclude_domains.append(domain)
             else:
@@ -478,7 +480,7 @@ class SpeculativeFetcher:
                 else:
                     item.scrape_error = "本文が見つかりませんでした"
                     item.is_scraped = False
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError, RuntimeError) as e:
+            except Exception as e:  # noqa: BLE001
                 item.scrape_error = str(e)
                 item.is_scraped = False
             return item
@@ -651,7 +653,8 @@ def execute_deep_search(
         extractor = BM25PassageExtractor()
 
         # Fetch in parallel
-        fetcher.fetch_pages(top_candidates, max_fetch=max_results)
+        fetch_timeout = timeout if timeout is not None else 6.0
+        fetcher.fetch_pages(top_candidates, max_fetch=max_results, timeout=fetch_timeout)
 
         for item in top_candidates:
             if item.is_scraped and item.full_content:

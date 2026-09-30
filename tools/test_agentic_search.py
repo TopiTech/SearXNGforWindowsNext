@@ -260,6 +260,52 @@ class TestExecuteDeepSearch(unittest.TestCase):
         self.assertIn("markdown", res)
         self.assertIn("Direct Answer", res["markdown"])
 
+    def test_execute_deep_search_forwards_custom_timeout(self) -> None:
+        mock_search = MagicMock()
+        mock_search.return_value = {
+            "query": "query",
+            "results": [{"title": "T", "url": "https://example.com", "content": "C"}],
+        }
+        mock_scrape = MagicMock()
+        mock_scrape.return_value = {"content": "Sample content"}
+
+        agentic_search.execute_deep_search(
+            query="test query",
+            search_func=mock_search,
+            scrape_func=mock_scrape,
+            search_depth="advanced",
+            timeout=8.5,
+        )
+
+        mock_search.assert_called_once()
+        self.assertEqual(mock_search.call_args[1]["timeout"], 8.5)
+        mock_scrape.assert_called_once()
+        self.assertEqual(mock_scrape.call_args[1]["timeout"], 8.5)
+
+
+class TestQueryOptimizerEdgeCases(unittest.TestCase):
+    """Test URL formats and edge cases in query parsing."""
+
+    def test_parse_query_with_urls_and_trailing_slashes(self) -> None:
+        query = "lifespan site:https://docs.python.org/3/ -site:spam.com/"
+        clean_q, inc, exc = agentic_search.QueryOptimizer.parse_query(query)
+        self.assertEqual(clean_q, "lifespan")
+        self.assertEqual(inc, ["docs.python.org"])
+        self.assertEqual(exc, ["spam.com"])
+
+    def test_fetch_pages_handles_unexpected_exception(self) -> None:
+        def crash_scrape(url: str, **kwargs):
+            raise RuntimeError("Unexpected scraper crash")
+
+        fetcher = agentic_search.SpeculativeFetcher(scrape_func=crash_scrape, max_workers=1)
+        items = [
+            agentic_search.SearchResultItem(title="Page 1", url="https://site1.com", domain="site1.com", content="snip1"),
+        ]
+        updated = fetcher.fetch_pages(items, max_fetch=1)
+        self.assertEqual(len(updated), 1)
+        self.assertFalse(updated[0].is_scraped)
+        self.assertIn("Unexpected scraper crash", updated[0].scrape_error)
+
 
 if __name__ == "__main__":
     unittest.main()

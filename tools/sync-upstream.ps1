@@ -270,7 +270,19 @@ synced_at=$(Get-Date -Format o)
 
     Write-Host ""
     Write-Host "Applying Windows-specific patches..." -ForegroundColor Green
-    & (Join-Path $repoRoot "tools\apply-windows-patches.ps1")
+    try {
+        & (Join-Path $repoRoot "tools\apply-windows-patches.ps1") --force
+    }
+    catch {
+        Write-Host ""
+        Write-Host "[ERROR] Upstream synchronization succeeded, but Windows patches failed to apply cleanly!" -ForegroundColor Red
+        Write-Host "  Upstream commit $commitSha may contain breaking structural changes." -ForegroundColor Red
+        Write-Host "  To view the failure diagnostics report, run:" -ForegroundColor Yellow
+        Write-Host "    .\python\python.exe tools\apply-patches.py --check" -ForegroundColor Yellow
+        Write-Host "  To restore files to their pre-patch state, run:" -ForegroundColor Yellow
+        Write-Host "    .\python\python.exe tools\apply-patches.py --rollback" -ForegroundColor Yellow
+        throw
+    }
 
     Write-Host ""
     Write-Host "[OK] Upstream synchronization complete!" -ForegroundColor Green

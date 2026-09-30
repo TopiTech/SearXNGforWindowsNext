@@ -8,6 +8,8 @@ __pycache__/
 changed_files.txt
 *.log
 .patches_cache.json
+.patches_report.json
+.patches_backup/
 /scratch/
 
 # Local user configuration and secrets. The tracked template is

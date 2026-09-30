@@ -556,7 +556,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')\n"
             "max_keepalive_connections=20\n"
             "_searxng_original_getaddrinfo\n"
-            "v17-bulletproof-scrape-fix\n"
+            "v18-bulletproof-scrape-fix\n"
             ".localdomain\n"
             ".arpa\n"
             "(?si)<script\n"
@@ -595,7 +595,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("import idna", res)
         self.assertIn("@app.route('/scrape'", res)
         self.assertIn("def scrape():", res)
-        self.assertIn("v17-bulletproof-scrape-fix", res)
+        self.assertIn("v18-bulletproof-scrape-fix", res)
         self.assertIn("def _parse_scrape_url", res)
         self.assertIn("def _read_scrape_response", res)
         self.assertIn("_SCRAPE_MAX_RESPONSE_BYTES", res)
@@ -623,6 +623,26 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         # HTTPX trusts HTTP(S)_PROXY by default.  The scrape client must make
         # direct, DNS-pinned connections instead of delegating DNS to a proxy.
         self.assertIn("trust_env=False", res)
+        # R5 regression: whitespace regex collapsing and hex IP SSRF blocking
+        self.assertIn(r"re.sub(r'\s+', ' ', raw_text).strip()", res)
+        self.assertNotIn(r"re.sub(r'\\s+'", res)
+
+    def test_scrape_hex_ip_and_whitespace_collapse(self):
+        content = (
+            "import warnings\n"
+            "from flask import Flask\n\n"
+            "@app.route('/search')\n"
+            "def search():\n"
+            "    pass\n"
+        )
+        res = self.fn(content, "webapp.py")
+        self.assertIn(r"re.sub(r'\s+', ' ', raw_text).strip()", res)
+        self.assertNotIn(r"re.sub(r'\\s+'", res)
+        self.assertIn("host_clean.startswith(('0x', '0X'))", res)
+        self.assertIn("ip_int = int(host_clean, 16)", res)
+        self.assertIn("v4_ips = [ip for ip in valid_ips if ':' not in ip]", res)
+        self.assertIn("ordered_ips = v4_ips + v6_ips", res)
+        self.assertIn("with pinned_dns(original_host, safe_ips, port):", res)
 
 
 class TestPatchProcessorsInit(unittest.TestCase):
@@ -1380,10 +1400,12 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
             self.assertIn(f"import {mod}", res)
 
     def test_read_scrape_response_streaming_timeout(self):
-        # Verification: Slowloris responses taking longer than max_duration must raise httpx.TimeoutException
         import time
 
-        import httpx
+        try:
+            import httpx
+        except ImportError:
+            self.skipTest("httpx is not installed in the test environment")
 
         class SlowResponse:
             def __init__(self):
@@ -2003,7 +2025,10 @@ class TestHardeningEnhancements(unittest.TestCase):
         """Verify _read_scrape_response respects SEARXNG_SCRAPE_MAX_DURATION environment override."""
         import time
 
-        import httpx
+        try:
+            import httpx
+        except ImportError:
+            self.skipTest("httpx is not installed in the test environment")
 
         def read_stream(chunks, env_dur=None, default_dur=15.0):
             max_duration = default_dur
@@ -2263,6 +2288,232 @@ class TestPatchCache(unittest.TestCase):
         self.assertTrue(apply_patches.is_patch_cache_valid())
 
 
+class TestPatchDiagnosticsAndResilience(unittest.TestCase):
+    """Verify enhanced patch resilience, fallback matching, diagnostics, and rollback."""
+
+    def test_patch_valkeydb_fallback_when_pwd_absent(self):
+        """If upstream completely removed pwd dependency, valkeydb patch should be ALREADY_APPLIED."""
+        content = "import os\n\ndef connect():\n    return 'connected'\n"
+        result = apply_patches.patch_valkeydb(content, "valkeydb.py")
+        self.assertEqual(result, "ALREADY_APPLIED")
+
+    def test_patch_valkeydb_fallback_when_logger_var_changed(self):
+        """If logger initialization differs, valkeydb patch should fall back after imports."""
+        content = (
+            "import os\n"
+            "import pwd\n"
+            "log = get_my_logger()\n\n"
+            "def connect():\n"
+            "    _pw = pwd.getpwuid(os.getuid())\n"
+            "    logger.exception('can\\'t connect valkey DB ...')\n"
+        )
+        patched = apply_patches.patch_valkeydb(content, "valkeydb.py")
+        self.assertIn("def _windows_safe_current_user():", patched)
+        self.assertIn("_user_name, _user_uid = _windows_safe_current_user()", patched)
+
+    def test_patch_settings_defaults_with_type_annotation_or_tuple(self):
+        """Settings defaults patch should handle type annotations and tuple syntax."""
+        sample_annotated = "OUTPUT_FORMATS: list[str] = [\n    'html',\n    'json',\n]\n"
+        patched1 = apply_patches.patch_settings_defaults(sample_annotated, "settings_defaults.py")
+        self.assertIn("'json_lite'", patched1)
+
+        sample_tuple = "OUTPUT_FORMATS = ('html', 'json')\n"
+        patched2 = apply_patches.patch_settings_defaults(sample_tuple, "settings_defaults.py")
+        self.assertIn("'json_lite'", patched2)
+
+    def test_patch_webutils_fallback_when_get_themes_missing(self):
+        """If get_themes is missing in webutils, get_json_lite_response falls back to other functions or EOF."""
+        sample = "import json\n\ndef render(t, **kw):\n    return ''\n"
+        patched = apply_patches.patch_webutils(sample, "webutils.py")
+        self.assertIn("def get_json_lite_response", patched)
+        import ast
+        ast.parse(patched)  # syntax must be valid
+
+    def test_patch_webapp_scrape_route_fallback_anchors(self):
+        """If @app.route('/search') is absent, fallback anchors inject /scrape route safely."""
+        sample = (
+            "import warnings\n"
+            "from flask import Flask\n\n"
+            "@main_bp.route('/search')\n"
+            "def search():\n"
+            "    pass\n"
+        )
+        patched = apply_patches.patch_webapp_scrape_route(sample, "webapp.py")
+        self.assertIn("def scrape():", patched)
+        self.assertIn("@app.route('/scrape'", patched)
+        import ast
+        ast.parse(patched)
+
+    def test_patch_online_captcha_fallback_anchors(self):
+        """If original import block is altered upstream, fallback anchor injects _parse_retry_after_header."""
+        sample = (
+            "from .abstract import EngineProcessor\n"
+            "from searx.metrics.error_recorder import count_error\n\n"
+            "class OnlineEngineProcessor(EngineProcessor):\n"
+            "    def error_handler(self, result_container):\n"
+            "        try:\n"
+            "            pass\n"
+            "        except (\n"
+            "            SearxEngineCaptchaException,\n"
+            "            SearxEngineTooManyRequestsException,\n"
+            "            SearxEngineAccessDeniedException,\n"
+            "        ) as e:\n"
+            "            self.handle_exception(result_container, e, suspend=True)\n"
+            "            self.logger.debug(e.message)\n"
+        )
+        patched = apply_patches.patch_online_captcha(sample, "online.py")
+        self.assertIn("def _parse_retry_after_header", patched)
+        self.assertIn("except SearxEngineCaptchaException as e:", patched)
+        import ast
+        ast.parse(patched)
+
+    def test_diagnose_patch_failure_identifies_missing_anchors_and_tokens(self):
+        """Diagnostic analyzer should locate missing anchors and report token occurrences."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fpath = os.path.join(tmpdir, "test_file.py")
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write("def custom_user_func():\n    return 'user'\n")
+
+            missing, suggestions = apply_patches.diagnose_patch_failure(
+                fpath,
+                "Test Patch",
+                expected_anchors=["pwd.getpwuid(os.getuid())"],
+                diagnostic_hint="pwd module missing on Windows.",
+            )
+            self.assertEqual(len(missing), 1)
+            self.assertIn("pwd.getpwuid", missing[0])
+            self.assertTrue(any("Hint: pwd module missing on Windows." in s for s in suggestions))
+
+    def test_patch_transaction_backup_and_rollback(self):
+        """PatchTransaction should back up files and restore them completely upon rollback."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fpath = os.path.join(tmpdir, "sample.txt")
+            original_text = "original content before patching"
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write(original_text)
+
+            tx = apply_patches.PatchTransaction(backup_dir=os.path.join(tmpdir, ".backups"))
+            # Update file using update_file with transaction
+            res = apply_patches.update_file(
+                fpath,
+                "test transaction update",
+                lambda c, p: "MODIFIED TEXT",
+                raise_on_failure=False,
+                transaction=tx,
+            )
+            self.assertEqual(res.status, apply_patches.PatchStatus.PATCHED)
+            with open(fpath, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), "MODIFIED TEXT")
+
+            # Roll back
+            restored = tx.rollback()
+            self.assertIn(os.path.abspath(fpath), restored)
+            with open(fpath, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), original_text)
+
+    def test_update_file_batch_mode_returns_patch_result(self):
+        """When raise_on_failure=False, update_file returns PatchResult without raising exception."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fpath = os.path.join(tmpdir, "target.py")
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write("unchanged code")
+
+            # Patch returns unchanged content and is not noop -> should fail cleanly
+            res = apply_patches.update_file(
+                fpath,
+                "failing patch",
+                lambda c, p: c,
+                raise_on_failure=False,
+            )
+            self.assertEqual(res.status, apply_patches.PatchStatus.FAILED)
+            self.assertIn("could not find injection point", res.message)
+
+    def test_run_all_patches_batch_collection(self):
+        """run_all_patches should execute all specs and aggregate both successes and failures."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            f1 = os.path.join(tmpdir, "f1.py")
+            f2 = os.path.join(tmpdir, "f2.py")
+            with open(f1, "w", encoding="utf-8") as f:
+                f.write("content 1")
+            with open(f2, "w", encoding="utf-8") as f:
+                f.write("content 2")
+
+            specs = [
+                apply_patches.PatchSpec(
+                    name="spec1",
+                    target_path=f1,
+                    description="spec 1 success",
+                    patch_func=lambda c, p: "var1 = 1\n",
+                    severity=apply_patches.PatchSeverity.CRITICAL,
+                ),
+                apply_patches.PatchSpec(
+                    name="spec2",
+                    target_path=f2,
+                    description="spec 2 failure",
+                    patch_func=lambda c, p: c,  # fails
+                    severity=apply_patches.PatchSeverity.FEATURE,
+                ),
+            ]
+
+            results = apply_patches.run_all_patches(specs)
+            self.assertEqual(len(results), 2)
+            self.assertEqual(results[0].status, apply_patches.PatchStatus.PATCHED)
+            self.assertEqual(results[1].status, apply_patches.PatchStatus.FAILED)
+
+    def test_cli_main_check_mode(self):
+        """CLI main with --check returns exit code 0."""
+        with mock.patch("sys.argv", ["apply-patches.py", "--check"]):
+            exit_code = apply_patches.main()
+            self.assertEqual(exit_code, 0)
+
+    def test_cli_main_exit_codes_with_mock_failures(self):
+        """CLI main returns 1 for CRITICAL failures and 2 for non-critical failures (or 1 under --strict)."""
+        mock_spec_optional_fail = [
+            apply_patches.PatchSpec(
+                name="opt_fail",
+                target_path=os.path.join(apply_patches.REPO_ROOT, "UPSTREAM_VERSION.txt"),
+                description="optional failure spec",
+                patch_func=lambda c, p: c,  # fails
+                severity=apply_patches.PatchSeverity.OPTIONAL,
+            )
+        ]
+        mock_spec_critical_fail = [
+            apply_patches.PatchSpec(
+                name="crit_fail",
+                target_path=os.path.join(apply_patches.REPO_ROOT, "UPSTREAM_VERSION.txt"),
+                description="critical failure spec",
+                patch_func=lambda c, p: c,  # fails
+                severity=apply_patches.PatchSeverity.CRITICAL,
+            )
+        ]
+
+        # 1. Non-critical failure without --strict returns 2
+        with (
+            mock.patch.object(apply_patches, "PATCH_SPECS", mock_spec_optional_fail),
+            mock.patch("sys.argv", ["apply-patches.py", "--check"]),
+        ):
+            exit_code = apply_patches.main()
+            self.assertEqual(exit_code, 2)
+
+        # 2. Non-critical failure with --strict returns 1
+        with (
+            mock.patch.object(apply_patches, "PATCH_SPECS", mock_spec_optional_fail),
+            mock.patch("sys.argv", ["apply-patches.py", "--check", "--strict"]),
+        ):
+            exit_code = apply_patches.main()
+            self.assertEqual(exit_code, 1)
+
+        # 3. Critical failure returns 1
+        with (
+            mock.patch.object(apply_patches, "PATCH_SPECS", mock_spec_critical_fail),
+            mock.patch("sys.argv", ["apply-patches.py", "--check"]),
+        ):
+            exit_code = apply_patches.main()
+            self.assertEqual(exit_code, 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
 

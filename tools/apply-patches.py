@@ -1,11 +1,16 @@
+import argparse
 import ast
 import json
 import logging
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger("apply-patches")
@@ -14,6 +19,198 @@ logger = logging.getLogger("apply-patches")
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SITE_PACKAGES = os.path.join(REPO_ROOT, "python", "Lib", "site-packages")
 CACHE_FILE = os.path.join(REPO_ROOT, "python", ".patches_cache.json")
+BACKUP_DIR = os.path.join(REPO_ROOT, "python", ".patches_backup")
+REPORT_FILE = os.path.join(REPO_ROOT, "python", ".patches_report.json")
+
+
+class PatchSeverity:
+    CRITICAL = "CRITICAL"  # Essential for Windows runtime (e.g., pwd bypass)
+    FEATURE = "FEATURE"    # Custom project features (/scrape, json_lite, Retry-After)
+    OPTIONAL = "OPTIONAL"  # UI tweaks, engine edge-cases, default tuning
+
+
+class PatchStatus:
+    PATCHED = "PATCHED"
+    ALREADY_APPLIED = "ALREADY_APPLIED"
+    SKIPPED = "SKIPPED"
+    FAILED = "FAILED"
+
+
+@dataclass
+class PatchResult:
+    name: str
+    target_path: str
+    severity: str
+    status: str
+    message: str = ""
+    error_detail: str | None = None
+    missing_anchors: list[str] = field(default_factory=list)
+    suggestions: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "target_path": self.target_path,
+            "severity": self.severity,
+            "status": self.status,
+            "message": self.message,
+            "error_detail": self.error_detail,
+            "missing_anchors": self.missing_anchors,
+            "suggestions": self.suggestions,
+        }
+
+
+@dataclass
+class PatchSpec:
+    name: str
+    target_path: str
+    description: str
+    patch_func: Callable[[str, str], str]
+    severity: str = PatchSeverity.FEATURE
+    required_file: bool = True
+    expected_anchors: list[str] = field(default_factory=list)
+    diagnostic_hint: str = ""
+
+
+class PatchTransaction:
+    """Manages file backups and atomic rollback for patch operations."""
+
+    def __init__(self, backup_dir: str = BACKUP_DIR):
+        self.backup_dir = backup_dir
+        self.originals: dict[str, str] = {}  # file_path -> original content
+        self.persisted_paths: list[str] = []
+
+    def record_original(self, file_path: str, content: str) -> None:
+        """Store original file content in memory and persist on disk if needed."""
+        norm_path = os.path.abspath(file_path)
+        if norm_path not in self.originals:
+            self.originals[norm_path] = content
+
+    def persist_backups(self) -> None:
+        """Persist memory backups to disk for CLI rollback support."""
+        if not self.originals:
+            return
+        try:
+            os.makedirs(self.backup_dir, exist_ok=True)
+            manifest = {}
+            for path, content in self.originals.items():
+                rel = os.path.relpath(path, REPO_ROOT).replace("\\", "_").replace("/", "_")
+                backup_file = os.path.join(self.backup_dir, f"{rel}.bak")
+                with open(backup_file, "w", encoding="utf-8") as f:
+                    f.write(content)
+                manifest[path] = backup_file
+            manifest_file = os.path.join(self.backup_dir, "manifest.json")
+            with open(manifest_file, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
+        except OSError as exc:
+            logger.warning(f"Could not persist rollback backups: {exc}")
+
+    def rollback(self) -> list[str]:
+        """Roll back all modified files to their original state."""
+        restored = []
+        # Try memory backups first
+        if self.originals:
+            for path, content in self.originals.items():
+                try:
+                    _atomic_write(path, content, encoding='utf-8', newline='\n')
+                    restored.append(path)
+                except OSError as exc:
+                    logger.error(f"Failed to restore {path} from memory backup: {exc}")
+            return restored
+
+        # Otherwise try disk manifest
+        manifest_file = os.path.join(self.backup_dir, "manifest.json")
+        if os.path.exists(manifest_file):
+            try:
+                with open(manifest_file, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+                for orig_path, bak_path in manifest.items():
+                    if os.path.exists(bak_path):
+                        with open(bak_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        _atomic_write(orig_path, content, encoding='utf-8', newline='\n')
+                        restored.append(orig_path)
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.error(f"Failed to restore from disk backups: {exc}")
+        return restored
+
+    def cleanup(self) -> None:
+        """Remove disk backups upon full success."""
+        if os.path.exists(self.backup_dir):
+            try:
+                shutil.rmtree(self.backup_dir)
+            except OSError:
+                pass
+
+
+def get_upstream_version_info() -> dict[str, str]:
+    """Retrieve upstream sync metadata from UPSTREAM_VERSION.txt."""
+    v_file = os.path.join(REPO_ROOT, "UPSTREAM_VERSION.txt")
+    info = {}
+    if os.path.exists(v_file):
+        try:
+            with open(v_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        info[k.strip()] = v.strip()
+        except OSError:
+            pass
+    return info
+
+
+def diagnose_patch_failure(
+    file_path: str,
+    description: str,
+    expected_anchors: list[str] | None,
+    diagnostic_hint: str | None,
+    error_message: str = "",
+    file_content: str = "",
+) -> tuple[list[str], list[str]]:
+    """Analyze why a patch failed, identifying missing anchors and suggesting fixes."""
+    missing_anchors = []
+    suggestions = []
+
+    if not os.path.exists(file_path):
+        suggestions.append(f"Target file does not exist: {file_path}. Upstream may have removed or relocated it.")
+        return missing_anchors, suggestions
+
+    if not file_content:
+        try:
+            with open(file_path, "r", encoding="utf-8-sig") as f:
+                file_content = f.read()
+        except OSError as e:
+            suggestions.append(f"Could not read target file for diagnostic analysis: {e}")
+            return missing_anchors, suggestions
+
+    # Check anchors
+    if expected_anchors:
+        for anchor in expected_anchors:
+            if anchor not in file_content:
+                missing_anchors.append(anchor)
+                # Try finding relevant tokens in the file to aid developer
+                tokens = [t for t in re.findall(r'[a-zA-Z_][a-zA-Z0-9_]{3,}', anchor) if t not in ('self', 'None', 'True', 'False', 'import', 'from', 'def', 'class')]
+                found_lines = []
+                for lineno, line in enumerate(file_content.splitlines(), start=1):
+                    for tok in tokens[:3]:
+                        if tok in line and len(found_lines) < 3:
+                            found_lines.append(f"L{lineno}: {line.strip()[:80]}")
+                            break
+                if found_lines:
+                    suggestions.append(f"Anchor '{anchor[:40]}...' not found. Nearby matches for tokens in file:\n      " + "\n      ".join(found_lines))
+
+    if diagnostic_hint:
+        suggestions.append(f"Hint: {diagnostic_hint}")
+
+    # Add upstream version context
+    upstream_info = get_upstream_version_info()
+    commit = upstream_info.get("resolved_commit", "unknown")
+    date = upstream_info.get("resolved_commit_date", "unknown")
+    rel_path = os.path.relpath(file_path, REPO_ROOT).replace("\\", "/")
+    suggestions.append(f"Upstream commit: {commit} ({date}). Check upstream diff: 'git log -p -n 3 -- {rel_path}'")
+
+    return missing_anchors, suggestions
 
 
 def _get_tracked_targets() -> list[str]:
@@ -80,7 +277,6 @@ def save_patch_cache() -> None:
         logger.warning(f"Failed to write patch cache: {exc}")
 
 
-
 def _atomic_write(file_path: str, data: str, encoding: str = 'utf-8', newline: str = '\n') -> None:
     """Atomically write data to file_path using a temporary file and os.replace.
     Includes retries with backoff for Windows filesystem lock contention.
@@ -126,42 +322,175 @@ def _is_noop_patch(patch_func, content):
     return getattr(patch_func, "_noop_when_unchanged", False)
 
 
-def update_file(file_path, description, patch_func, *, required=True):
+def update_file(
+    file_path: str,
+    description: str,
+    patch_func: Callable[[str, str], str],
+    *,
+    required: bool = True,
+    severity: str = PatchSeverity.FEATURE,
+    raise_on_failure: bool = True,
+    dry_run: bool = False,
+    transaction: PatchTransaction | None = None,
+    expected_anchors: list[str] | None = None,
+    diagnostic_hint: str = "",
+) -> str | PatchResult:
+    """Apply patch_func to file_path with syntax validation and atomic write.
+
+    When raise_on_failure=True (default), raises RuntimeError on error for backward compatibility.
+    When raise_on_failure=False, returns a PatchResult object without raising.
+    """
     if not os.path.exists(file_path):
         if required:
-            raise RuntimeError(f"Required patch target not found for {description}: {file_path}")
+            err = f"Required patch target not found for {description}: {file_path}"
+            if raise_on_failure:
+                raise RuntimeError(err)
+            missing, suggestions = diagnose_patch_failure(
+                file_path, description, expected_anchors, diagnostic_hint, error_message=err
+            )
+            return PatchResult(
+                name=description,
+                target_path=file_path,
+                severity=severity,
+                status=PatchStatus.FAILED,
+                message=err,
+                error_detail=err,
+                missing_anchors=missing,
+                suggestions=suggestions,
+            )
         logger.warning(f"Optional file not found, skipping {description}: {file_path}")
-        return "SKIPPED"
+        if raise_on_failure:
+            return "SKIPPED"
+        return PatchResult(
+            name=description,
+            target_path=file_path,
+            severity=severity,
+            status=PatchStatus.SKIPPED,
+            message="Optional file not found, skipped.",
+        )
 
-    with open(file_path, 'r', encoding='utf-8-sig') as f:
-        content = f.read()
+    try:
+        with open(file_path, 'r', encoding='utf-8-sig') as f:
+            content = f.read()
+    except Exception as exc:
+        err = f"Could not read {file_path} for {description}: {exc}"
+        if raise_on_failure:
+            raise RuntimeError(err) from exc
+        return PatchResult(
+            name=description,
+            target_path=file_path,
+            severity=severity,
+            status=PatchStatus.FAILED,
+            message=err,
+            error_detail=str(exc),
+        )
 
     # Normalize CRLF to LF for consistent regex and anchor matching
     normalized_content = content.replace('\r\n', '\n')
 
-    result = patch_func(normalized_content, file_path)
+    # Record original content in transaction for safe rollback
+    if transaction is not None:
+        transaction.record_original(file_path, content)
+
+    try:
+        result = patch_func(normalized_content, file_path)
+    except Exception as exc:
+        err = f"Patch function raised an exception for {description}: {exc}"
+        if raise_on_failure:
+            raise RuntimeError(err) from exc
+        missing, suggestions = diagnose_patch_failure(
+            file_path, description, expected_anchors, diagnostic_hint, error_message=str(exc), file_content=normalized_content
+        )
+        return PatchResult(
+            name=description,
+            target_path=file_path,
+            severity=severity,
+            status=PatchStatus.FAILED,
+            message=err,
+            error_detail=str(exc),
+            missing_anchors=missing,
+            suggestions=suggestions,
+        )
 
     if result == "ALREADY_APPLIED":
         logger.info(f"Already applied: {description}")
-        return "ALREADY_APPLIED"
+        if raise_on_failure:
+            return "ALREADY_APPLIED"
+        return PatchResult(
+            name=description,
+            target_path=file_path,
+            severity=severity,
+            status=PatchStatus.ALREADY_APPLIED,
+            message="Already applied.",
+        )
     elif result == normalized_content:
         if _is_noop_patch(patch_func, normalized_content):
             logger.info(f"Already applied: {description}")
-            return "ALREADY_APPLIED"
-        raise RuntimeError(f"Patch failed for {description}: Upstream code may have changed, could not find injection point in {file_path}.")
+            if raise_on_failure:
+                return "ALREADY_APPLIED"
+            return PatchResult(
+                name=description,
+                target_path=file_path,
+                severity=severity,
+                status=PatchStatus.ALREADY_APPLIED,
+                message="Already in desired state (no-op rewrite).",
+            )
+        err = f"Patch failed for {description}: Upstream code may have changed, could not find injection point in {file_path}."
+        if raise_on_failure:
+            raise RuntimeError(err)
+        missing, suggestions = diagnose_patch_failure(
+            file_path, description, expected_anchors, diagnostic_hint, error_message=err, file_content=normalized_content
+        )
+        return PatchResult(
+            name=description,
+            target_path=file_path,
+            severity=severity,
+            status=PatchStatus.FAILED,
+            message=err,
+            error_detail=err,
+            missing_anchors=missing,
+            suggestions=suggestions,
+        )
     else:
         # Validate syntax if patching a Python file to prevent runtime breakage
         if file_path.endswith('.py'):
             try:
                 ast.parse(result, filename=file_path)
             except SyntaxError as exc:
-                raise RuntimeError(
-                    f"Patch validation failed for {description}: Generated invalid Python syntax at line {exc.lineno}: {exc.msg}"
-                ) from exc
+                err = f"Patch validation failed for {description}: Generated invalid Python syntax at line {exc.lineno}: {exc.msg}"
+                if raise_on_failure:
+                    raise RuntimeError(err) from exc
+                missing, suggestions = diagnose_patch_failure(
+                    file_path, description, expected_anchors, diagnostic_hint, error_message=err, file_content=result
+                )
+                suggestions.insert(0, f"SyntaxError line {exc.lineno}: {exc.text or ''}")
+                return PatchResult(
+                    name=description,
+                    target_path=file_path,
+                    severity=severity,
+                    status=PatchStatus.FAILED,
+                    message=err,
+                    error_detail=f"SyntaxError at line {exc.lineno}: {exc.msg}",
+                    missing_anchors=missing,
+                    suggestions=suggestions,
+                )
 
-        _atomic_write(file_path, result, encoding='utf-8', newline='\n')
-        logger.info(f"Patched: {description}")
-        return "PATCHED"
+        if not dry_run:
+            _atomic_write(file_path, result, encoding='utf-8', newline='\n')
+            logger.info(f"Patched: {description}")
+        else:
+            logger.info(f"[DRY-RUN] Would patch: {description}")
+
+        if raise_on_failure:
+            return "PATCHED"
+        return PatchResult(
+            name=description,
+            target_path=file_path,
+            severity=severity,
+            status=PatchStatus.PATCHED,
+            message="Successfully patched (dry-run verified)" if dry_run else "Successfully patched.",
+        )
+
 
 # --- Patch 1: valkeydb.py (Windows compatibility: pwd → os.environ fallback) ---
 def patch_valkeydb(content, path):
@@ -169,9 +498,13 @@ def patch_valkeydb(content, path):
             and '_user_name, _user_uid = _windows_safe_current_user()' in content):
         return "ALREADY_APPLIED"
 
+    # If upstream has completely eliminated Unix pwd dependency, it is safe on Windows
+    if "pwd" not in content:
+        return "ALREADY_APPLIED"
+
     # 1. Wrap Unix-only `import pwd` in try/except
     content = re.sub(
-        r'^import pwd$',
+        r'^(?:import pwd\b|from pwd import\b.*)$',
         "try:\n    import pwd  # Unix only\nexcept ImportError:\n    pwd = None",
         content, flags=re.MULTILINE
     )
@@ -203,14 +536,34 @@ def _windows_safe_current_user():
             helper.rstrip(), content, flags=re.DOTALL
         )
     else:
-        content = re.sub(
+        # Try primary anchor
+        content, count = re.subn(
             r'(logger = logging\.getLogger\(__name__\))',
-            r'\1' + helper, content
+            r'\1' + helper, content, count=1
         )
+        if count == 0:
+            # Fallback: logger with other arguments or after the last top-level import
+            content, count = re.subn(
+                r'(logger\s*=\s*logging\.getLogger\([^)]+\))',
+                r'\1' + helper, content, count=1
+            )
+        if count == 0:
+            import_matches = list(re.finditer(r'(?m)^(?:from\s+\S+\s+import\s+.+|import\s+.+)$', content))
+            if import_matches:
+                last_import = import_matches[-1]
+                idx = last_import.end()
+                content = content[:idx] + helper + content[idx:]
+            else:
+                content = helper + "\n" + content
 
     # 3. Replace call-site (indent-aware, exclude nested blocks)
     content = re.sub(
         r'^(\s{1,8})_pw = pwd\.getpwuid\(os\.getuid\(\)\)',
+        r'\1_user_name, _user_uid = _windows_safe_current_user()',
+        content, flags=re.MULTILINE
+    )
+    content = re.sub(
+        r'^(\s{1,8})\w+\s*=\s*pwd\.getpwuid\([^)]+\)',
         r'\1_user_name, _user_uid = _windows_safe_current_user()',
         content, flags=re.MULTILINE
     )
@@ -225,14 +578,18 @@ def _windows_safe_current_user():
 
 # --- Patch 2: settings_defaults.py (register json_lite output format) ---
 def patch_settings_defaults(content, path):
-    if "'json_lite'" in content:
+    if "'json_lite'" in content or '"json_lite"' in content:
         return "ALREADY_APPLIED"
 
-    match = re.search(r"(?ms)(OUTPUT_FORMATS\s*=\s*\[)(.*?)(\])", content)
+    # Match list or tuple, with optional type annotations
+    match = re.search(r"(?ms)(OUTPUT_FORMATS(?:\s*:\s*[^=]+)?\s*=\s*(\[|\())(.*?)(\]|\))", content)
     if not match:
         return content
 
-    body = match.group(2)
+    opening = match.group(1)
+    body = match.group(3)
+    closing = match.group(4)
+
     if re.search(r"(?m)^\s*['\"]json_lite['\"]\s*,?\s*$", body):
         return "ALREADY_APPLIED"
 
@@ -242,14 +599,15 @@ def patch_settings_defaults(content, path):
             body += ","
         body += "\n    'json_lite'"
     else:
-        # Handle empty list case: avoid leading comma in "[, 'json_lite']"
+        # Handle empty list/tuple case
         body = body.rstrip()
         if body:
             body += ", 'json_lite'"
         else:
             body = "'json_lite'"
 
-    return content[:match.start()] + match.group(1) + body + match.group(3) + content[match.end():]
+    return content[:match.start()] + opening + body + closing + content[match.end():]
+
 
 # --- Patch 3: webutils.py (add get_json_lite_response, optimised & hardened) ---
 def patch_webutils(content, path):
@@ -396,13 +754,22 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
         content = re.sub(r'(?s)\n+def get_json_lite_response.*?return json\.dumps\(data, cls=JSONEncoder.*?\)\n+', "\n", content)
 
     # Insert before get_themes while preserving a single blank-line boundary.
-    # Match the line start optionally so the patch works whether get_themes is
-    # the first definition in the module or follows other top-level code.
-    content, _ = re.subn(
+    # If get_themes is missing (e.g. relocated upstream), fall back to other stable entry points or EOF.
+    fallback_anchors = [
         r'(^|\n)(def get_themes\b)',
-        lite_func + r'\1\2',
-        content,
-    )
+        r'(^|\n)(def render\b)',
+        r'(^|\n)(def is_safe_url\b)',
+        r'(^|\n)(def [a-zA-Z0-9_]+\b)',
+    ]
+    inserted = False
+    for anchor in fallback_anchors:
+        if re.search(anchor, content):
+            content, count = re.subn(anchor, lite_func + r'\1\2', content, count=1)
+            if count > 0:
+                inserted = True
+                break
+    if not inserted:
+        content = content.rstrip() + "\n\n" + lite_func + "\n"
     return content
 
 # --- Patch 3b: webutils.py (normalize Windows paths used in URL lookups) ---
@@ -514,11 +881,14 @@ def patch_webapp_json_handler(content, path):
     # 2. Add top-level `import ipaddress` (remove any indented duplicates first)
     if not re.search(r'^import ipaddress', content, re.MULTILINE):
         content = re.sub(r'^\s+import ipaddress\n', '', content, flags=re.MULTILINE)
-        content, count = re.subn(r'(import warnings\n)', r'\1import ipaddress\n', content)
+        content, count = re.subn(r'(import warnings\n)', r'\1import ipaddress\n', content, count=1)
         if count == 0:
-            content, count = re.subn(r'(from flask import\b|import flask\b)', r'import ipaddress\n\1', content)
+            content, count = re.subn(r'(from flask import\b|import flask\b)', r'import ipaddress\n\1', content, count=1)
         if count == 0:
-            raise RuntimeError(f"Patch failed for {path}: Could not find insertion point for 'import ipaddress'.")
+            # Fallback: after the last top-level import or at the beginning of the file
+            content, count = re.subn(r'(?m)^(import\s+[a-zA-Z0-9_.]+|from\s+[a-zA-Z0-9_.]+\s+import\s+.*)$', r'\g<0>\nimport ipaddress', content, count=1)
+        if count == 0:
+            content = "import ipaddress\n" + content
 
     # 2b. Add Windows selector event loop policy to avoid curl_cffi warning on Windows
     if "WindowsSelectorEventLoopPolicy" not in content:
@@ -534,9 +904,11 @@ def patch_webapp_json_handler(content, path):
         if count == 0:
             content, count = re.subn(r'(import os\n)', r'\1' + loop_policy, content, count=1)
         if count == 0:
+            content, count = re.subn(r'(import ipaddress\n)', r'\1' + loop_policy, content, count=1)
+        if count == 0:
             logger.warning("Could not inject WindowsSelectorEventLoopPolicy, anchor not found.")
 
-    # 3. Inject json_lite handler before json handler (stable anchor point)
+    # 3. Inject json_lite handler before json handler (stable anchor point with fallbacks)
     if "output_format == 'json_lite'" not in content:
         handler = (
             "\n    if output_format == 'json_lite':\n"
@@ -546,10 +918,25 @@ def patch_webapp_json_handler(content, path):
         content, count = re.subn(
             r"(?m)^(\s*if\s+output_format\s*==\s*['\"]json['\"]:\s*\n\s*response\s*=\s*webutils\.get_json_response)",
             handler + r"\1",
-            content
+            content,
+            count=1
         )
         if count == 0:
-            content, count = re.subn(r"(# 3\. formats without a template\r?\n)", r"\1" + handler, content)
+            content, count = re.subn(
+                r"(?m)^(\s*if\s+output_format\s*==\s*['\"]json['\"]:\s*)",
+                handler + r"\1",
+                content,
+                count=1
+            )
+        if count == 0:
+            content, count = re.subn(r"(# 3\. formats without a template\r?\n)", r"\1" + handler, content, count=1)
+        if count == 0:
+            content, count = re.subn(
+                r"(?m)^(\s*if\s+output_format\s*==\s*['\"](?:csv|rss)['\"]:)",
+                handler + r"\1",
+                content,
+                count=1
+            )
         if count == 0:
             raise RuntimeError(f"Patch failed for {path}: Could not find json format handler anchor to inject json_lite handler.")
 
@@ -575,7 +962,7 @@ def patch_webapp_scrape_route(content, path):
         "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')", # default should be true
         "max_keepalive_connections=20",
         "_searxng_original_getaddrinfo",
-        "v17-bulletproof-scrape-fix",
+        "v18-bulletproof-scrape-fix",
         ".localdomain",
         ".arpa",
         "(?si)<script",
@@ -597,10 +984,7 @@ def patch_webapp_scrape_route(content, path):
         "Invalid port: 0",
         "Port mismatch for pinned host",
     ]
-    if (
-        all(anchor in content for anchor in required_anchors)
-        and ("Resolution failed for pinned host" in content or "except Exception:\n                    pass" not in content)
-    ):
+    if all(anchor in content for anchor in required_anchors):
         return "ALREADY_APPLIED"
 
     # 1. Add imports at module level (ensure re, html, httpx, idna, time, and urllib are present)
@@ -636,7 +1020,7 @@ def patch_webapp_scrape_route(content, path):
 
     # 3. Inject global client holder and pinned_dns context manager before scrape route
     # Also define the new route
-    scrape_route_code = '''
+    scrape_route_code = r'''
 
 # --- GenAI Scrape Helpers ---
 class _ScrapeBlockedError(Exception):
@@ -734,22 +1118,24 @@ def _safe_getaddrinfo(h, p, *args, **kwargs):
             )
             if port_matches:
                 try:
-                    ip_obj = ipaddress.ip_address(pin['ip'])
+                    port_num = int(pin_port if pin_port is not None else (443 if p_str in (443, '443', 'https') else 80))
+                except (ValueError, TypeError):
+                    port_num = 443 if p_str in (443, '443', 'https') else 80
+                req_family = args[0] if len(args) > 0 else kwargs.get('family', 0)
+                pin_ips = pin.get('ips') or ([pin['ip']] if pin.get('ip') else [])
+                addr_tuples = []
+                for candidate in pin_ips:
                     try:
-                        port_num = int(pin_port if pin_port is not None else (443 if p_str in (443, '443', 'https') else 80))
-                    except (ValueError, TypeError):
-                        port_num = 443 if p_str in (443, '443', 'https') else 80
-                    req_family = args[0] if len(args) > 0 else kwargs.get('family', 0)
-                    ip_family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
-                    if req_family in (0, ip_family):
-                        sockaddr = (pin['ip'], port_num, 0, 0) if ip_obj.version == 6 else (pin['ip'], port_num)
-                        return [(ip_family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', sockaddr)]
-                    else:
-                        raise socket.gaierror(socket.EAI_NONAME, f'Address family not supported for pinned host {pin_host}')
-                except socket.gaierror:
-                    raise
-                except Exception as exc:
-                    raise socket.gaierror(socket.EAI_NONAME, f'Resolution failed for pinned host {pin_host}: {exc}')
+                        ip_obj = ipaddress.ip_address(candidate)
+                        ip_family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
+                        if req_family in (0, ip_family):
+                            sockaddr = (candidate, port_num, 0, 0) if ip_obj.version == 6 else (candidate, port_num)
+                            addr_tuples.append((ip_family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', sockaddr))
+                    except Exception:
+                        continue
+                if addr_tuples:
+                    return addr_tuples
+                raise socket.gaierror(socket.EAI_NONAME, f'Address family not supported for pinned host {pin_host}')
             else:
                 raise socket.gaierror(socket.EAI_NONAME, f'Port mismatch for pinned host {pin_host}: {p} != {pin_port}')
     return _original_getaddrinfo(h, p, *args, **kwargs)
@@ -763,7 +1149,9 @@ def pinned_dns(host, ip, port):
     Bypasses standard DNS resolution for a specific host/port to a target IP
     within the current thread execution context.
     """
-    _thread_local_dns.pin = {'host': host, 'ip': ip, 'port': port}
+    ips = [ip] if isinstance(ip, str) else list(ip)
+    primary = ips[0] if ips else ''
+    _thread_local_dns.pin = {'host': host, 'ip': primary, 'ips': ips, 'port': port}
     try:
         yield
     finally:
@@ -843,6 +1231,13 @@ def _is_blocked_scrape_host(host):
                     return _is_ip_blocked(ipaddress.IPv4Address(ip_int))
             except Exception:
                 pass
+        elif host_clean.startswith(('0x', '0X')):
+            try:
+                ip_int = int(host_clean, 16)
+                if 0 <= ip_int <= 0xFFFFFFFF:
+                    return _is_ip_blocked(ipaddress.IPv4Address(ip_int))
+            except Exception:
+                pass
 
     try:
         for res in socket.getaddrinfo(host_clean, None):
@@ -856,7 +1251,7 @@ def _is_blocked_scrape_host(host):
 @app.route('/scrape', methods=['GET', 'POST'])
 def scrape():
     """Extract main text content from URL (GenAI friendly, SSRF-protected).
-    # v17-bulletproof-scrape-fix
+    # v18-bulletproof-scrape-fix
 
     SECURITY: Blocks loopback, private/reserved IP ranges, link-local, and
     file:// scheme to prevent SSRF attacks and internal resource exposure.
@@ -945,6 +1340,17 @@ def scrape():
                         raise
                     except Exception:
                         pass
+                elif host_clean.startswith(('0x', '0X')):
+                    try:
+                        ip_int = int(host_clean, 16)
+                        if 0 <= ip_int <= 0xFFFFFFFF:
+                            v4 = ipaddress.IPv4Address(ip_int)
+                            if _is_ip_blocked(v4):
+                                raise _ScrapeBlockedError(f'Blocked: {host} is a private/reserved IP')
+                    except _ScrapeBlockedError:
+                        raise
+                    except Exception:
+                        pass
 
             try:
                 port = parsed.port or (443 if parsed.scheme == 'https' else 80)
@@ -959,7 +1365,10 @@ def scrape():
                     valid_ips.append(ip_raw)
                 if not valid_ips:
                     raise _ScrapeBlockedError(f'Could not find a global IP for {host}')
-                return valid_ips[0], host, port
+                v4_ips = [ip for ip in valid_ips if ':' not in ip]
+                v6_ips = [ip for ip in valid_ips if ':' in ip]
+                ordered_ips = v4_ips + v6_ips
+                return ordered_ips, host, port
             except _ScrapeBlockedError:
                 raise
             except socket.gaierror as e:
@@ -973,11 +1382,11 @@ def scrape():
             if (cur_parsed.scheme or '').lower() not in ('http', 'https'):
                 raise _ScrapeBlockedError(f'Blocked invalid scheme during redirect: {cur_parsed.scheme}')
 
-            safe_ip, original_host, port = _get_safe_ip_url(current_url)
+            safe_ips, original_host, port = _get_safe_ip_url(current_url)
             headers = {'User-Agent': ua}
 
             # Use thread-safe DNS Pinning context manager
-            with pinned_dns(original_host, safe_ip, port):
+            with pinned_dns(original_host, safe_ips, port):
                 # The host in current_url remains example.com, so TLS verify works,
                 # but the socket connects directly to safe_ip.
                 with _scrape_client.stream('GET', current_url, headers=headers) as response:
@@ -1020,7 +1429,7 @@ def scrape():
             raw_text = re.sub(r'(?si)<template.*?>.*?</template>', ' ', raw_text)
             raw_text = re.sub(r'<[^>]+>', ' ', raw_text)
             raw_text = html.unescape(raw_text)
-            raw_text = re.sub(r'\\s+', ' ', raw_text).strip()
+            raw_text = re.sub(r'\s+', ' ', raw_text).strip()
             if raw_text:
                 content_text = raw_text[:5000]
 
@@ -1043,9 +1452,20 @@ def scrape():
 
 '''
 
-    content, count = re.subn(r"(?m)^(\s*@app\.route\(\s*['\"]/search['\"])", lambda m: scrape_route_code + m.group(1), content)
+    # Primary anchor: @app.route('/search')
+    content, count = re.subn(r"(?m)^(\s*@app\.route\(\s*['\"]/search['\"])", lambda m: scrape_route_code + m.group(1), content, count=1)
     if count == 0:
-        raise RuntimeError(f"Patch failed for {path}: Could not find @app.route('/search') anchor to inject /scrape route.")
+        # Fallback 1: any blueprint or route on /search
+        content, count = re.subn(r"(?m)^(\s*@\w+\.route\(\s*['\"]/search['\"])", lambda m: scrape_route_code + m.group(1), content, count=1)
+    if count == 0:
+        # Fallback 2: any route on root '/'
+        content, count = re.subn(r"(?m)^(\s*@\w+\.route\(\s*['\"]/['\"])", lambda m: scrape_route_code + m.group(1), content, count=1)
+    if count == 0:
+        # Fallback 3: def search()
+        content, count = re.subn(r"(?m)^(\s*def search\s*\()", lambda m: scrape_route_code + m.group(1), content, count=1)
+    if count == 0:
+        # Fallback 4: append to end of webapp.py
+        content = content.rstrip() + "\n\n" + scrape_route_code + "\n"
 
     return content
 
@@ -1244,6 +1664,20 @@ def patch_online_captcha(content, path):
         if old_import in content:
             content = content.replace(old_import, new_import, 1)
             helper_present = True
+        else:
+            # Fallback 1: match "from .abstract import ..."
+            m = re.search(r'(?m)^(from \.abstract import [^\n]+\n)', content)
+            if m:
+                idx = m.end()
+                content = content[:idx] + "\n\n" + new_helper + "\n" + content[idx:]
+                helper_present = True
+            else:
+                # Fallback 2: match "class OnlineEngineProcessor"
+                m = re.search(r'(?m)^(class OnlineEngineProcessor\b)', content)
+                if m:
+                    idx = m.start()
+                    content = content[:idx] + new_helper + "\n\n\n" + content[idx:]
+                    helper_present = True
     else:
         if "return max(5, min(v, 900))" in content and ("parsedate_to_datetime" not in content or "utcnow" in content):
             content = re.sub(
@@ -1306,6 +1740,15 @@ def patch_online_captcha(content, path):
             content = content.replace(old_combined, new_split, 1)
         elif tuple_block in content:
             content = content.replace(tuple_block, split_block, 1)
+        else:
+            # Regex fallback for slight whitespace or formatting variations
+            pattern = re.compile(
+                r'([ \t]*)except\s*\(\s*SearxEngineCaptchaException\s*,\s*SearxEngineTooManyRequestsException\s*,\s*SearxEngineAccessDeniedException\s*\)\s*as\s*e:\s*\n'
+                r'[ \t]*self\.handle_exception\([^)]+\)\s*\n'
+                r'[ \t]*self\.logger\.debug\(e\.message\)'
+            )
+            if pattern.search(content):
+                content = pattern.sub(new_split, content, count=1)
 
     return "ALREADY_APPLIED" if content == original else content
 
@@ -1396,111 +1839,290 @@ def patch_config_settings_yml(content, path):
         return "ALREADY_APPLIED"
     return patched
 
-def main() -> None:
-    force = "--force" in sys.argv
-    if not force and is_patch_cache_valid():
+PATCH_SPECS = [
+    PatchSpec(
+        name="valkeydb_pwd",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "valkeydb.py"),
+        description="valkeydb.py (Windows pwd compatibility)",
+        patch_func=patch_valkeydb,
+        severity=PatchSeverity.CRITICAL,
+        required_file=True,
+        expected_anchors=[
+            "import pwd",
+            "_pw = pwd.getpwuid(os.getuid())",
+        ],
+        diagnostic_hint="Unix pwd module is not available on Windows. Valkey DB initialization must use _windows_safe_current_user().",
+    ),
+    PatchSpec(
+        name="webutils_windows_paths",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "webutils.py"),
+        description="webutils.py (normalize Windows paths)",
+        patch_func=patch_webutils_windows_paths,
+        severity=PatchSeverity.CRITICAL,
+        required_file=True,
+        expected_anchors=[
+            "file_list.append(str(f.relative_to(static_path)))",
+            "result_templates.add(f)",
+        ],
+        diagnostic_hint="File paths in static and template lookups must use forward slashes on Windows.",
+    ),
+    PatchSpec(
+        name="webapp_json_handler",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "webapp.py"),
+        description="webapp.py (json_lite handler & Windows loop policy)",
+        patch_func=patch_webapp_json_handler,
+        severity=PatchSeverity.CRITICAL,
+        required_file=True,
+        expected_anchors=[
+            "output_format == 'json'",
+            "WindowsSelectorEventLoopPolicy",
+        ],
+        diagnostic_hint="Curl_cffi requires WindowsSelectorEventLoopPolicy, and json_lite must be handled in index_error and search output.",
+    ),
+    PatchSpec(
+        name="settings_defaults_json_lite",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "settings_defaults.py"),
+        description="settings_defaults.py (json_lite format)",
+        patch_func=patch_settings_defaults,
+        severity=PatchSeverity.FEATURE,
+        required_file=True,
+        expected_anchors=["OUTPUT_FORMATS"],
+        diagnostic_hint="OUTPUT_FORMATS list must include 'json_lite' to allow lightweight agent search output.",
+    ),
+    PatchSpec(
+        name="webutils_json_lite",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "webutils.py"),
+        description="webutils.py (get_json_lite_response)",
+        patch_func=patch_webutils,
+        severity=PatchSeverity.FEATURE,
+        required_file=True,
+        expected_anchors=["def get_themes"],
+        diagnostic_hint="Injects get_json_lite_response serializer function into searx/webutils.py.",
+    ),
+    PatchSpec(
+        name="webapp_scrape_route",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "webapp.py"),
+        description="webapp.py (/scrape endpoint)",
+        patch_func=patch_webapp_scrape_route,
+        severity=PatchSeverity.FEATURE,
+        required_file=True,
+        expected_anchors=["def scrape()", "@app.route"],
+        diagnostic_hint="Injects /scrape SSRF-protected endpoint for AI coding agents into searx/webapp.py.",
+    ),
+    PatchSpec(
+        name="online_captcha",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "search", "processors", "online.py"),
+        description="search/processors/online.py (Retry-After + CAPTCHA logging)",
+        patch_func=patch_online_captcha,
+        severity=PatchSeverity.FEATURE,
+        required_file=True,
+        expected_anchors=[
+            "_parse_retry_after_header",
+            "except SearxEngineCaptchaException",
+        ],
+        diagnostic_hint="Parses HTTP Retry-After header and logs engine suspension times.",
+    ),
+    PatchSpec(
+        name="raise_for_httperror",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "network", "raise_for_httperror.py"),
+        description="network/raise_for_httperror.py (attach response for Retry-After)",
+        patch_func=patch_raise_for_httperror,
+        severity=PatchSeverity.FEATURE,
+        required_file=True,
+        expected_anchors=["_exc.response = resp"],
+        diagnostic_hint="Attaches response object to SearxEngine* exceptions so online.py can inspect Retry-After headers.",
+    ),
+    PatchSpec(
+        name="search_html_accessibility",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "search.html"),
+        description="templates/simple/search.html (accessible search label)",
+        patch_func=patch_simple_search_accessibility,
+        severity=PatchSeverity.OPTIONAL,
+        required_file=True,
+        expected_anchors=['id="q"'],
+        diagnostic_hint="Adds aria-label to simple theme primary search input.",
+    ),
+    PatchSpec(
+        name="simple_search_html_accessibility",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "simple_search.html"),
+        description="templates/simple/simple_search.html (accessible search label)",
+        patch_func=patch_simple_search_accessibility,
+        severity=PatchSeverity.OPTIONAL,
+        required_file=True,
+        expected_anchors=['id="q"'],
+        diagnostic_hint="Adds aria-label to simple_search.html input.",
+    ),
+    PatchSpec(
+        name="cookies_html_accessibility",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "preferences", "cookies.html"),
+        description="templates/simple/preferences/cookies.html (accessible hash input label)",
+        patch_func=patch_preferences_accessibility,
+        severity=PatchSeverity.OPTIONAL,
+        required_file=False,
+        expected_anchors=['id="pref-hash-input"'],
+        diagnostic_hint="Adds aria-label to preferences cookies hash input.",
+    ),
+    PatchSpec(
+        name="engines_init",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "engines", "__init__.py"),
+        description="engines/__init__.py (restore disabled-engine behavior)",
+        patch_func=patch_engines_init,
+        severity=PatchSeverity.OPTIONAL,
+        required_file=True,
+        diagnostic_hint="Removes legacy disabled engine short-circuit in engines/__init__.py.",
+    ),
+    PatchSpec(
+        name="processors_init",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "search", "processors", "__init__.py"),
+        description="search/processors/__init__.py (restore disabled-engine behavior)",
+        patch_func=patch_processors_init,
+        severity=PatchSeverity.OPTIONAL,
+        required_file=True,
+        diagnostic_hint="Removes legacy disabled engine skip in search/processors/__init__.py.",
+    ),
+    PatchSpec(
+        name="google_captcha",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "engines", "google.py"),
+        description="engines/google.py (CAPTCHA false-positive fix)",
+        patch_func=patch_google_captcha,
+        severity=PatchSeverity.OPTIONAL,
+        required_file=True,
+        diagnostic_hint="Mitigates CAPTCHA false positives in google.py 302 redirects.",
+    ),
+    PatchSpec(
+        name="sogou_captcha",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "engines", "sogou.py"),
+        description="engines/sogou.py (robust CAPTCHA detection)",
+        patch_func=patch_sogou_captcha,
+        severity=PatchSeverity.OPTIONAL,
+        required_file=True,
+        diagnostic_hint="Robust detection of sogou antispider/captcha blocks.",
+    ),
+    PatchSpec(
+        name="abstract_suspend",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "search", "processors", "abstract.py"),
+        description="search/processors/abstract.py (restore configured suspension times)",
+        patch_func=patch_abstract_suspend,
+        severity=PatchSeverity.OPTIONAL,
+        required_file=True,
+        diagnostic_hint="Removes legacy global cap in abstract.py.",
+    ),
+    PatchSpec(
+        name="settings_yml_suspended_times",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "settings.yml"),
+        description="searx/settings.yml (reduce suspended_times defaults)",
+        patch_func=patch_settings_yml,
+        severity=PatchSeverity.OPTIONAL,
+        required_file=True,
+        diagnostic_hint="Reduces default engine suspension times in searx/settings.yml.",
+    ),
+    PatchSpec(
+        name="config_settings_yml_suspended_times",
+        target_path=os.path.join(REPO_ROOT, "config", "settings.yml"),
+        description="config/settings.yml (reduce suspended_times)",
+        patch_func=patch_config_settings_yml,
+        severity=PatchSeverity.OPTIONAL,
+        required_file=False,
+        diagnostic_hint="Reduces suspension times in user config/settings.yml while preserving custom overrides.",
+    ),
+]
+
+
+def _format_summary_table(results: list[PatchResult]) -> str:
+    """Format patch results into an easy-to-read terminal table."""
+    lines = [
+        "=" * 72,
+        "SearXNG for Windows Next - Patch Application Summary",
+        "=" * 72,
+    ]
+    for r in results:
+        status_tag = f"[{r.status}]".ljust(18)
+        severity_tag = f"[{r.severity}]".ljust(11)
+        lines.append(f"{status_tag} {r.name} {severity_tag}")
+    lines.append("=" * 72)
+    return "\n".join(lines)
+
+
+def run_all_patches(
+    specs: list[PatchSpec],
+    *,
+    dry_run: bool = False,
+    transaction: PatchTransaction | None = None,
+) -> list[PatchResult]:
+    """Execute all patch specs in batch mode, capturing diagnostics for every failure."""
+    results: list[PatchResult] = []
+    for spec in specs:
+        res = update_file(
+            spec.target_path,
+            spec.description,
+            spec.patch_func,
+            required=spec.required_file,
+            severity=spec.severity,
+            raise_on_failure=False,
+            dry_run=dry_run,
+            transaction=transaction,
+            expected_anchors=spec.expected_anchors,
+            diagnostic_hint=spec.diagnostic_hint,
+        )
+        if isinstance(res, PatchResult):
+            results.append(res)
+        else:
+            # Fallback wrapper if a raw string was returned
+            results.append(
+                PatchResult(
+                    name=spec.description,
+                    target_path=spec.target_path,
+                    severity=spec.severity,
+                    status=str(res),
+                )
+            )
+    return results
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Apply Windows compatibility and enhancement patches to SearXNG with enhanced error diagnostics."
+    )
+    parser.add_argument("--force", action="store_true", help="Ignore cache and re-apply all patches")
+    parser.add_argument("--check", "--dry-run", action="store_true", dest="check", help="Verify patches without writing changes")
+    parser.add_argument("--strict", action="store_true", help="Treat any patch failure (including optional) as fatal (exit 1)")
+    parser.add_argument("--rollback", action="store_true", help="Roll back files to their pre-patch state using stored backups")
+    parser.add_argument("--rollback-on-failure", action="store_true", help="Automatically rollback changes if any CRITICAL patch fails")
+    parser.add_argument("--report", nargs="?", const=REPORT_FILE, default=None, help="Save JSON diagnostic report to specified file")
+    parser.add_argument("--json", action="store_true", help="Output summary in JSON format to stdout")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose debug logging")
+    args = parser.parse_args()
+
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+
+    transaction = PatchTransaction()
+
+    # Handle manual rollback request
+    if args.rollback:
+        logger.info("Executing rollback to pre-patch state...")
+        restored = transaction.rollback()
+        if restored:
+            logger.info(f"Successfully rolled back {len(restored)} file(s):\n  " + "\n  ".join(restored))
+            return 0
+        else:
+            logger.warning("No files were rolled back (no backup manifest found or nothing to restore).")
+            return 0
+
+    # Fast-path cache check
+    if not args.force and not args.check and is_patch_cache_valid():
         logger.info("All patches already verified (cached).")
-        return
+        return 0
 
-    logger.info("Applying Windows compatibility and feature patches...")
-    
-    # Run patches
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "valkeydb.py"),
-        "valkeydb.py (Windows pwd compatibility)",
-        patch_valkeydb
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "settings_defaults.py"),
-        "settings_defaults.py (json_lite format)",
-        patch_settings_defaults
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "webutils.py"),
-        "webutils.py (get_json_lite_response)",
-        patch_webutils
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "webutils.py"),
-        "webutils.py (normalize Windows paths)",
-        patch_webutils_windows_paths
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "search.html"),
-        "templates/simple/search.html (accessible search label)",
-        patch_simple_search_accessibility
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "simple_search.html"),
-        "templates/simple/simple_search.html (accessible search label)",
-        patch_simple_search_accessibility
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "preferences", "cookies.html"),
-        "templates/simple/preferences/cookies.html (accessible hash input label)",
-        patch_preferences_accessibility,
-        required=False
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "webapp.py"),
-        "webapp.py (json_lite handler)",
-        patch_webapp_json_handler
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "webapp.py"),
-        "webapp.py (/scrape endpoint)",
-        patch_webapp_scrape_route
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "engines", "__init__.py"),
-        "engines/__init__.py (restore disabled-engine behavior)",
-        patch_engines_init
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "search", "processors", "__init__.py"),
-        "search/processors/__init__.py (restore disabled-engine behavior)",
-        patch_processors_init
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "engines", "google.py"),
-        "engines/google.py (CAPTCHA false-positive fix)",
-        patch_google_captcha
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "engines", "sogou.py"),
-        "engines/sogou.py (robust CAPTCHA detection)",
-        patch_sogou_captcha
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "search", "processors", "abstract.py"),
-        "search/processors/abstract.py (restore configured suspension times)",
-        patch_abstract_suspend
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "search", "processors", "online.py"),
-        "search/processors/online.py (Retry-After + CAPTCHA logging)",
-        patch_online_captcha
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "network", "raise_for_httperror.py"),
-        "network/raise_for_httperror.py (attach response for Retry-After)",
-        patch_raise_for_httperror
-    )
-    update_file(
-        os.path.join(SITE_PACKAGES, "searx", "settings.yml"),
-        "searx/settings.yml (reduce suspended_times defaults)",
-        patch_settings_yml
-    )
-    update_file(
-        os.path.join(REPO_ROOT, "config", "settings.yml"),
-        "config/settings.yml (reduce suspended_times)",
-        patch_config_settings_yml,
-        required=False
-    )
+    mode_label = "[DRY-RUN CHECK] " if args.check else ""
+    logger.info(f"{mode_label}Applying Windows compatibility and feature patches...")
 
-    # Ensure missing engines are marked inactive across all configuration files
+    # Execute all patches with transaction tracking
+    results = run_all_patches(PATCH_SPECS, dry_run=args.check, transaction=transaction)
+
+    # Process missing engines
     engines_dir = os.path.join(SITE_PACKAGES, "searx", "engines")
-    if os.path.exists(engines_dir):
+    if os.path.exists(engines_dir) and not args.check:
         try:
             import importlib.util
             spec = importlib.util.spec_from_file_location(
@@ -1519,9 +2141,107 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Could not check missing engines: {exc}")
 
-    logger.info("All patches processed.")
-    save_patch_cache()
+    # Analyze results
+    critical_failures = [r for r in results if r.status == PatchStatus.FAILED and r.severity == PatchSeverity.CRITICAL]
+    feature_failures = [r for r in results if r.status == PatchStatus.FAILED and r.severity == PatchSeverity.FEATURE]
+    optional_failures = [r for r in results if r.status == PatchStatus.FAILED and r.severity == PatchSeverity.OPTIONAL]
+    all_failures = critical_failures + feature_failures + optional_failures
+
+    # Persist backups to disk if there are any failures or if requested
+    if not args.check and transaction.originals:
+        transaction.persist_backups()
+
+    # Rollback on critical failure if requested
+    if critical_failures and args.rollback_on_failure and not args.check:
+        logger.warning("CRITICAL patch failure detected and --rollback-on-failure requested. Rolling back changes...")
+        restored = transaction.rollback()
+        logger.info(f"Rolled back {len(restored)} files to clean state.")
+
+    # Output formatting
+    if args.json:
+        report_data = {
+            "timestamp": time.time(),
+            "dry_run": args.check,
+            "upstream_info": get_upstream_version_info(),
+            "results": [r.to_dict() for r in results],
+            "summary": {
+                "total": len(results),
+                "patched": sum(1 for r in results if r.status == PatchStatus.PATCHED),
+                "already_applied": sum(1 for r in results if r.status == PatchStatus.ALREADY_APPLIED),
+                "skipped": sum(1 for r in results if r.status == PatchStatus.SKIPPED),
+                "failed_critical": len(critical_failures),
+                "failed_feature": len(feature_failures),
+                "failed_optional": len(optional_failures),
+            },
+        }
+        print(json.dumps(report_data, indent=2))
+    else:
+        print(_format_summary_table(results))
+
+    # Print detailed diagnostics for failures
+    if all_failures:
+        print("\n" + "=" * 72)
+        print("  PATCH FAILURE DIAGNOSTICS & TROUBLESHOOTING GUIDE")
+        print("=" * 72)
+        for f in all_failures:
+            print(f"\n[!] FAILED: {f.name} ({f.severity})")
+            print(f"    Target file: {f.target_path}")
+            if f.error_detail:
+                print(f"    Error: {f.error_detail}")
+            if f.missing_anchors:
+                print("    Missing Anchor(s):")
+                for ma in f.missing_anchors:
+                    print(f"      - {ma.strip()[:100]}")
+            if f.suggestions:
+                print("    Diagnostic Details & Recommendations:")
+                for s in f.suggestions:
+                    print(f"      * {s}")
+        print("=" * 72 + "\n")
+
+    # Save diagnostic report file if requested or if any failures occurred
+    report_path = args.report or (REPORT_FILE if all_failures else None)
+    if report_path:
+        try:
+            report_data = {
+                "timestamp": time.time(),
+                "dry_run": args.check,
+                "upstream_info": get_upstream_version_info(),
+                "results": [r.to_dict() for r in results],
+                "failures": [f.to_dict() for f in all_failures],
+            }
+            _atomic_write(report_path, json.dumps(report_data, indent=2), encoding="utf-8")
+            logger.info(f"Saved diagnostic report to: {report_path}")
+        except OSError as exc:
+            logger.warning(f"Could not save diagnostic report: {exc}")
+
+    # Determine exit code and cache update
+    if not all_failures and not args.check:
+        logger.info("All patches processed successfully.")
+        save_patch_cache()
+        transaction.cleanup()
+        return 0
+
+    if critical_failures:
+        logger.error(
+            f"CRITICAL PATCH FAILURE: {len(critical_failures)} essential Windows patch(es) failed! "
+            "SearXNG server will likely fail to start on Windows."
+        )
+        return 1
+
+    if (feature_failures or optional_failures) and args.strict:
+        logger.error(f"Patch verification failed under --strict: {len(all_failures)} failure(s).")
+        return 1
+
+    if feature_failures or optional_failures:
+        logger.warning(
+            f"Non-critical patch notice: {len(feature_failures)} feature and {len(optional_failures)} "
+            "optional patch(es) failed. Server can run, but some features or tweaks are inactive."
+        )
+        return 2
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
+
