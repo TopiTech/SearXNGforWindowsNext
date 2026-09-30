@@ -355,7 +355,9 @@ def format_scrape_markdown(scrape_data: dict[str, Any]) -> str:
         return "\n".join(lines)
 
     if is_truncated:
-        lines.append(f"> ⚠️ *コンテキスト長制限のため、先頭 {len(content)} 文字を表示しています (全 {orig_len} 文字)。*\n")
+        lines.append(
+            f"> ⚠️ *コンテキスト長制限のため、先頭 {len(content)} 文字を表示しています (全 {orig_len} 文字)。*\n"
+        )
 
     lines.append(content)
     return "\n".join(lines).strip()
@@ -495,5 +497,3 @@ def format_markdown(data: dict[str, Any]) -> str:
         return format_deep_search_markdown(data)
 
     return format_search_markdown(data)
-
-

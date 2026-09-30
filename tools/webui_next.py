@@ -146,7 +146,7 @@ def _scrape_url_direct(
             "error": "スクレイピング拒否 (400): プライベートIP、ループバック、または許可されていないスキームです。",
         }
 
-    def _resolve_safe_ip(url_to_resolve: str) -> tuple[str, str, int]:
+    def _resolve_safe_ip(url_to_resolve: str) -> tuple[list[str], str, int]:
         p_url = _parse_url(url_to_resolve)
         if p_url.scheme not in ("http", "https"):
             raise blocked_exc_cls(f"Blocked invalid scheme: {p_url.scheme}")
@@ -156,7 +156,7 @@ def _scrape_url_direct(
         port = p_url.port or (443 if p_url.scheme == "https" else 80)
         try:
             addr_info = socket.getaddrinfo(host, port)
-        except socket.gaierror as exc:
+        except (socket.gaierror, OSError) as exc:
             raise blocked_exc_cls(f"DNS resolution failed for {host}: {exc}") from exc
         if not addr_info:
             raise blocked_exc_cls(f"Could not resolve host: {host}")
@@ -168,7 +168,10 @@ def _scrape_url_direct(
             valid_ips.append(ip_raw)
         if not valid_ips:
             raise blocked_exc_cls(f"Could not find a global IP for {host}")
-        return valid_ips[0], host, port
+        v4_ips = [ip for ip in valid_ips if ":" not in ip]
+        v6_ips = [ip for ip in valid_ips if ":" in ip]
+        ordered_ips = v4_ips + v6_ips
+        return ordered_ips, host, port
 
     try:
         httpx_mod = webapp_mod.httpx
@@ -198,10 +201,10 @@ def _scrape_url_direct(
             cur_parsed = _parse_url(current_url)
             if (cur_parsed.scheme or "").lower() not in ("http", "https"):
                 raise blocked_exc_cls(f"Blocked invalid scheme during redirect: {cur_parsed.scheme}")
-            safe_ip, original_host, port = _resolve_safe_ip(current_url)
+            safe_ips, original_host, port = _resolve_safe_ip(current_url)
             headers = {"User-Agent": ua}
             with (
-                webapp_mod.pinned_dns(original_host, safe_ip, port),
+                webapp_mod.pinned_dns(original_host, safe_ips, port),
                 webapp_mod._scrape_client.stream("GET", current_url, headers=headers) as response,
             ):
                 if response.status_code not in (301, 302, 303, 307, 308):
@@ -220,9 +223,7 @@ def _scrape_url_direct(
         content_text = None
         if downloaded and hasattr(webapp_mod, "trafilatura"):
             try:
-                content_text = webapp_mod.trafilatura.extract(
-                    downloaded, include_comments=False, include_tables=True
-                )
+                content_text = webapp_mod.trafilatura.extract(downloaded, include_comments=False, include_tables=True)
             except (ValueError, RuntimeError, TypeError, AttributeError):
                 content_text = None
 
@@ -292,9 +293,12 @@ def _search_in_process(
             sxng_req = getattr(webapp_mod, "sxng_request", None)
             prefs = getattr(sxng_req, "preferences", None)
             if prefs is not None:
+
                 def _run_form(form_dict: dict[str, str]) -> dict[str, Any]:
                     sq, _, _, _, _ = webapp_mod.get_search_query_from_webapp(prefs, form_dict)
-                    if not getattr(sq, "engineref_list", None) and ("categories" in form_dict or "engines" in form_dict):
+                    if not getattr(sq, "engineref_list", None) and (
+                        "categories" in form_dict or "engines" in form_dict
+                    ):
                         fallback_form = {"q": clean_query}
                         if time_range.strip():
                             fallback_form["time_range"] = time_range.strip()
@@ -454,7 +458,6 @@ def execute_scrape_analyze(
     )
 
 
-
 def get_ai_info(webapp_mod: Any = None, host_url: str = "http://127.0.0.1:8888") -> dict[str, Any]:
     """Return instance AI capabilities, engine statistics, and MCP/CLI configuration snippets."""
     base = (host_url or "http://127.0.0.1:8888").rstrip("/")
@@ -467,9 +470,7 @@ def get_ai_info(webapp_mod: Any = None, host_url: str = "http://127.0.0.1:8888")
             instance_name = webapp_mod.get_setting("general.instance_name") or instance_name
             version_str = getattr(webapp_mod, "VERSION_STRING", version_str)
             eng_dict = getattr(webapp_mod, "engines", {}) or {}
-            enabled_engines_count = sum(
-                1 for e in eng_dict.values() if not getattr(e, "disabled", False)
-            )
+            enabled_engines_count = sum(1 for e in eng_dict.values() if not getattr(e, "disabled", False))
 
     mcp_py = os.path.join(REPO_ROOT, "tools", "mcp_server.py").replace("\\", "/")
     cli_py = os.path.join(REPO_ROOT, "tools", "searxng_cli.py").replace("\\", "/")
@@ -2546,7 +2547,9 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             max_length=max_len,
             webapp_mod=webapp_mod,
         )
-        status_code = 400 if res.get("error") and "拒否" in str(res.get("error")) else (422 if res.get("error") else 200)
+        status_code = (
+            400 if res.get("error") and "拒否" in str(res.get("error")) else (422 if res.get("error") else 200)
+        )
         return jsonify(res), status_code
 
     @app.route("/deep_search", methods=["GET", "POST"])
@@ -2577,11 +2580,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                 return Response("### Error\n\nNo query provided.", status=400, mimetype="text/markdown; charset=utf-8")
             return jsonify({"error": "No query", "query": "", "results": []}), 400
 
-        mode = (
-            request.values.get("mode")
-            or payload.get("mode")
-            or "auto"
-        )
+        mode = request.values.get("mode") or payload.get("mode") or "auto"
         depth = (
             request.values.get("depth")
             or request.values.get("search_depth")
@@ -2597,11 +2596,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             or payload.get("count")
             or 5
         )
-        max_tokens = (
-            request.values.get("max_tokens")
-            or payload.get("max_tokens")
-            or 3000
-        )
+        max_tokens = request.values.get("max_tokens") or payload.get("max_tokens") or 3000
         focus_query = (
             request.values.get("focus_query")
             or request.values.get("focus_q")
@@ -2616,21 +2611,9 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             or payload.get("max_length")
             or 8000
         )
-        categories = (
-            request.values.get("categories")
-            or payload.get("categories")
-            or ""
-        )
-        engines = (
-            request.values.get("engines")
-            or payload.get("engines")
-            or ""
-        )
-        time_range = (
-            request.values.get("time_range")
-            or payload.get("time_range")
-            or ""
-        )
+        categories = request.values.get("categories") or payload.get("categories") or ""
+        engines = request.values.get("engines") or payload.get("engines") or ""
+        time_range = request.values.get("time_range") or payload.get("time_range") or ""
         inc_hl = _parse_bool(
             request.values.get("include_highlights", payload.get("include_highlights")),
             default=True,

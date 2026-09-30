@@ -368,9 +368,7 @@ class TestMCPServer(unittest.TestCase):
         resp = mcp_server.process_message(raw_msg)
         self.assertIsNotNone(resp)
         self.assertFalse(resp["result"]["isError"])
-        mock_search.assert_called_once_with(
-            query="fastapi", count=10, categories="", engines="", time_range=""
-        )
+        mock_search.assert_called_once_with(query="fastapi", count=10, categories="", engines="", time_range="")
 
     def test_tools_call_unknown_tool(self) -> None:
         raw_msg = json.dumps(
@@ -524,5 +522,3 @@ class TestSearXNGCLI(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-

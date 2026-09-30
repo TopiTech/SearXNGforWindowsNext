@@ -186,9 +186,7 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "searxng_health",
-        "description": (
-            "Check the health and reachability of the local SearXNG server instance."
-        ),
+        "description": ("Check the health and reachability of the local SearXNG server instance."),
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -291,7 +289,11 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
                 max_tokens = int(arguments.get("max_tokens", 3000))
             except (ValueError, TypeError):
                 max_tokens = 3000
-            effective_mode = "scrape" if (mode == "scrape" or _is_url_query(query)) else ("fast" if search_depth == "fast" else "deep")
+            effective_mode = (
+                "scrape"
+                if (mode == "scrape" or _is_url_query(query))
+                else ("fast" if search_depth == "fast" else "deep")
+            )
             data = searxng_client.unified_search(
                 query=query,
                 mode=effective_mode,

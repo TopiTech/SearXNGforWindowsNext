@@ -29,14 +29,18 @@ class TestQueryOptimizer(unittest.TestCase):
     def test_classify_intent_code(self) -> None:
         intents = [
             agentic_search.QueryOptimizer.classify_intent("FastAPI lifespan context manager syntax error"),
-            agentic_search.QueryOptimizer.classify_intent("Python traceback TypeError: NoneType object is not callable"),
+            agentic_search.QueryOptimizer.classify_intent(
+                "Python traceback TypeError: NoneType object is not callable"
+            ),
             agentic_search.QueryOptimizer.classify_intent("React 19 useActionState hook migration"),
         ]
         for intent in intents:
             self.assertEqual(intent, "code")
 
     def test_classify_intent_academic(self) -> None:
-        intent = agentic_search.QueryOptimizer.classify_intent("diffusion model transformer attention mechanism paper arxiv")
+        intent = agentic_search.QueryOptimizer.classify_intent(
+            "diffusion model transformer attention mechanism paper arxiv"
+        )
         self.assertEqual(intent, "academic")
 
     def test_classify_intent_news(self) -> None:
@@ -84,7 +88,11 @@ class TestDomainScorer(unittest.TestCase):
     def test_score_results_filtering(self) -> None:
         raw_results = [
             {"title": "Low Quality Mirror", "url": "https://copypaste-coding.com/p", "content": "spam content"},
-            {"title": "Python Docs", "url": "https://docs.python.org/3/asyncio.html", "content": "Official asyncio docs"},
+            {
+                "title": "Python Docs",
+                "url": "https://docs.python.org/3/asyncio.html",
+                "content": "Official asyncio docs",
+            },
             {"title": "Other Blog", "url": "https://example.com/blog", "content": "Example post"},
         ]
 
@@ -148,8 +156,12 @@ class TestSpeculativeFetcher(unittest.TestCase):
 
         fetcher = agentic_search.SpeculativeFetcher(scrape_func=mock_scrape, max_workers=2)
         items = [
-            agentic_search.SearchResultItem(title="Page 1", url="https://site1.com", domain="site1.com", content="snip1"),
-            agentic_search.SearchResultItem(title="Page 2", url="https://site2-fail.com", domain="site2.com", content="snip2"),
+            agentic_search.SearchResultItem(
+                title="Page 1", url="https://site1.com", domain="site1.com", content="snip1"
+            ),
+            agentic_search.SearchResultItem(
+                title="Page 2", url="https://site2-fail.com", domain="site2.com", content="snip2"
+            ),
         ]
 
         updated = fetcher.fetch_pages(items, max_fetch=2)
@@ -167,7 +179,9 @@ class TestSpeculativeFetcher(unittest.TestCase):
 
         fetcher = agentic_search.SpeculativeFetcher(scrape_func=failing_scrape, max_workers=2)
         items = [
-            agentic_search.SearchResultItem(title="Page 1", url="https://site1.com", domain="site1.com", content="snip1"),
+            agentic_search.SearchResultItem(
+                title="Page 1", url="https://site1.com", domain="site1.com", content="snip1"
+            ),
         ]
 
         updated = fetcher.fetch_pages(items, max_fetch=1)
@@ -401,8 +415,12 @@ class TestExecuteDeepSearch(unittest.TestCase):
 
         fetcher = agentic_search.SpeculativeFetcher(scrape_func=hung_scrape, max_workers=2)
         items = [
-            agentic_search.SearchResultItem(title="Fast", url="https://fast.example.com", domain="fast.example.com", content="s1"),
-            agentic_search.SearchResultItem(title="Slow", url="https://slow.example.com", domain="slow.example.com", content="s2"),
+            agentic_search.SearchResultItem(
+                title="Fast", url="https://fast.example.com", domain="fast.example.com", content="s1"
+            ),
+            agentic_search.SearchResultItem(
+                title="Slow", url="https://slow.example.com", domain="slow.example.com", content="s2"
+            ),
         ]
         start = time.monotonic()
         try:
@@ -477,13 +495,30 @@ class TestQueryOptimizerEdgeCases(unittest.TestCase):
         self.assertEqual(inc, ["docs.python.org"])
         self.assertEqual(exc, ["spam.com"])
 
+    def test_parse_domain_list_with_quotes(self) -> None:
+        query = "fastapi site:\"fastapi.tiangolo.com\" -site:'spam.com'"
+        clean_q, inc, exc = agentic_search.QueryOptimizer.parse_query(query)
+        self.assertEqual(clean_q, "fastapi")
+        self.assertEqual(inc, ["fastapi.tiangolo.com"])
+        self.assertEqual(exc, ["spam.com"])
+
+    def test_token_budgeter_cjk_punctuation(self) -> None:
+        # Verify Japanese punctuation and symbols are counted in CJK token budget
+        ja_text = "【重要】検索結果の確認、および検証を実施しました。"
+        tok = agentic_search.TokenBudgeter.estimate_tokens(ja_text)
+        self.assertGreater(tok, 0)
+        # 26 chars of pure CJK text should roughly estimate around 17-18 tokens (~1.5 chars/tok)
+        self.assertTrue(15 <= tok <= 20)
+
     def test_fetch_pages_handles_unexpected_exception(self) -> None:
         def crash_scrape(url: str, **kwargs):
             raise RuntimeError("Unexpected scraper crash")
 
         fetcher = agentic_search.SpeculativeFetcher(scrape_func=crash_scrape, max_workers=1)
         items = [
-            agentic_search.SearchResultItem(title="Page 1", url="https://site1.com", domain="site1.com", content="snip1"),
+            agentic_search.SearchResultItem(
+                title="Page 1", url="https://site1.com", domain="site1.com", content="snip1"
+            ),
         ]
         updated = fetcher.fetch_pages(items, max_fetch=1)
         self.assertEqual(len(updated), 1)
@@ -493,4 +528,3 @@ class TestQueryOptimizerEdgeCases(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

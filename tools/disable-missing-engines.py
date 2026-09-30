@@ -10,13 +10,13 @@ except ImportError:
     yaml = None
 
 
-def _atomic_write(file_path: str, data: str, encoding: str = 'utf-8', newline: str = '\n') -> None:
+def _atomic_write(file_path: str, data: str, encoding: str = "utf-8", newline: str = "\n") -> None:
     """Atomically write data to file_path using a temporary file and os.replace."""
     directory = os.path.dirname(os.path.abspath(file_path))
     os.makedirs(directory, exist_ok=True)
     temp_fd, temp_path = tempfile.mkstemp(prefix=".tmp_cfg_", dir=directory, text=True)
     try:
-        with open(temp_fd, 'w', encoding=encoding, newline=newline) as f:
+        with open(temp_fd, "w", encoding=encoding, newline=newline) as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
@@ -28,7 +28,7 @@ def _atomic_write(file_path: str, data: str, encoding: str = 'utf-8', newline: s
                 return
             except PermissionError as exc:
                 last_err = exc
-                time.sleep(0.05 * (2 ** attempt))
+                time.sleep(0.05 * (2**attempt))
         if last_err:
             raise last_err
     except Exception:
@@ -62,58 +62,62 @@ def parse_engines_fallback(yaml_content):
 
     for line in lines:
         stripped = line.strip()
-        if not stripped or stripped.startswith('#'):
+        if not stripped or stripped.startswith("#"):
             continue
 
-        indent = len(line) - len(line.lstrip(' \t'))
+        indent = len(line) - len(line.lstrip(" \t"))
 
         if not in_engines:
-            m = re.match(r'^([ \t]*)engines\s*:', line)
+            m = re.match(r"^([ \t]*)engines\s*:", line)
             if m:
                 in_engines = True
                 engines_indent = len(m.group(1))
             continue
 
         # If indent is <= engines_indent and not a list item, engines section ended
-        if indent <= engines_indent and not line.lstrip().startswith('-'):
+        if indent <= engines_indent and not line.lstrip().startswith("-"):
             break
 
         # Check for start of a new list item at engines list level
-        item_m = re.match(r'^([ \t]*)-\s*(.*)$', line)
-        if item_m and (item_indent is None or len(item_m.group(1)) == item_indent or (item_indent is None and len(item_m.group(1)) > engines_indent)):
-            if current_item is not None and 'name' in current_item:
-                if 'engine' not in current_item:
-                    current_item['engine'] = current_item['name']
+        item_m = re.match(r"^([ \t]*)-\s*(.*)$", line)
+        if item_m and (
+            item_indent is None
+            or len(item_m.group(1)) == item_indent
+            or (item_indent is None and len(item_m.group(1)) > engines_indent)
+        ):
+            if current_item is not None and "name" in current_item:
+                if "engine" not in current_item:
+                    current_item["engine"] = current_item["name"]
                 engines.append(current_item)
             current_item = {}
             item_indent = len(item_m.group(1))
             rest = item_m.group(2).strip()
             if rest:
-                kv_m = re.match(r'^([a-zA-Z0-9_-]+)\s*:\s*(.*)$', rest)
+                kv_m = re.match(r"^([a-zA-Z0-9_-]+)\s*:\s*(.*)$", rest)
                 if kv_m:
                     k = kv_m.group(1)
-                    v = re.split(r'\s+#', kv_m.group(2), maxsplit=1)[0].strip()
+                    v = re.split(r"\s+#", kv_m.group(2), maxsplit=1)[0].strip()
                     v = _unquote(v)
-                    if k == 'inactive':
-                        current_item[k] = v.lower() in ('true', 'yes', 'on', '1')
+                    if k == "inactive":
+                        current_item[k] = v.lower() in ("true", "yes", "on", "1")
                     else:
                         current_item[k] = v
             continue
 
         if current_item is not None and indent > item_indent:
-            kv_m = re.match(r'^[ \t]*([a-zA-Z0-9_-]+)\s*:\s*(.*)$', line)
+            kv_m = re.match(r"^[ \t]*([a-zA-Z0-9_-]+)\s*:\s*(.*)$", line)
             if kv_m:
                 k = kv_m.group(1)
-                v = re.split(r'\s+#', kv_m.group(2), maxsplit=1)[0].strip()
+                v = re.split(r"\s+#", kv_m.group(2), maxsplit=1)[0].strip()
                 v = _unquote(v)
-                if k == 'inactive':
-                    current_item[k] = v.lower() in ('true', 'yes', 'on', '1')
+                if k == "inactive":
+                    current_item[k] = v.lower() in ("true", "yes", "on", "1")
                 else:
                     current_item[k] = v
 
-    if current_item is not None and 'name' in current_item:
-        if 'engine' not in current_item:
-            current_item['engine'] = current_item['name']
+    if current_item is not None and "name" in current_item:
+        if "engine" not in current_item:
+            current_item["engine"] = current_item["name"]
         engines.append(current_item)
 
     return engines
@@ -128,8 +132,8 @@ def extract_engines(yaml_content):
     if yaml is not None:
         try:
             config = yaml.safe_load(yaml_content)
-            if config and isinstance(config, dict) and 'engines' in config:
-                return config.get('engines') or []
+            if config and isinstance(config, dict) and "engines" in config:
+                return config.get("engines") or []
         except (yaml.YAMLError, ValueError, TypeError, AttributeError):
             pass
     return parse_engines_fallback(yaml_content)
@@ -155,22 +159,22 @@ def disable_engine_in_text(yaml_content, engine_name):
         if not item_match:
             continue
 
-        item_indent = item_match.group('indent')
+        item_indent = item_match.group("indent")
         end = start + 1
         while end < len(lines):
             candidate = lines[end]
             if re.match(rf"^{re.escape(item_indent)}-\s+", candidate):
                 break
-            if candidate.strip() and not candidate.lstrip().startswith('#'):
-                candidate_indent = candidate[:len(candidate) - len(candidate.lstrip(' \t'))]
+            if candidate.strip() and not candidate.lstrip().startswith("#"):
+                candidate_indent = candidate[: len(candidate) - len(candidate.lstrip(" \t"))]
                 if len(candidate_indent) <= len(item_indent):
                     break
             end += 1
 
-        raw_name = item_match.group('name')
+        raw_name = item_match.group("name")
         if raw_name is None:
             # Look for a nested `name:` within this list item block
-            name_m = re.search(r'(?m)^[ \t]+name:\s*([^\r\n#]*)', ''.join(lines[start:end]))
+            name_m = re.search(r"(?m)^[ \t]+name:\s*([^\r\n#]*)", "".join(lines[start:end]))
             if name_m:
                 raw_name = name_m.group(1).strip()
 
@@ -188,39 +192,43 @@ def disable_engine_in_text(yaml_content, engine_name):
         if parsed_name != engine_name:
             continue
 
-        block = ''.join(lines[start:end])
+        block = "".join(lines[start:end])
         block_lines = block.splitlines(keepends=True)
         child_indent = None
         for child_line in block_lines[1:]:
-            if child_line.strip() and not child_line.lstrip().startswith('#'):
-                child_indent = child_line[:len(child_line) - len(child_line.lstrip(' \t'))]
+            if child_line.strip() and not child_line.lstrip().startswith("#"):
+                child_indent = child_line[: len(child_line) - len(child_line.lstrip(" \t"))]
                 if len(child_indent) > len(item_indent):
                     break
         if child_indent is None or len(child_indent) <= len(item_indent):
-            child_indent = item_indent + '  '
+            child_indent = item_indent + "  "
 
-        inactive_match = re.search(
-            rf'(?m)^{re.escape(child_indent)}inactive:\s*([^\r\n]*)', block
-        )
+        inactive_match = re.search(rf"(?m)^{re.escape(child_indent)}inactive:\s*([^\r\n]*)", block)
         if inactive_match:
             val = inactive_match.group(1).strip().lower()
-            if val in ('true', 'yes', 'on', '1'):
+            if val in ("true", "yes", "on", "1"):
                 return yaml_content
-            line_end = '\r\n' if block[inactive_match.end():].startswith('\r\n') else '\n' if block[inactive_match.end():].startswith('\n') else ''
+            line_end = (
+                "\r\n"
+                if block[inactive_match.end() :].startswith("\r\n")
+                else "\n"
+                if block[inactive_match.end() :].startswith("\n")
+                else ""
+            )
             replacement = f"{child_indent}inactive: true{line_end}"
-            new_block = block[:inactive_match.start()] + replacement + block[inactive_match.end() + len(line_end):]
+            new_block = block[: inactive_match.start()] + replacement + block[inactive_match.end() + len(line_end) :]
         else:
-            nl = '\r\n' if '\r\n' in block else '\n'
+            nl = "\r\n" if "\r\n" in block else "\n"
             insert_at = len(block_lines)
             while insert_at > 0 and not block_lines[insert_at - 1].strip():
                 insert_at -= 1
-            prefix = ''.join(block_lines[:insert_at])
-            suffix = ''.join(block_lines[insert_at:])
-            if prefix and not prefix.endswith(('\n', '\r')):
+            prefix = "".join(block_lines[:insert_at])
+            suffix = "".join(block_lines[insert_at:])
+            if prefix and not prefix.endswith(("\n", "\r")):
                 prefix += nl
             new_block = prefix + f"{child_indent}inactive: true{nl}" + suffix
 
-        return ''.join(lines[:start]) + new_block + ''.join(lines[end:])
+        return "".join(lines[:start]) + new_block + "".join(lines[end:])
 
     return yaml_content
 
@@ -239,7 +247,7 @@ def process_file(settings_path, engines_dir):
     if not os.path.exists(engines_dir):
         raise FileNotFoundError(f"Engines directory not found: {engines_dir}")
 
-    with open(settings_path, 'r', encoding='utf-8') as f:
+    with open(settings_path, "r", encoding="utf-8") as f:
         yaml_content = f.read()
 
     engines = extract_engines(yaml_content)
@@ -248,21 +256,17 @@ def process_file(settings_path, engines_dir):
 
     missing_engines = []
     for engine_entry in engines:
-        name = engine_entry.get('name')
+        name = engine_entry.get("name")
         if not name:
             continue
-        engine_mod = engine_entry.get('engine', name)
+        engine_mod = engine_entry.get("engine", name)
 
         # Skip template or complex dynamic engines
-        if engine_mod and re.match(r'^[a-z0-9_.-]+$', engine_mod):
-            parts = engine_mod.split('.')
+        if engine_mod and re.match(r"^[a-z0-9_.-]+$", engine_mod):
+            parts = engine_mod.split(".")
             mod_file = os.path.join(engines_dir, *parts) + ".py"
             pkg_init = os.path.join(engines_dir, *parts, "__init__.py")
-            if (
-                not os.path.exists(mod_file)
-                and not os.path.exists(pkg_init)
-                and not engine_entry.get('inactive')
-            ):
+            if not os.path.exists(mod_file) and not os.path.exists(pkg_init) and not engine_entry.get("inactive"):
                 missing_engines.append((name, engine_mod))
 
     if not missing_engines:
@@ -275,7 +279,7 @@ def process_file(settings_path, engines_dir):
 
     if modified_content != yaml_content:
         # Write back updated content while preserving all formatting and comments
-        _atomic_write(settings_path, modified_content, encoding='utf-8', newline='\n')
+        _atomic_write(settings_path, modified_content, encoding="utf-8", newline="\n")
         print(f"settings.yml updated successfully (comments preserved): {settings_path}")
         return True
 

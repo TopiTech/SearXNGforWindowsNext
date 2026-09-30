@@ -231,6 +231,7 @@ Open WebUI のメニューから **「Workspace」→「Tools」→「Create Too
 ```python
 import requests
 
+
 class Tools:
     def __init__(self):
         pass

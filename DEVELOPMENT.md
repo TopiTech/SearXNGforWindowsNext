@@ -227,7 +227,7 @@ GET/POST /search?q=query&format=json_lite
 
 3. **SSL Verification (httpx for /scrape)**
     ```python
-    verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')
+    verify_ssl = os.environ.get("SEARXNG_SCRAPE_VERIFY_SSL", "true").lower() in ("true", "1", "yes")
     httpx.Client(..., verify=verify_ssl, trust_env=False)
     ```
     - Default is `true` (certificates verified); set `SEARXNG_SCRAPE_VERIFY_SSL=false` for localhost-only without CA issues.

@@ -6,6 +6,7 @@ they can be exercised without a live searx install or any network access.
 Usage:
     python tools/test_patches.py
 """
+
 import io
 import json
 import os
@@ -175,9 +176,7 @@ class TestEnsureSecretKey(unittest.TestCase):
             self.assertIn("ultrasecretkey", f.read())
 
     def test_main_reuses_existing_valid_key(self):
-        secret_path, settings_path, example_path = self._make_paths(
-            with_key="a" * 64
-        )
+        secret_path, settings_path, example_path = self._make_paths(with_key="a" * 64)
         with (
             mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path),
             mock.patch.object(self.fn, "SETTINGS_PATH", settings_path),
@@ -210,9 +209,7 @@ class TestEnsureSecretKey(unittest.TestCase):
 
     def test_main_rotates_short_existing_key(self):
         # A key that is too short is treated as invalid and replaced.
-        secret_path, settings_path, example_path = self._make_paths(
-            with_key="short"
-        )
+        secret_path, settings_path, example_path = self._make_paths(with_key="short")
         with (
             mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path),
             mock.patch.object(self.fn, "SETTINGS_PATH", settings_path),
@@ -229,9 +226,7 @@ class TestEnsureSecretKey(unittest.TestCase):
             self.assertEqual(f.read().strip(), new_key)
 
     def test_main_rotates_unsafe_existing_key(self):
-        secret_path, settings_path, example_path = self._make_paths(
-            with_key=("a" * 64) + " & echo INJECTED"
-        )
+        secret_path, settings_path, example_path = self._make_paths(with_key=("a" * 64) + " & echo INJECTED")
         with (
             mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path),
             mock.patch.object(self.fn, "SETTINGS_PATH", settings_path),
@@ -246,9 +241,7 @@ class TestEnsureSecretKey(unittest.TestCase):
     def test_main_does_not_touch_settings_yml(self):
         # Regression: the old design wrote to config/settings.yml, which is
         # git-tracked. The new design must leave the settings file alone.
-        secret_path, settings_path, example_path = self._make_paths(
-            with_key="a" * 64
-        )
+        secret_path, settings_path, example_path = self._make_paths(with_key="a" * 64)
         original_mtime = os.path.getmtime(settings_path)
         with (
             mock.patch.object(self.fn, "SECRET_KEY_PATH", secret_path),
@@ -350,7 +343,6 @@ class TestPatchWebUtils(unittest.TestCase):
         self.assertIn("json.dumps(data, cls=JSONEncoder, ensure_ascii=False)", result)
 
 
-
 class TestPatchWebUtilsWindowsPaths(unittest.TestCase):
     """Verify URL-facing paths are normalized on Windows."""
 
@@ -358,10 +350,7 @@ class TestPatchWebUtilsWindowsPaths(unittest.TestCase):
         self.fn = apply_patches.patch_webutils_windows_paths
 
     def test_normalizes_static_and_result_template_paths(self):
-        content = (
-            "file_list.append(str(f.relative_to(static_path)))\n"
-            "result_templates.add(f)\n"
-        )
+        content = "file_list.append(str(f.relative_to(static_path)))\nresult_templates.add(f)\n"
         result = self.fn(content, "webutils.py")
         self.assertIn("str(f.relative_to(static_path)).replace(os.sep, '/')", result)
         self.assertIn("result_templates.add(f.replace(os.sep, '/'))", result)
@@ -383,7 +372,7 @@ class TestPatchSimpleSearchAccessibility(unittest.TestCase):
     def test_adds_aria_label_to_search_input(self):
         content = '<input id="q" name="q" type="text" placeholder="{{ _(\'Search for...\') }}">\n'
         result = self.fn(content, "simple_search.html")
-        self.assertIn('aria-label="{{ _(\'Search for...\') }}"', result)
+        self.assertIn("aria-label=\"{{ _('Search for...') }}\"", result)
 
     def test_is_idempotent(self):
         content = '<input id="q" name="q" type="text" aria-label="{{ _(\'Search for...\') }}">\n'
@@ -399,7 +388,7 @@ class TestPatchPreferencesAccessibility(unittest.TestCase):
     def test_adds_aria_label_to_hash_input(self):
         content = '<input type="text" id="pref-hash-input" name="preferences" placeholder="{{- _(\'Preferences hash\') -}}">\n'
         result = self.fn(content, "cookies.html")
-        self.assertIn('aria-label="{{- _(\'Preferences hash\') -}}"', result)
+        self.assertIn("aria-label=\"{{- _('Preferences hash') -}}\"", result)
 
     def test_is_idempotent(self):
         content = '<input type="text" id="pref-hash-input" name="preferences" aria-label="{{- _(\'Preferences hash\') -}}" placeholder="{{- _(\'Preferences hash\') -}}">\n'
@@ -427,21 +416,23 @@ class TestPatchEnginesInit(unittest.TestCase):
             lines.append("    if engine_data.get('disabled') is True:")
             lines.append("        logger.debug('Engine \"%s\" is disabled in config, skipping load', engine_name)")
             lines.append("        return None")
-        lines.extend([
-            "    # load_module",
-            "",
-            "def load_engines(engine_list):",
-            "    for engine_data in engine_list:",
-        ])
+        lines.extend(
+            [
+                "    # load_module",
+                "",
+                "def load_engines(engine_list):",
+                "    for engine_data in engine_list:",
+            ]
+        )
         if with_legacy_patch:
-            lines.append("        if engine_data.get(\"inactive\") is True or engine_data.get(\"disabled\") is True:")
+            lines.append('        if engine_data.get("inactive") is True or engine_data.get("disabled") is True:')
             lines.append("            logger.debug(")
-            lines.append("                \"loading engine %s skipped: inactive or disabled in config!\",")
-            lines.append("                engine_data.get(\"name\", \"???\"),")
+            lines.append('                "loading engine %s skipped: inactive or disabled in config!",')
+            lines.append('                engine_data.get("name", "???"),')
             lines.append("            )")
             lines.append("            continue")
         else:
-            lines.append("        if engine_data.get(\"inactive\") is True:")
+            lines.append('        if engine_data.get("inactive") is True:')
             lines.append("            continue")
         return "\n".join(lines) + "\n"
 
@@ -466,11 +457,7 @@ class TestPatchSettingsYml(unittest.TestCase):
         self.cfg_fn = apply_patches.patch_config_settings_yml
 
     def test_replaces_known_long_values(self):
-        content = (
-            "SearxEngineCaptcha: 86400\n"
-            "SearxEngineAccessDenied: 86400\n"
-            "SearxEngineTooManyRequests: 3600\n"
-        )
+        content = "SearxEngineCaptcha: 86400\nSearxEngineAccessDenied: 86400\nSearxEngineTooManyRequests: 3600\n"
         result = self.fn(content, "settings.yml")
         self.assertIn("SearxEngineCaptcha: 900", result)
         self.assertIn("SearxEngineAccessDenied: 900", result)
@@ -478,11 +465,7 @@ class TestPatchSettingsYml(unittest.TestCase):
 
     def test_replaces_arbitrary_integers(self):
         # R1 regression test: regex pattern matches any upstream integer
-        content = (
-            "SearxEngineCaptcha: 7200\n"
-            "SearxEngineAccessDenied: 14400\n"
-            "SearxEngineTooManyRequests: 1800\n"
-        )
+        content = "SearxEngineCaptcha: 7200\nSearxEngineAccessDenied: 14400\nSearxEngineTooManyRequests: 1800\n"
         result = self.fn(content, "settings.yml")
         self.assertIn("SearxEngineCaptcha: 900", result)
         self.assertIn("SearxEngineAccessDenied: 900", result)
@@ -581,13 +564,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertEqual(self.fn(content, "webapp.py"), "ALREADY_APPLIED")
 
     def test_injects_scrape_route(self):
-        content = (
-            "import warnings\n"
-            "from flask import Flask\n\n"
-            "@app.route('/search')\n"
-            "def search():\n"
-            "    pass\n"
-        )
+        content = "import warnings\nfrom flask import Flask\n\n@app.route('/search')\ndef search():\n    pass\n"
         res = self.fn(content, "webapp.py")
         self.assertIn("import trafilatura", res)
         self.assertIn("import html", res)
@@ -628,13 +605,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertNotIn(r"re.sub(r'\\s+'", res)
 
     def test_scrape_hex_ip_and_whitespace_collapse(self):
-        content = (
-            "import warnings\n"
-            "from flask import Flask\n\n"
-            "@app.route('/search')\n"
-            "def search():\n"
-            "    pass\n"
-        )
+        content = "import warnings\nfrom flask import Flask\n\n@app.route('/search')\ndef search():\n    pass\n"
         res = self.fn(content, "webapp.py")
         self.assertIn(r"re.sub(r'\s+', ' ', raw_text).strip()", res)
         self.assertNotIn(r"re.sub(r'\\s+'", res)
@@ -650,23 +621,20 @@ class TestPatchProcessorsInit(unittest.TestCase):
         self.fn = apply_patches.patch_processors_init
 
     def test_already_applied(self):
-        content = (
-            'if eng_settings.get("inactive", False) is True:\n'
-            "    continue\n"
-        )
+        content = 'if eng_settings.get("inactive", False) is True:\n    continue\n'
         self.assertEqual(self.fn(content, "__init__.py"), "ALREADY_APPLIED")
 
     def test_removes_legacy_disabled_processor_skip(self):
         content = (
-            "if eng_settings.get(\"inactive\", False) is True:\n"
+            'if eng_settings.get("inactive", False) is True:\n'
             "    continue\n"
-            "            if eng_settings.get(\"disabled\", False) is True:\n"
+            '            if eng_settings.get("disabled", False) is True:\n'
             "                logger.debug(\"Engine '%s' is disabled in config, skipping processor init.\", eng_name)\n"
             "                continue\n"
         )
         res = self.fn(content, "__init__.py")
         self.assertNotIn("skipping processor init", res)
-        self.assertNotIn("if eng_settings.get(\"disabled\", False) is True:", res)
+        self.assertNotIn('if eng_settings.get("disabled", False) is True:', res)
 
 
 class TestPatchGoogleCaptcha(unittest.TestCase):
@@ -682,12 +650,12 @@ class TestPatchGoogleCaptcha(unittest.TestCase):
             "    if resp.status_code == 302:\n"
             "        raise SearxEngineCaptchaException()\n"
             "\n"
-            "    if len(resp.text) < 2000 and \"/sorry/\" in resp.text:\n"
+            '    if len(resp.text) < 2000 and "/sorry/" in resp.text:\n'
             "        raise SearxEngineCaptchaException()"
         )
         res = self.fn(old, "google.py")
         self.assertIn('loc = (resp.headers.get("Location")', res)
-        self.assertIn('sorry.google.com', res)
+        self.assertIn("sorry.google.com", res)
 
 
 class TestPatchSogouCaptcha(unittest.TestCase):
@@ -695,7 +663,7 @@ class TestPatchSogouCaptcha(unittest.TestCase):
         self.fn = apply_patches.patch_sogou_captcha
 
     def test_already_applied(self):
-        content = 'antispider in content and captcha in content.lower() and resp.headers.get in content'
+        content = "antispider in content and captcha in content.lower() and resp.headers.get in content"
         self.assertEqual(self.fn(content, "sogou.py"), "ALREADY_APPLIED")
 
     def test_replaces_sogou_response(self):
@@ -704,13 +672,13 @@ class TestPatchSogouCaptcha(unittest.TestCase):
             "    if (\n"
             "        resp.status_code == 302\n"
             "        and resp.next_request is not None\n"
-            "        and str(resp.next_request.url).startswith(\"http://www.sogou.com/antispider\")\n"
+            '        and str(resp.next_request.url).startswith("http://www.sogou.com/antispider")\n'
             "    ):\n"
             "        raise SearxEngineCaptchaException()"
         )
         res = self.fn(old, "sogou.py")
         self.assertIn("antispider", res)
-        self.assertIn("resp.headers.get(\"Location\")", res)
+        self.assertIn('resp.headers.get("Location")', res)
 
 
 class TestPatchAbstractSuspend(unittest.TestCase):
@@ -721,21 +689,21 @@ class TestPatchAbstractSuspend(unittest.TestCase):
         content = (
             "            self.suspend_end_time = default_timer() + suspended_time\n"
             "            self.suspend_reason = suspend_reason\n"
-            "            logger.debug(\"Suspend for %i seconds\", suspended_time)"
+            '            logger.debug("Suspend for %i seconds", suspended_time)'
         )
         self.assertEqual(self.fn(content, "abstract.py"), "ALREADY_APPLIED")
 
     def test_removes_legacy_global_cap(self):
         legacy = (
-            "            suspended_time = min(suspended_time, get_setting(\"search.max_ban_time_on_fail\"))\n"
-            "            if \"captcha\" in suspend_reason.lower() or \"SearxEngineCaptcha\" in suspend_reason:\n"
+            '            suspended_time = min(suspended_time, get_setting("search.max_ban_time_on_fail"))\n'
+            '            if "captcha" in suspend_reason.lower() or "SearxEngineCaptcha" in suspend_reason:\n'
             "                suspended_time = min(suspended_time, 900)\n"
             "            if suspended_time > 120 and self.continuous_errors == 1:\n"
             "                suspended_time = min(suspended_time, 120)\n"
             "\n"
             "            self.suspend_end_time = default_timer() + suspended_time\n"
             "            self.suspend_reason = suspend_reason\n"
-            "            logger.debug(\"Suspend for %i seconds\", suspended_time)"
+            '            logger.debug("Suspend for %i seconds", suspended_time)'
         )
         res = self.fn(legacy, "abstract.py")
         self.assertNotIn("max_ban_time_on_fail", res)
@@ -802,36 +770,20 @@ class TestDisableMissingEngines(unittest.TestCase):
         # ``disabled`` is a preference default, not an instruction to omit the
         # engine.  A missing module must gain ``inactive: true`` while leaving
         # the preference intact.
-        sample = (
-            "engines:\n"
-            "  - name: removed_engine\n"
-            "    engine: removed_mod\n"
-            "    disabled: false\n"
-            "    shortcut: rm\n"
-        )
+        sample = "engines:\n  - name: removed_engine\n    engine: removed_mod\n    disabled: false\n    shortcut: rm\n"
         res = self.mod.disable_engine_in_text(sample, "removed_engine")
         self.assertIn("inactive: true", res)
         self.assertIn("disabled: false", res)
         self.assertIn("shortcut: rm", res)
 
     def test_inactivate_engine_when_already_inactive_is_noop(self):
-        sample = (
-            "engines:\n"
-            "  - name: removed_engine\n"
-            "    engine: removed_mod\n"
-            "    inactive: true\n"
-        )
+        sample = "engines:\n  - name: removed_engine\n    engine: removed_mod\n    inactive: true\n"
         res = self.mod.disable_engine_in_text(sample, "removed_engine")
         self.assertEqual(res, sample)
 
     def test_preserves_comments_and_formatting(self):
         sample = (
-            "# Top comment\n"
-            "engines:\n"
-            "  # Engine comment\n"
-            "  - name: missing\n"
-            "    # inner comment\n"
-            "    engine: missing\n"
+            "# Top comment\nengines:\n  # Engine comment\n  - name: missing\n    # inner comment\n    engine: missing\n"
         )
         res = self.mod.disable_engine_in_text(sample, "missing")
         self.assertIn("# Top comment", res)
@@ -840,20 +792,12 @@ class TestDisableMissingEngines(unittest.TestCase):
 
     def test_engine_name_with_special_chars(self):
         # Engine names with hyphens, dots, etc. should be matched by escaped regex.
-        sample = (
-            "engines:\n"
-            "  - name: my-engine.v2\n"
-            "    engine: my_engine_v2\n"
-        )
+        sample = "engines:\n  - name: my-engine.v2\n    engine: my_engine_v2\n"
         res = self.mod.disable_engine_in_text(sample, "my-engine.v2")
         self.assertIn("inactive: true", res)
 
     def test_no_match_returns_unchanged(self):
-        sample = (
-            "engines:\n"
-            "  - name: existing\n"
-            "    engine: existing\n"
-        )
+        sample = "engines:\n  - name: existing\n    engine: existing\n"
         res = self.mod.disable_engine_in_text(sample, "nonexistent")
         self.assertEqual(res, sample)
 
@@ -874,20 +818,13 @@ class TestDisableMissingEngines(unittest.TestCase):
         result = self.mod.disable_engine_in_text(sample, "missing_target")
         self.assertIn("    disabled: false\n", result)
         self.assertIn(
-            "  - name: missing_target\n"
-            "    engine: missing_target\n"
-            "    categories: general\n"
-            "    inactive: true\n",
+            "  - name: missing_target\n    engine: missing_target\n    categories: general\n    inactive: true\n",
             result,
         )
         self.assertEqual(result.count("inactive: true"), 1)
 
     def test_preserves_crlf_line_endings(self):
-        sample = (
-            "engines:\r\n"
-            "  - name: missing\r\n"
-            "    engine: missing\r\n"
-        )
+        sample = "engines:\r\n  - name: missing\r\n    engine: missing\r\n"
         res = self.mod.disable_engine_in_text(sample, "missing")
         self.assertIn("inactive: true", res)
         # Should preserve CRLF (block contained CRLF).
@@ -897,12 +834,7 @@ class TestDisableMissingEngines(unittest.TestCase):
         # Anything in {'true', 'yes', 'on', '1'} (lowercased) should be treated
         # as already-inactive and not double-modified.
         for val in ("true", "yes", "on", "1", "TRUE", "Yes", "ON"):
-            sample = (
-                "engines:\n"
-                "  - name: e\n"
-                "    engine: e\n"
-                f"    inactive: {val}\n"
-            )
+            sample = f"engines:\n  - name: e\n    engine: e\n    inactive: {val}\n"
             res = self.mod.disable_engine_in_text(sample, "e")
             self.assertEqual(res, sample, f"inactive: {val!r} should be a no-op")
 
@@ -935,8 +867,8 @@ class TestDisableMissingEngines(unittest.TestCase):
             "engines:\n"
             "  # First engine\n"
             "  - name: 'bing images'  # inline comment\n"
-            "    engine: \"bing_images\"\n"
-            "  - name: \"complex-engine\"\n"
+            '    engine: "bing_images"\n'
+            '  - name: "complex-engine"\n'
             "    engine: complex_engine\n"
             "    inactive: yes  # comment\n"
             "other_section:\n"
@@ -952,11 +884,7 @@ class TestDisableMissingEngines(unittest.TestCase):
 
     def test_extract_engines_and_disable_without_yaml(self):
         sample = (
-            "engines:\n"
-            "  - name: google\n"
-            "    engine: google\n"
-            "  - name: \"missing-engine\"\n"
-            "    engine: missing_engine\n"
+            'engines:\n  - name: google\n    engine: google\n  - name: "missing-engine"\n    engine: missing_engine\n'
         )
         with mock.patch.object(self.mod, "yaml", None):
             # 1. extract_engines works without PyYAML
@@ -967,7 +895,7 @@ class TestDisableMissingEngines(unittest.TestCase):
             # 2. disable_engine_in_text works without PyYAML
             res = self.mod.disable_engine_in_text(sample, "missing-engine")
             self.assertIn("inactive: true", res)
-            self.assertIn("name: \"missing-engine\"", res)
+            self.assertIn('name: "missing-engine"', res)
 
     def test_main_execution_without_yaml(self):
         settings_file = os.path.join(self._tmpdir, "settings.yml")
@@ -979,13 +907,7 @@ class TestDisableMissingEngines(unittest.TestCase):
             f.write("# google engine\n")
 
         with open(settings_file, "w", encoding="utf-8") as f:
-            f.write(
-                "engines:\n"
-                "  - name: google\n"
-                "    engine: google\n"
-                "  - name: removed\n"
-                "    engine: removed\n"
-            )
+            f.write("engines:\n  - name: google\n    engine: google\n  - name: removed\n    engine: removed\n")
 
         with (
             mock.patch.object(self.mod, "yaml", None),
@@ -1025,11 +947,7 @@ class TestDisableMissingEngines(unittest.TestCase):
             f.write("# package engine\n")
 
         with open(settings_file, "w", encoding="utf-8") as f:
-            f.write(
-                "engines:\n"
-                "  - name: pkg_engine\n"
-                "    engine: pkg_engine\n"
-            )
+            f.write("engines:\n  - name: pkg_engine\n    engine: pkg_engine\n")
 
         with (
             mock.patch.object(self.mod, "yaml", None),
@@ -1046,12 +964,7 @@ class TestDisableMissingEngines(unittest.TestCase):
 
     def test_engine_with_engine_key_first(self):
         # Engine entries where `engine:` or another key precedes `name:` must still be parsed and inactivated properly.
-        sample = (
-            "engines:\n"
-            "  - engine: removed_mod\n"
-            "    name: removed_engine\n"
-            "    categories: general\n"
-        )
+        sample = "engines:\n  - engine: removed_mod\n    name: removed_engine\n    categories: general\n"
         res = self.mod.disable_engine_in_text(sample, "removed_engine")
         self.assertIn("inactive: true", res)
         self.assertIn("categories: general", res)
@@ -1071,10 +984,7 @@ class TestPatchSettingsYmlEdgeCases(unittest.TestCase):
         self.assertIn("SearxEngineCaptcha: 900", result)
 
     def test_replaces_cloudflare_and_recaptcha(self):
-        content = (
-            "cf_SearxEngineCaptcha: 1296000\n"
-            "recaptcha_SearxEngineCaptcha: 604800\n"
-        )
+        content = "cf_SearxEngineCaptcha: 1296000\nrecaptcha_SearxEngineCaptcha: 604800\n"
         result = self.fn(content, "settings.yml")
         self.assertIn("cf_SearxEngineCaptcha: 3600", result)
         self.assertIn("recaptcha_SearxEngineCaptcha: 3600", result)
@@ -1087,10 +997,7 @@ class TestPatchProcessorsInitEdgeCases(unittest.TestCase):
         self.fn = apply_patches.patch_processors_init
 
     def test_leaves_inactive_check_with_extra_whitespace_unchanged(self):
-        content = (
-            'if   eng_settings.get("inactive", False)  is  True:\n'
-            "    continue\n"
-        )
+        content = 'if   eng_settings.get("inactive", False)  is  True:\n    continue\n'
         result = self.fn(content, "__init__.py")
         self.assertEqual(result, "ALREADY_APPLIED")
 
@@ -1098,7 +1005,7 @@ class TestPatchProcessorsInitEdgeCases(unittest.TestCase):
         content = (
             'if eng_settings.get("inactive", False) is True:\n'
             "    continue\n"
-            "            if eng_settings.get(\"disabled\", False) is True:\n"
+            '            if eng_settings.get("disabled", False) is True:\n'
             "                logger.debug(\"Engine '%s' is disabled in config, skipping processor init.\", eng_name)\n"
             "                continue\n"
         )
@@ -1130,10 +1037,10 @@ class TestPatchEnginesInitEdgeCases(unittest.TestCase):
             "def load_engines(engine_list):\n"
             "    for engine_data in engine_list:\n"
             "        if engine_data.get('inactive') is True: continue\n"
-            "        if engine_data.get(\"inactive\") is True or engine_data.get(\"disabled\") is True:\n"
+            '        if engine_data.get("inactive") is True or engine_data.get("disabled") is True:\n'
             "            logger.debug(\n"
-            "                \"loading engine %s skipped: inactive or disabled in config!\",\n"
-            "                engine_data.get(\"name\", \"???\"),\n"
+            '                "loading engine %s skipped: inactive or disabled in config!",\n'
+            '                engine_data.get("name", "???"),\n'
             "            )\n"
             "            continue\n"
         )
@@ -1151,6 +1058,7 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
         # R3 verification: Unicode and Punycode representations must match
         try:
             import idna
+
             punycode_host = idna.encode("日本語.jp").decode("ascii")
         except ImportError:
             punycode_host = "日本語.jp".encode("idna").decode("ascii")
@@ -1163,6 +1071,7 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
 
         try:
             import idna
+
             enc_h = idna.encode(h_clean).decode("ascii")
             enc_pin = idna.encode(pin_clean).decode("ascii")
         except ImportError:
@@ -1194,63 +1103,65 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
         import threading
 
         thread_local = threading.local()
-        thread_local.pin = {'host': 'example.com', 'ip': '93.184.216.34', 'port': 443}
+        thread_local.pin = {"host": "example.com", "ip": "93.184.216.34", "port": 443}
 
         def mock_original_gai(h, p, *args, **kwargs):
-            return [('live_dns', h, p)]
+            return [("live_dns", h, p)]
 
         # Mimic _safe_getaddrinfo implementation
         def test_safe_getaddrinfo(h, p, *args, **kwargs):
-            pin = getattr(thread_local, 'pin', None)
+            pin = getattr(thread_local, "pin", None)
             if pin:
-                pin_host = pin.get('host')
-                if pin_host and (h or '').rstrip('.').lower() == pin_host.rstrip('.').lower():
-                    pin_port = pin.get('port')
-                    if p is None or p == pin_port or str(p) == str(pin_port) or (pin_port == 443 and p == 'https'):
-                        ip_obj = ipaddress.ip_address(pin['ip'])
+                pin_host = pin.get("host")
+                if pin_host and (h or "").rstrip(".").lower() == pin_host.rstrip(".").lower():
+                    pin_port = pin.get("port")
+                    if p is None or p == pin_port or str(p) == str(pin_port) or (pin_port == 443 and p == "https"):
+                        ip_obj = ipaddress.ip_address(pin["ip"])
                         port_num = int(pin_port or 443)
-                        req_family = args[0] if len(args) > 0 else kwargs.get('family', 0)
+                        req_family = args[0] if len(args) > 0 else kwargs.get("family", 0)
                         ip_family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
                         if req_family in (0, ip_family):
-                            sockaddr = (pin['ip'], port_num, 0, 0) if ip_obj.version == 6 else (pin['ip'], port_num)
-                            return [(ip_family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', sockaddr)]
+                            sockaddr = (pin["ip"], port_num, 0, 0) if ip_obj.version == 6 else (pin["ip"], port_num)
+                            return [(ip_family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sockaddr)]
                         else:
-                            raise socket.gaierror(socket.EAI_NONAME, f'Address family not supported for pinned host {pin_host}')
+                            raise socket.gaierror(
+                                socket.EAI_NONAME, f"Address family not supported for pinned host {pin_host}"
+                            )
             return mock_original_gai(h, p, *args, **kwargs)
 
         # 1. Matching family returns pinned IP
-        res_v4 = test_safe_getaddrinfo('example.com', 443, socket.AF_INET)
-        self.assertEqual(res_v4[0][4], ('93.184.216.34', 443))
+        res_v4 = test_safe_getaddrinfo("example.com", 443, socket.AF_INET)
+        self.assertEqual(res_v4[0][4], ("93.184.216.34", 443))
 
         # 2. Incompatible family raises gaierror (does NOT leak to live DNS)
         with self.assertRaises(socket.gaierror):
-            test_safe_getaddrinfo('example.com', 443, socket.AF_INET6)
+            test_safe_getaddrinfo("example.com", 443, socket.AF_INET6)
 
         # 3. Unpinned host falls through to original resolver
-        res_other = test_safe_getaddrinfo('other.com', 443, socket.AF_INET)
-        self.assertEqual(res_other, [('live_dns', 'other.com', 443)])
+        res_other = test_safe_getaddrinfo("other.com", 443, socket.AF_INET)
+        self.assertEqual(res_other, [("live_dns", "other.com", 443)])
 
     def test_read_scrape_response_unknown_charset_fallback(self):
         # R4 verification: Malformed/bogus charset header must not crash with 500 LookupError
         class DummyResponse:
             def __init__(self):
-                self.headers = {'content-type': 'text/html; charset=bogus-unknown-codec'}
-                self.encoding = 'bogus-unknown-codec'
+                self.headers = {"content-type": "text/html; charset=bogus-unknown-codec"}
+                self.encoding = "bogus-unknown-codec"
 
             def iter_bytes(self):
-                yield 'Hello, 世界!'.encode()
+                yield "Hello, 世界!".encode()
 
         resp = DummyResponse()
         chunks = list(resp.iter_bytes())
-        body = b''.join(chunks)
+        body = b"".join(chunks)
 
-        encoding = resp.encoding or 'utf-8'
+        encoding = resp.encoding or "utf-8"
         try:
-            decoded = body.decode(encoding, errors='replace')
+            decoded = body.decode(encoding, errors="replace")
         except (LookupError, ValueError):
-            decoded = body.decode('utf-8', errors='replace')
+            decoded = body.decode("utf-8", errors="replace")
 
-        self.assertEqual(decoded, 'Hello, 世界!')
+        self.assertEqual(decoded, "Hello, 世界!")
 
     def test_mixed_record_dns_rejection_logic(self):
         # R4 verification: If a domain resolves to both a global IP and a private IP,
@@ -1258,8 +1169,8 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
         import ipaddress
 
         records = [
-            (2, 1, 6, '', ('93.184.216.34', 443)),  # global
-            (2, 1, 6, '', ('192.168.1.1', 443)),   # private
+            (2, 1, 6, "", ("93.184.216.34", 443)),  # global
+            (2, 1, 6, "", ("192.168.1.1", 443)),  # private
         ]
 
         def validate_records(addr_info):
@@ -1267,33 +1178,55 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
                 ip_raw = res[4][0]
                 ip_obj = ipaddress.ip_address(ip_raw)
                 if not ip_obj.is_global:
-                    return False, f'Blocked non-global: {ip_raw}'
-            return True, 'OK'
+                    return False, f"Blocked non-global: {ip_raw}"
+            return True, "OK"
 
         ok, msg = validate_records(records)
         self.assertFalse(ok)
-        self.assertIn('192.168.1.1', msg)
+        self.assertIn("192.168.1.1", msg)
 
     def test_reserved_tlds_blocking_logic(self):
         # R4 verification: Reserved TLDs and bare names must be blocked statically
         reserved_tlds = (
-            '.localhost', '.local', '.internal', '.lan', '.home.arpa',
-            '.invalid', '.test', '.example', '.onion', '.corp', '.home',
+            ".localhost",
+            ".local",
+            ".internal",
+            ".lan",
+            ".home.arpa",
+            ".invalid",
+            ".test",
+            ".example",
+            ".onion",
+            ".corp",
+            ".home",
         )
+
         def is_blocked(host):
-            h = (host or '').strip().rstrip('.').lower()
-            if not h or h == 'localhost':
+            h = (host or "").strip().rstrip(".").lower()
+            if not h or h == "localhost":
                 return True
             for tld in reserved_tlds:
-                bare = tld.lstrip('.')
+                bare = tld.lstrip(".")
                 if h == bare or h.endswith(tld):
                     return True
             return False
 
-        for blocked in ['router.local', 'myhost.internal', 'gateway.lan', 'device.home.arpa', 'dark.onion', 'localhost', 'local', 'internal', 'lan', 'corp', 'home']:
+        for blocked in [
+            "router.local",
+            "myhost.internal",
+            "gateway.lan",
+            "device.home.arpa",
+            "dark.onion",
+            "localhost",
+            "local",
+            "internal",
+            "lan",
+            "corp",
+            "home",
+        ]:
             self.assertTrue(is_blocked(blocked), f"{blocked} should be blocked")
 
-        for allowed in ['example.com', 'searxng.org', 'google.com', 'wikipedia.org']:
+        for allowed in ["example.com", "searxng.org", "google.com", "wikipedia.org"]:
             self.assertFalse(is_blocked(allowed), f"{allowed} should not be blocked")
 
     def test_multicast_and_mapped_ipv6_blocking_logic(self):
@@ -1317,48 +1250,48 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
                 or not ip.is_global
             ):
                 return True
-            mapped = getattr(ip, 'ipv4_mapped', None)
+            mapped = getattr(ip, "ipv4_mapped", None)
             if mapped is not None and is_ip_blocked(mapped):
                 return True
-            s6to4 = getattr(ip, 'sixtofour', None)
+            s6to4 = getattr(ip, "sixtofour", None)
             if s6to4 is not None and is_ip_blocked(s6to4):
                 return True
-            teredo = getattr(ip, 'teredo', None)
+            teredo = getattr(ip, "teredo", None)
             return bool(teredo is not None and (is_ip_blocked(teredo[0]) or is_ip_blocked(teredo[1])))
 
         # Blocked addresses
         blocked_ips = [
-            '127.0.0.1',
-            '192.168.1.1',
-            '10.0.0.1',
-            '172.16.0.1',
-            '169.254.1.1',
-            '224.0.0.1',          # Multicast IPv4
-            '239.255.255.250',    # SSDP multicast
-            'ff02::1',            # Multicast IPv6
-            '::1',                # IPv6 loopback
-            'fe80::1',            # IPv6 link-local
-            '::',                 # IPv6 unspecified
-            '0.0.0.0',            # IPv4 unspecified
-            '::ffff:127.0.0.1',   # Mapped loopback
-            '::ffff:192.168.1.1', # Mapped private
-            '::ffff:224.0.0.1',   # Mapped multicast
-            '::127.0.0.1',        # IPv4-compatible loopback
-            '::192.168.1.1',      # IPv4-compatible private
-            '2002:7f00:1::',      # 6to4 embedding 127.0.0.1
-            '2002:c0a8:101::',    # 6to4 embedding 192.168.1.1
-            '2002:0a00:1::',      # 6to4 embedding 10.0.0.1
-            '2001:0:4136:e378:8000:63bf:7f00:1', # Teredo tunnel embedding 127.0.0.1
+            "127.0.0.1",
+            "192.168.1.1",
+            "10.0.0.1",
+            "172.16.0.1",
+            "169.254.1.1",
+            "224.0.0.1",  # Multicast IPv4
+            "239.255.255.250",  # SSDP multicast
+            "ff02::1",  # Multicast IPv6
+            "::1",  # IPv6 loopback
+            "fe80::1",  # IPv6 link-local
+            "::",  # IPv6 unspecified
+            "0.0.0.0",  # IPv4 unspecified
+            "::ffff:127.0.0.1",  # Mapped loopback
+            "::ffff:192.168.1.1",  # Mapped private
+            "::ffff:224.0.0.1",  # Mapped multicast
+            "::127.0.0.1",  # IPv4-compatible loopback
+            "::192.168.1.1",  # IPv4-compatible private
+            "2002:7f00:1::",  # 6to4 embedding 127.0.0.1
+            "2002:c0a8:101::",  # 6to4 embedding 192.168.1.1
+            "2002:0a00:1::",  # 6to4 embedding 10.0.0.1
+            "2001:0:4136:e378:8000:63bf:7f00:1",  # Teredo tunnel embedding 127.0.0.1
         ]
         for ip_str in blocked_ips:
             self.assertTrue(is_ip_blocked(ip_str), f"{ip_str} should be blocked")
 
         # Allowed public unicast addresses
         allowed_ips = [
-            '93.184.216.34',       # example.com
-            '8.8.8.8',             # Google DNS
-            '2606:2800:220:1:248:1893:25c8:1946', # IPv6 example.com
-            '2606:4700:4700::1111', # Cloudflare DNS IPv6
+            "93.184.216.34",  # example.com
+            "8.8.8.8",  # Google DNS
+            "2606:2800:220:1:248:1893:25c8:1946",  # IPv6 example.com
+            "2606:4700:4700::1111",  # Cloudflare DNS IPv6
         ]
         for ip_str in allowed_ips:
             self.assertFalse(is_ip_blocked(ip_str), f"{ip_str} should be allowed")
@@ -1369,7 +1302,7 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
         import re
 
         raw_html = "<p>SearXNG &amp; AI: &quot;Fast &apos;n&apos; Lean&quot; &lt;3</p>"
-        stripped = re.sub(r'<[^>]+>', ' ', raw_html)
+        stripped = re.sub(r"<[^>]+>", " ", raw_html)
         unescaped = html.unescape(stripped).strip()
         self.assertEqual(unescaped, "SearXNG & AI: \"Fast 'n' Lean\" <3")
 
@@ -1382,21 +1315,14 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
         import lines ('import warnings', 'from flask import ...') are still
         present in the output.
         """
-        content = (
-            "import warnings\n"
-            "from flask import Flask\n\n"
-            "@app.route('/search')\n"
-            "def search():\n"
-            "    pass\n"
-        )
+        content = "import warnings\nfrom flask import Flask\n\n@app.route('/search')\ndef search():\n    pass\n"
         res = apply_patches.patch_webapp_scrape_route(content, "webapp.py")
         # The anchor 'import warnings' must survive the import injection.
         self.assertIn("import warnings", res)
         # Literal backslash-1 must never appear in the output.
         self.assertNotIn("\\1", res)
         # All injected imports must be present.
-        for mod in ('re', 'html', 'httpx', 'idna', 'time', 'trafilatura',
-                     'socket', 'contextlib', 'threading'):
+        for mod in ("re", "html", "httpx", "idna", "time", "trafilatura", "socket", "contextlib", "threading"):
             self.assertIn(f"import {mod}", res)
 
     def test_read_scrape_response_streaming_timeout(self):
@@ -1404,10 +1330,13 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
 
         try:
             import httpx
+
             timeout_exc_cls = httpx.TimeoutException
         except ImportError:
+
             class _FallbackTimeoutException(Exception):
                 pass
+
             timeout_exc_cls = _FallbackTimeoutException
 
         class SlowResponse:
@@ -1476,11 +1405,7 @@ class TestPatchRaiseForHttpError(unittest.TestCase):
         self.assertIn("str(resp.status_code)", res)
 
     def test_is_idempotent(self):
-        content = (
-            "_exc = SearxEngineCaptchaException(message='CAPTCHA')\n"
-            "_exc.response = resp\n"
-            "raise _exc\n"
-        )
+        content = "_exc = SearxEngineCaptchaException(message='CAPTCHA')\n_exc.response = resp\nraise _exc\n"
         self.assertEqual(
             apply_patches.patch_raise_for_httperror(content, "raise_for_httperror.py"),
             "ALREADY_APPLIED",
@@ -1557,16 +1482,12 @@ class TestUpdateFileNoopHandling(unittest.TestCase):
         rewrite._noop_when_unchanged = True
 
         # Never applied -> patched.
-        result = apply_patches.update_file(
-            target, "sample rewrite", rewrite
-        )
+        result = apply_patches.update_file(target, "sample rewrite", rewrite)
         self.assertEqual(result, "PATCHED")
 
         # Already applied -> unchanged output must be reported as already
         # applied, not as a missing anchor.
-        result = apply_patches.update_file(
-            target, "sample rewrite", rewrite
-        )
+        result = apply_patches.update_file(target, "sample rewrite", rewrite)
         self.assertEqual(result, "ALREADY_APPLIED")
 
     def test_unchanged_result_without_flag_still_fails(self):
@@ -1592,53 +1513,58 @@ class TestHardeningEnhancements(unittest.TestCase):
         import threading
 
         thread_local = threading.local()
-        thread_local.pin = {'host': 'example.com', 'ip': 'malformed-ip', 'port': 443}
+        thread_local.pin = {"host": "example.com", "ip": "malformed-ip", "port": 443}
 
         live_calls = []
 
         def mock_original_gai(h, p, *args, **kwargs):
             live_calls.append((h, p))
-            return [('live_dns', h, p)]
+            return [("live_dns", h, p)]
 
         # Mimic hardened _safe_getaddrinfo
         def test_safe_getaddrinfo(h, p, *args, **kwargs):
-            pin = getattr(thread_local, 'pin', None)
+            pin = getattr(thread_local, "pin", None)
             if pin:
-                pin_host = pin.get('host')
+                pin_host = pin.get("host")
                 host_matches = False
                 if pin_host:
-                    h_clean = (h or '').strip('[]').rstrip('.').lower()
-                    pin_clean = pin_host.strip('[]').rstrip('.').lower()
-                    host_matches = (h_clean == pin_clean)
+                    h_clean = (h or "").strip("[]").rstrip(".").lower()
+                    pin_clean = pin_host.strip("[]").rstrip(".").lower()
+                    host_matches = h_clean == pin_clean
                 if host_matches:
-                    pin_port = pin.get('port')
+                    pin_port = pin.get("port")
                     port_matches = (
                         p is None
                         or p == pin_port
                         or str(p) == str(pin_port)
-                        or (pin_port == 443 and p == 'https')
-                        or (pin_port == 80 and p == 'http')
+                        or (pin_port == 443 and p == "https")
+                        or (pin_port == 80 and p == "http")
                     )
                     if port_matches:
                         try:
                             import ipaddress
-                            ip_obj = ipaddress.ip_address(pin['ip'])
+
+                            ip_obj = ipaddress.ip_address(pin["ip"])
                             port_num = int(pin_port or 443)
-                            req_family = args[0] if len(args) > 0 else kwargs.get('family', 0)
+                            req_family = args[0] if len(args) > 0 else kwargs.get("family", 0)
                             ip_family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
                             if req_family in (0, ip_family):
-                                sockaddr = (pin['ip'], port_num, 0, 0) if ip_obj.version == 6 else (pin['ip'], port_num)
-                                return [(ip_family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', sockaddr)]
+                                sockaddr = (pin["ip"], port_num, 0, 0) if ip_obj.version == 6 else (pin["ip"], port_num)
+                                return [(ip_family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sockaddr)]
                             else:
-                                raise socket.gaierror(socket.EAI_NONAME, f'Address family not supported for pinned host {pin_host}')
+                                raise socket.gaierror(
+                                    socket.EAI_NONAME, f"Address family not supported for pinned host {pin_host}"
+                                )
                         except socket.gaierror:
                             raise
                         except Exception as exc:  # noqa: BLE001
-                            raise socket.gaierror(socket.EAI_NONAME, f'Resolution failed for pinned host {pin_host}: {exc}')
+                            raise socket.gaierror(
+                                socket.EAI_NONAME, f"Resolution failed for pinned host {pin_host}: {exc}"
+                            )
             return mock_original_gai(h, p, *args, **kwargs)
 
         with self.assertRaises(socket.gaierror) as ctx:
-            test_safe_getaddrinfo('example.com', 443)
+            test_safe_getaddrinfo("example.com", 443)
         self.assertIn("Resolution failed for pinned host example.com", str(ctx.exception))
         # Ensure zero live DNS requests were made
         self.assertEqual(len(live_calls), 0)
@@ -1649,40 +1575,44 @@ class TestHardeningEnhancements(unittest.TestCase):
         import threading
 
         thread_local = threading.local()
-        thread_local.pin = {'host': 'example.com', 'ip': '93.184.216.34', 'port': 443}
+        thread_local.pin = {"host": "example.com", "ip": "93.184.216.34", "port": 443}
 
         live_calls = []
 
         def mock_original_gai(h, p, *args, **kwargs):
             live_calls.append((h, p))
-            return [('live_dns', h, p)]
+            return [("live_dns", h, p)]
 
         def test_safe_getaddrinfo(h, p, *args, **kwargs):
-            pin = getattr(thread_local, 'pin', None)
+            pin = getattr(thread_local, "pin", None)
             if pin:
-                pin_host = pin.get('host')
+                pin_host = pin.get("host")
                 host_matches = False
                 if pin_host:
-                    h_clean = (h or '').strip('[]').rstrip('.').lower()
-                    pin_clean = pin_host.strip('[]').rstrip('.').lower()
-                    host_matches = (h_clean == pin_clean)
+                    h_clean = (h or "").strip("[]").rstrip(".").lower()
+                    pin_clean = pin_host.strip("[]").rstrip(".").lower()
+                    host_matches = h_clean == pin_clean
                 if host_matches:
-                    pin_port = pin.get('port')
+                    pin_port = pin.get("port")
                     port_matches = (
                         p is None
                         or p == pin_port
                         or str(p) == str(pin_port)
-                        or (pin_port == 443 and p == 'https')
-                        or (pin_port == 80 and p == 'http')
+                        or (pin_port == 443 and p == "https")
+                        or (pin_port == 80 and p == "http")
                     )
                     if port_matches:
-                        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', (pin['ip'], int(pin_port)))]
+                        return [
+                            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (pin["ip"], int(pin_port)))
+                        ]
                     else:
-                        raise socket.gaierror(socket.EAI_NONAME, f'Port mismatch for pinned host {pin_host}: {p} != {pin_port}')
+                        raise socket.gaierror(
+                            socket.EAI_NONAME, f"Port mismatch for pinned host {pin_host}: {p} != {pin_port}"
+                        )
             return mock_original_gai(h, p, *args, **kwargs)
 
         with self.assertRaises(socket.gaierror) as ctx:
-            test_safe_getaddrinfo('example.com', 8080)
+            test_safe_getaddrinfo("example.com", 8080)
         self.assertIn("Port mismatch for pinned host example.com", str(ctx.exception))
         self.assertEqual(len(live_calls), 0)
 
@@ -1696,8 +1626,8 @@ class TestHardeningEnhancements(unittest.TestCase):
                 return None
             try:
                 hdr = None
-                if hasattr(resp, 'headers'):
-                    hdr = resp.headers.get('Retry-After') or resp.headers.get('retry-after')
+                if hasattr(resp, "headers"):
+                    hdr = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
                 if hdr is None:
                     return None
                 hdr = hdr.strip()
@@ -1719,12 +1649,12 @@ class TestHardeningEnhancements(unittest.TestCase):
 
         class DummyResp:
             def __init__(self, val):
-                self.headers = {'Retry-After': val} if val is not None else {}
+                self.headers = {"Retry-After": val} if val is not None else {}
 
         # 1. Delta seconds
-        self.assertEqual(parse_retry_after(DummyResp('120')), 120)
-        self.assertEqual(parse_retry_after(DummyResp('2')), 5)  # min clamp
-        self.assertEqual(parse_retry_after(DummyResp('9999')), 900)  # max clamp
+        self.assertEqual(parse_retry_after(DummyResp("120")), 120)
+        self.assertEqual(parse_retry_after(DummyResp("2")), 5)  # min clamp
+        self.assertEqual(parse_retry_after(DummyResp("9999")), 900)  # max clamp
 
         # 2. Future HTTP-date (60s in future)
         now = datetime.datetime.now(datetime.UTC)
@@ -1737,7 +1667,7 @@ class TestHardeningEnhancements(unittest.TestCase):
         self.assertEqual(parse_retry_after(DummyResp(past_hdr)), 5)
 
         # 4. Invalid or missing
-        self.assertIsNone(parse_retry_after(DummyResp('invalid-date')))
+        self.assertIsNone(parse_retry_after(DummyResp("invalid-date")))
         self.assertIsNone(parse_retry_after(DummyResp(None)))
         self.assertIsNone(parse_retry_after(None))
 
@@ -1746,37 +1676,32 @@ class TestHardeningEnhancements(unittest.TestCase):
         import json
 
         def get_box(i):
-            d = i.as_dict() if hasattr(i, 'as_dict') else (i if isinstance(i, dict) else {})
-            urls_raw = (d.get('urls') if isinstance(d, dict) else getattr(i, 'urls', [])) or []
+            d = i.as_dict() if hasattr(i, "as_dict") else (i if isinstance(i, dict) else {})
+            urls_raw = (d.get("urls") if isinstance(d, dict) else getattr(i, "urls", [])) or []
             urls = []
             for u in urls_raw:
                 if isinstance(u, dict):
-                    urls.append({'title': u.get('title', ''), 'url': u.get('url', '')})
+                    urls.append({"title": u.get("title", ""), "url": u.get("url", "")})
                 else:
-                    urls.append({'title': getattr(u, 'title', ''), 'url': getattr(u, 'url', '')})
+                    urls.append({"title": getattr(u, "title", ""), "url": getattr(u, "url", "")})
             return {
-                'infobox': d.get('infobox', '') if isinstance(d, dict) else getattr(i, 'infobox', ''),
-                'content': d.get('content', '') if isinstance(d, dict) else getattr(i, 'content', ''),
-                'urls': urls,
+                "infobox": d.get("infobox", "") if isinstance(d, dict) else getattr(i, "infobox", ""),
+                "content": d.get("content", "") if isinstance(d, dict) else getattr(i, "content", ""),
+                "urls": urls,
             }
 
-        box_with_none_urls = {'infobox': 'Test', 'content': 'Content', 'urls': None}
+        box_with_none_urls = {"infobox": "Test", "content": "Content", "urls": None}
         out = get_box(box_with_none_urls)
-        self.assertEqual(out['urls'], [])
+        self.assertEqual(out["urls"], [])
         serialized = json.dumps(out)
         self.assertIn('"urls": []', serialized)
 
     def test_disable_missing_engines_package_module(self):
         """Verify disable-missing-engines handles package/submodule engine names."""
-        sample_yaml = (
-            "engines:\n"
-            "  - name: mypkg\n"
-            "    engine: subpkg.mymod\n"
-            "    categories: general\n"
-        )
+        sample_yaml = "engines:\n  - name: mypkg\n    engine: subpkg.mymod\n    categories: general\n"
         engines = disable_missing_engines.extract_engines(sample_yaml)
         self.assertEqual(len(engines), 1)
-        self.assertEqual(engines[0]['engine'], 'subpkg.mymod')
+        self.assertEqual(engines[0]["engine"], "subpkg.mymod")
 
     def test_json_lite_date_serialization_and_string_urls(self):
         """Verify datetime.date and string infobox URLs serialize without TypeError in json_lite."""
@@ -1785,28 +1710,28 @@ class TestHardeningEnhancements(unittest.TestCase):
 
         # 1. Verify datetime.date serialization
         pub_date = datetime.date(2026, 9, 22)
-        pub_str = pub_date.isoformat() if hasattr(pub_date, 'isoformat') else str(pub_date)
+        pub_str = pub_date.isoformat() if hasattr(pub_date, "isoformat") else str(pub_date)
         res_dict = {
-            'publishedDate': pub_str,
-            'pubdate': pub_str,
+            "publishedDate": pub_str,
+            "pubdate": pub_str,
         }
         dumped = json.dumps(res_dict)
         self.assertIn('"publishedDate": "2026-09-22"', dumped)
         self.assertIn('"pubdate": "2026-09-22"', dumped)
 
         # 2. Verify string URLs in infoboxes
-        raw_urls = ['https://example.com/item1', {'title': 'Item 2', 'url': 'https://example.com/item2'}]
+        raw_urls = ["https://example.com/item1", {"title": "Item 2", "url": "https://example.com/item2"}]
         urls = []
         for u in raw_urls:
             if isinstance(u, dict):
-                urls.append({'title': u.get('title', ''), 'url': u.get('url', '')})
+                urls.append({"title": u.get("title", ""), "url": u.get("url", "")})
             elif isinstance(u, str):
-                urls.append({'title': u, 'url': u})
+                urls.append({"title": u, "url": u})
             else:
-                urls.append({'title': getattr(u, 'title', ''), 'url': getattr(u, 'url', '')})
+                urls.append({"title": getattr(u, "title", ""), "url": getattr(u, "url", "")})
 
-        self.assertEqual(urls[0], {'title': 'https://example.com/item1', 'url': 'https://example.com/item1'})
-        self.assertEqual(urls[1], {'title': 'Item 2', 'url': 'https://example.com/item2'})
+        self.assertEqual(urls[0], {"title": "https://example.com/item1", "url": "https://example.com/item1"})
+        self.assertEqual(urls[1], {"title": "Item 2", "url": "https://example.com/item2"})
 
     def test_scrape_port_zero_blocked(self):
         """Verify _parse_scrape_url rejects port 0 to prevent fallback to port 80."""
@@ -1820,20 +1745,20 @@ class TestHardeningEnhancements(unittest.TestCase):
                 parsed_url = urllib.parse.urlparse(value)
                 p = parsed_url.port
                 if p is not None and p == 0:
-                    raise _ScrapeBlockedError('Invalid port: 0')
+                    raise _ScrapeBlockedError("Invalid port: 0")
                 return parsed_url
             except ValueError as exc:
-                raise _ScrapeBlockedError('Invalid URL') from exc
+                raise _ScrapeBlockedError("Invalid URL") from exc
 
         # Port 0 must raise _ScrapeBlockedError
         with self.assertRaises(_ScrapeBlockedError) as ctx:
-            parse_scrape_url('http://example.com:0/path')
-        self.assertEqual(str(ctx.exception), 'Invalid port: 0')
+            parse_scrape_url("http://example.com:0/path")
+        self.assertEqual(str(ctx.exception), "Invalid port: 0")
 
         # Standard ports must pass
-        p80 = parse_scrape_url('http://example.com:80/path')
+        p80 = parse_scrape_url("http://example.com:80/path")
         self.assertEqual(p80.port, 80)
-        p443 = parse_scrape_url('https://example.com:443/path')
+        p443 = parse_scrape_url("https://example.com:443/path")
         self.assertEqual(p443.port, 443)
 
     def test_scrape_fallback_html_strips_case_insensitive_scripts_and_styles(self):
@@ -1844,7 +1769,7 @@ class TestHardeningEnhancements(unittest.TestCase):
         sample_html = (
             "<html><head><TITLE>Test Article</TITLE>"
             "<SCRIPT type=\"text/javascript\">alert('evil1');</SCRIPT>"
-            "<Script src=\"foo.js\">var x = 1;</Script>"
+            '<Script src="foo.js">var x = 1;</Script>'
             "<STYLE>body { color: red; }</style>"
             "<Noscript><p>Please enable JS</p></Noscript>"
             "</head><body>"
@@ -1853,12 +1778,12 @@ class TestHardeningEnhancements(unittest.TestCase):
             "</body></html>"
         )
 
-        raw_text = re.sub(r'(?si)<script.*?>.*?</script>', ' ', sample_html)
-        raw_text = re.sub(r'(?si)<style.*?>.*?</style>', ' ', raw_text)
-        raw_text = re.sub(r'(?si)<noscript.*?>.*?</noscript>', ' ', raw_text)
-        raw_text = re.sub(r'<[^>]+>', ' ', raw_text)
+        raw_text = re.sub(r"(?si)<script.*?>.*?</script>", " ", sample_html)
+        raw_text = re.sub(r"(?si)<style.*?>.*?</style>", " ", raw_text)
+        raw_text = re.sub(r"(?si)<noscript.*?>.*?</noscript>", " ", raw_text)
+        raw_text = re.sub(r"<[^>]+>", " ", raw_text)
         raw_text = html.unescape(raw_text)
-        raw_text = re.sub(r'\s+', ' ', raw_text).strip()
+        raw_text = re.sub(r"\s+", " ", raw_text).strip()
 
         self.assertNotIn("alert", raw_text)
         self.assertNotIn("evil1", raw_text)
@@ -1871,75 +1796,87 @@ class TestHardeningEnhancements(unittest.TestCase):
     def test_reserved_tlds_includes_intranet_localdomain_private(self):
         """Verify _is_reserved_scrape_host blocks .localdomain, .intranet, and .private hosts."""
         reserved_tlds = (
-            '.localhost', '.local', '.internal', '.lan', '.home.arpa',
-            '.invalid', '.test', '.example', '.onion', '.corp', '.home',
-            '.localdomain', '.intranet', '.private',
+            ".localhost",
+            ".local",
+            ".internal",
+            ".lan",
+            ".home.arpa",
+            ".invalid",
+            ".test",
+            ".example",
+            ".onion",
+            ".corp",
+            ".home",
+            ".localdomain",
+            ".intranet",
+            ".private",
         )
 
         def is_reserved_host(host):
-            h = (host or '').strip().rstrip('.').lower()
-            if not h or h == 'localhost':
+            h = (host or "").strip().rstrip(".").lower()
+            if not h or h == "localhost":
                 return True
             for tld in reserved_tlds:
-                bare = tld.lstrip('.')
+                bare = tld.lstrip(".")
                 if h == bare or h.endswith(tld):
                     return True
             return False
 
         # Blocked domains
-        self.assertTrue(is_reserved_host('router.localdomain'))
-        self.assertTrue(is_reserved_host('sub.gateway.intranet'))
-        self.assertTrue(is_reserved_host('nas.private'))
-        self.assertTrue(is_reserved_host('localdomain'))
-        self.assertTrue(is_reserved_host('intranet'))
-        self.assertTrue(is_reserved_host('private'))
-        self.assertTrue(is_reserved_host('localhost'))
-        self.assertTrue(is_reserved_host('test.local'))
+        self.assertTrue(is_reserved_host("router.localdomain"))
+        self.assertTrue(is_reserved_host("sub.gateway.intranet"))
+        self.assertTrue(is_reserved_host("nas.private"))
+        self.assertTrue(is_reserved_host("localdomain"))
+        self.assertTrue(is_reserved_host("intranet"))
+        self.assertTrue(is_reserved_host("private"))
+        self.assertTrue(is_reserved_host("localhost"))
+        self.assertTrue(is_reserved_host("test.local"))
 
         # Allowed public domains
-        self.assertFalse(is_reserved_host('example.com'))
-        self.assertFalse(is_reserved_host('docs.searxng.org'))
-        self.assertFalse(is_reserved_host('my-intranet.com'))
+        self.assertFalse(is_reserved_host("example.com"))
+        self.assertFalse(is_reserved_host("docs.searxng.org"))
+        self.assertFalse(is_reserved_host("my-intranet.com"))
 
     def test_json_lite_format_source_handles_diverse_types(self):
         """Verify _format_source in get_json_lite_response safely formats strings, lists, sets, and non-strings."""
+
         def format_source(d):
-            eng = d.get('engine', '')
+            eng = d.get("engine", "")
             if eng:
                 return str(eng)
-            engs = d.get('engines')
+            engs = d.get("engines")
             if isinstance(engs, (list, tuple, set)):
-                return ', '.join(sorted(str(e) for e in engs if e is not None))
+                return ", ".join(sorted(str(e) for e in engs if e is not None))
             if isinstance(engs, str):
                 return engs
-            return ''
+            return ""
 
         # 1. Primary engine present
-        self.assertEqual(format_source({'engine': 'bing'}), 'bing')
+        self.assertEqual(format_source({"engine": "bing"}), "bing")
 
         # 2. Merged engines list
-        self.assertEqual(format_source({'engines': ['google', 'bing']}), 'bing, google')
+        self.assertEqual(format_source({"engines": ["google", "bing"]}), "bing, google")
 
         # 3. Merged engines with integer / None elements (should not raise TypeError)
-        self.assertEqual(format_source({'engines': ['google', 1, None]}), '1, google')
+        self.assertEqual(format_source({"engines": ["google", 1, None]}), "1, google")
 
         # 4. Merged engines as string
-        self.assertEqual(format_source({'engines': 'duckduckgo'}), 'duckduckgo')
+        self.assertEqual(format_source({"engines": "duckduckgo"}), "duckduckgo")
 
         # 5. Empty or missing
-        self.assertEqual(format_source({}), '')
-        self.assertEqual(format_source({'engines': None}), '')
+        self.assertEqual(format_source({}), "")
+        self.assertEqual(format_source({"engines": None}), "")
 
     def test_scrape_redirect_location_whitespace_stripped(self):
         """Verify redirect location with leading/trailing whitespace is cleanly stripped and joined."""
         import urllib.parse
 
-        current_url = 'https://example.com/start'
-        raw_location = '   /destination?page=1  \t\n'
+        current_url = "https://example.com/start"
+        raw_location = "   /destination?page=1  \t\n"
         cleaned = raw_location.strip()
-        self.assertEqual(cleaned, '/destination?page=1')
+        self.assertEqual(cleaned, "/destination?page=1")
         resolved = urllib.parse.urljoin(current_url, cleaned)
-        self.assertEqual(resolved, 'https://example.com/destination?page=1')
+        self.assertEqual(resolved, "https://example.com/destination?page=1")
 
     def test_safe_getaddrinfo_handles_bytes_host_and_port(self):
         """Verify _safe_getaddrinfo accepts bytes host and port without TypeError."""
@@ -1948,30 +1885,30 @@ class TestHardeningEnhancements(unittest.TestCase):
         import threading
 
         thread_local = threading.local()
-        thread_local.pin = {'host': 'example.com', 'ip': '93.184.216.34', 'port': 443}
+        thread_local.pin = {"host": "example.com", "ip": "93.184.216.34", "port": 443}
 
         def test_safe_gai(h, p, *args, **kwargs):
-            pin = getattr(thread_local, 'pin', None)
+            pin = getattr(thread_local, "pin", None)
             if pin:
-                pin_host = pin.get('host')
+                pin_host = pin.get("host")
                 host_matches = False
                 if pin_host:
                     if isinstance(h, (bytes, bytearray)):
                         try:
-                            h_str = h.decode('ascii')
+                            h_str = h.decode("ascii")
                         except UnicodeDecodeError:
-                            h_str = h.decode('utf-8', errors='replace')
+                            h_str = h.decode("utf-8", errors="replace")
                     else:
-                        h_str = h or ''
-                    h_clean = h_str.strip('[]').rstrip('.').lower()
-                    pin_clean = pin_host.strip('[]').rstrip('.').lower()
+                        h_str = h or ""
+                    h_clean = h_str.strip("[]").rstrip(".").lower()
+                    pin_clean = pin_host.strip("[]").rstrip(".").lower()
                     if h_clean == pin_clean:
                         host_matches = True
                 if host_matches:
-                    pin_port = pin.get('port')
+                    pin_port = pin.get("port")
                     if isinstance(p, (bytes, bytearray)):
                         try:
-                            p_str = p.decode('ascii', errors='replace')
+                            p_str = p.decode("ascii", errors="replace")
                         except Exception:  # noqa: BLE001
                             p_str = str(p)
                     else:
@@ -1980,49 +1917,61 @@ class TestHardeningEnhancements(unittest.TestCase):
                         p_str is None
                         or p_str == pin_port
                         or str(p_str) == str(pin_port)
-                        or (pin_port == 443 and p_str in (443, '443', 'https'))
+                        or (pin_port == 443 and p_str in (443, "443", "https"))
                     )
                     if port_matches:
-                        _ = ipaddress.ip_address(pin['ip'])
+                        _ = ipaddress.ip_address(pin["ip"])
                         port_num = int(pin_port or 443)
-                        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', (pin['ip'], port_num))]
-            return [('live', h, p)]
+                        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (pin["ip"], port_num))]
+            return [("live", h, p)]
 
         # Bytes host and port
-        res = test_safe_gai(b'example.com', b'443')
-        self.assertEqual(res[0][4], ('93.184.216.34', 443))
+        res = test_safe_gai(b"example.com", b"443")
+        self.assertEqual(res[0][4], ("93.184.216.34", 443))
 
         # Bytes host and int port
-        res2 = test_safe_gai(b'example.com', 443)
-        self.assertEqual(res2[0][4], ('93.184.216.34', 443))
+        res2 = test_safe_gai(b"example.com", 443)
+        self.assertEqual(res2[0][4], ("93.184.216.34", 443))
 
     def test_is_reserved_scrape_host_handles_bytes(self):
         """Verify _is_reserved_scrape_host safely handles bytes hostnames."""
         reserved_tlds = (
-            '.localhost', '.local', '.internal', '.lan', '.home.arpa',
-            '.invalid', '.test', '.example', '.onion', '.corp', '.home',
-            '.localdomain', '.intranet', '.private', '.arpa',
+            ".localhost",
+            ".local",
+            ".internal",
+            ".lan",
+            ".home.arpa",
+            ".invalid",
+            ".test",
+            ".example",
+            ".onion",
+            ".corp",
+            ".home",
+            ".localdomain",
+            ".intranet",
+            ".private",
+            ".arpa",
         )
 
         def is_reserved(host):
             if isinstance(host, (bytes, bytearray)):
                 try:
-                    host = host.decode('ascii')
+                    host = host.decode("ascii")
                 except UnicodeDecodeError:
-                    host = host.decode('utf-8', errors='replace')
-            h = (host or '').strip().rstrip('.').lower()
-            if not h or h == 'localhost':
+                    host = host.decode("utf-8", errors="replace")
+            h = (host or "").strip().rstrip(".").lower()
+            if not h or h == "localhost":
                 return True
             for tld in reserved_tlds:
-                bare = tld.lstrip('.')
+                bare = tld.lstrip(".")
                 if h == bare or h.endswith(tld):
                     return True
             return False
 
-        self.assertTrue(is_reserved(b'localhost'))
-        self.assertTrue(is_reserved(b'test.local'))
-        self.assertTrue(is_reserved(b'router.arpa'))
-        self.assertFalse(is_reserved(b'example.org'))
+        self.assertTrue(is_reserved(b"localhost"))
+        self.assertTrue(is_reserved(b"test.local"))
+        self.assertTrue(is_reserved(b"router.arpa"))
+        self.assertFalse(is_reserved(b"example.org"))
 
     def test_read_scrape_response_respects_env_max_duration(self):
         """Verify _read_scrape_response respects SEARXNG_SCRAPE_MAX_DURATION environment override."""
@@ -2030,10 +1979,13 @@ class TestHardeningEnhancements(unittest.TestCase):
 
         try:
             import httpx
+
             timeout_exc_cls = httpx.TimeoutException
         except ImportError:
+
             class _FallbackTimeoutException(Exception):
                 pass
+
             timeout_exc_cls = _FallbackTimeoutException
 
         def read_stream(chunks, env_dur=None, default_dur=15.0):
@@ -2050,47 +2002,47 @@ class TestHardeningEnhancements(unittest.TestCase):
             read_chunks = []
             for chunk in chunks:
                 if time.monotonic() - start_time > max_duration:
-                    raise timeout_exc_cls('Response read stream timed out')
+                    raise timeout_exc_cls("Response read stream timed out")
                 read_chunks.append(chunk)
                 time.sleep(0.01)
-            return b''.join(read_chunks)
+            return b"".join(read_chunks)
 
         # When duration is tight (0.005s), slow stream of chunks should time out reliably
-        chunks = [b'chunk1', b'chunk2', b'chunk3', b'chunk4', b'chunk5']
+        chunks = [b"chunk1", b"chunk2", b"chunk3", b"chunk4", b"chunk5"]
         with self.assertRaises(timeout_exc_cls):
             read_stream(chunks, env_dur="0.005")
 
         # When duration is generous, stream succeeds
-        result = read_stream([b'chunk1', b'chunk2', b'chunk3'], env_dur="5.0")
-        self.assertEqual(result, b'chunk1chunk2chunk3')
+        result = read_stream([b"chunk1", b"chunk2", b"chunk3"], env_dur="5.0")
+        self.assertEqual(result, b"chunk1chunk2chunk3")
 
     def test_json_lite_none_fields_coerced_to_strings(self):
         """Verify None values in title, content, author, category, infobox, and urls are cleanly coerced."""
         d = {
-            'title': None,
-            'url': None,
-            'content': None,
-            'author': None,
-            'category': None,
-            'score': None,
-            'infobox': None,
+            "title": None,
+            "url": None,
+            "content": None,
+            "author": None,
+            "category": None,
+            "score": None,
+            "infobox": None,
         }
         res = {
-            'title': d.get('title') or '',
-            'url': d.get('url') or '',
-            'content': d.get('content') or '',
-            'score': d.get('score', 0) if d.get('score') is not None else 0,
-            'author': d.get('author') or '',
-            'category': d.get('category') or '',
-            'infobox': d.get('infobox') or '',
+            "title": d.get("title") or "",
+            "url": d.get("url") or "",
+            "content": d.get("content") or "",
+            "score": d.get("score", 0) if d.get("score") is not None else 0,
+            "author": d.get("author") or "",
+            "category": d.get("category") or "",
+            "infobox": d.get("infobox") or "",
         }
-        self.assertEqual(res['title'], '')
-        self.assertEqual(res['url'], '')
-        self.assertEqual(res['content'], '')
-        self.assertEqual(res['score'], 0)
-        self.assertEqual(res['author'], '')
-        self.assertEqual(res['category'], '')
-        self.assertEqual(res['infobox'], '')
+        self.assertEqual(res["title"], "")
+        self.assertEqual(res["url"], "")
+        self.assertEqual(res["content"], "")
+        self.assertEqual(res["score"], 0)
+        self.assertEqual(res["author"], "")
+        self.assertEqual(res["category"], "")
+        self.assertEqual(res["infobox"], "")
 
     def test_scrape_fallback_html_strips_comments_iframes_templates(self):
         """Verify fallback HTML text extraction strips comments, iframes, and templates."""
@@ -2105,15 +2057,15 @@ class TestHardeningEnhancements(unittest.TestCase):
             "<p>Visible content</p>"
             "</body></html>"
         )
-        raw_text = re.sub(r'(?si)<!--.*?-->', ' ', sample)
-        raw_text = re.sub(r'(?si)<script.*?>.*?</script>', ' ', raw_text)
-        raw_text = re.sub(r'(?si)<style.*?>.*?</style>', ' ', raw_text)
-        raw_text = re.sub(r'(?si)<noscript.*?>.*?</noscript>', ' ', raw_text)
-        raw_text = re.sub(r'(?si)<iframe.*?>.*?</iframe>', ' ', raw_text)
-        raw_text = re.sub(r'(?si)<template.*?>.*?</template>', ' ', raw_text)
-        raw_text = re.sub(r'<[^>]+>', ' ', raw_text)
+        raw_text = re.sub(r"(?si)<!--.*?-->", " ", sample)
+        raw_text = re.sub(r"(?si)<script.*?>.*?</script>", " ", raw_text)
+        raw_text = re.sub(r"(?si)<style.*?>.*?</style>", " ", raw_text)
+        raw_text = re.sub(r"(?si)<noscript.*?>.*?</noscript>", " ", raw_text)
+        raw_text = re.sub(r"(?si)<iframe.*?>.*?</iframe>", " ", raw_text)
+        raw_text = re.sub(r"(?si)<template.*?>.*?</template>", " ", raw_text)
+        raw_text = re.sub(r"<[^>]+>", " ", raw_text)
         raw_text = html.unescape(raw_text)
-        raw_text = re.sub(r'\s+', ' ', raw_text).strip()
+        raw_text = re.sub(r"\s+", " ", raw_text).strip()
 
         self.assertNotIn("Secret comment", raw_text)
         self.assertNotIn("Iframe text", raw_text)
@@ -2189,15 +2141,16 @@ class TestProjectPatchHardening(unittest.TestCase):
             try:
                 f = float(v)
                 import math
+
                 if math.isnan(f) or math.isinf(f):
                     return 0
                 return int(f) if f.is_integer() else f
             except (ValueError, TypeError):
                 return 0
 
-        self.assertEqual(clean_score(float('nan')), 0)
-        self.assertEqual(clean_score(float('inf')), 0)
-        self.assertEqual(clean_score(float('-inf')), 0)
+        self.assertEqual(clean_score(float("nan")), 0)
+        self.assertEqual(clean_score(float("inf")), 0)
+        self.assertEqual(clean_score(float("-inf")), 0)
         self.assertEqual(clean_score("invalid"), 0)
         self.assertEqual(clean_score(12.5), 12.5)
         self.assertEqual(clean_score(10.0), 10)
@@ -2211,13 +2164,7 @@ class TestProjectPatchHardening(unittest.TestCase):
 
     def test_scrape_integer_ip_blocking(self):
         """Verify integer representation of loopback/private IPs is detected and blocked."""
-        content = (
-            "import warnings\n"
-            "from flask import Flask\n\n"
-            "@app.route('/search')\n"
-            "def search():\n"
-            "    pass\n"
-        )
+        content = "import warnings\nfrom flask import Flask\n\n@app.route('/search')\ndef search():\n    pass\n"
         patched = apply_patches.patch_webapp_scrape_route(content, "webapp.py")
         self.assertIn("host_clean.isdigit()", patched)
         self.assertIn("0 <= ip_int <= 0xFFFFFFFF", patched)
@@ -2246,14 +2193,14 @@ class TestProjectPatchHardening(unittest.TestCase):
         """Verify patch_simple_search_accessibility works even when input attributes are in different order."""
         sample = '<input name="q" id="q" type="text" placeholder="Search">\n'
         patched = apply_patches.patch_simple_search_accessibility(sample, "search.html")
-        self.assertIn('aria-label="{{ _(\'Search for...\') }}"', patched)
+        self.assertIn("aria-label=\"{{ _('Search for...') }}\"", patched)
         self.assertIn('id="q"', patched)
 
     def test_preferences_accessibility_reordered_attributes(self):
         """Verify patch_preferences_accessibility works even when input attributes are in different order."""
         sample = '<input name="preferences" id="pref-hash-input" type="text">\n'
         patched = apply_patches.patch_preferences_accessibility(sample, "cookies.html")
-        self.assertIn('aria-label="{{- _(\'Preferences hash\') -}}"', patched)
+        self.assertIn("aria-label=\"{{- _('Preferences hash') -}}\"", patched)
         self.assertIn('id="pref-hash-input"', patched)
 
 
@@ -2261,13 +2208,7 @@ class TestAiWebuiPatches(unittest.TestCase):
     """Tests for SearXNG Next AI-First WebUI patches and webui_next module."""
 
     def test_patch_webapp_ai_webui_injects_and_is_idempotent(self):
-        sample = (
-            "import os\n"
-            "import sys\n\n"
-            "@app.route('/search', methods=['GET', 'POST'])\n"
-            "def search():\n"
-            "    pass\n"
-        )
+        sample = "import os\nimport sys\n\n@app.route('/search', methods=['GET', 'POST'])\ndef search():\n    pass\n"
         patched = apply_patches.patch_webapp_ai_webui(sample, "webapp.py")
         self.assertIn("# --- GenAI Next WebUI Integration ---", patched)
         self.assertIn("_webui_next.register_next_webui(app, sys.modules.get(__name__))", patched)
@@ -2276,11 +2217,11 @@ class TestAiWebuiPatches(unittest.TestCase):
     def test_patch_simple_base_ai_webui_injects_and_is_idempotent(self):
         sample = (
             '<nav id="links_on_top">\n'
-            '      {%- block linkto_about -%}\n'
+            "      {%- block linkto_about -%}\n"
             '        <a href="/about">About</a>\n'
-            '      {%- endblock -%}\n'
-            '</nav>\n'
-            '</body>\n'
+            "      {%- endblock -%}\n"
+            "</nav>\n"
+            "</body>\n"
         )
         patched = apply_patches.patch_simple_base_ai_webui(sample, "base.html")
         self.assertIn('class="link_on_top_ai"', patched)
@@ -2293,7 +2234,7 @@ class TestAiWebuiPatches(unittest.TestCase):
             '<div class="index">\n'
             '    <div class="title"><h1>SearXNG</h1></div>\n'
             "    {% include 'simple/simple_search.html' %}\n"
-            '</div>\n'
+            "</div>\n"
         )
         patched = apply_patches.patch_simple_index_ai_webui(sample, "index.html")
         self.assertIn('class="sxng-next-badge"', patched)
@@ -2301,11 +2242,7 @@ class TestAiWebuiPatches(unittest.TestCase):
         self.assertEqual(apply_patches.patch_simple_index_ai_webui(patched, "index.html"), "ALREADY_APPLIED")
 
     def test_patch_simple_results_ai_webui_injects_and_is_idempotent(self):
-        sample = (
-            '<div id="results" class="{{ only_template }}">\n'
-            '    <div id="urls" role="main"></div>\n'
-            '</div>\n'
-        )
+        sample = '<div id="results" class="{{ only_template }}">\n    <div id="urls" role="main"></div>\n</div>\n'
         patched = apply_patches.patch_simple_results_ai_webui(sample, "results.html")
         self.assertIn('id="sxng-ai-results-bar"', patched)
         self.assertIn('id="sxng-ai-deep-drawer"', patched)
@@ -2430,7 +2367,9 @@ class TestAiWebuiPatches(unittest.TestCase):
         fake_webapp = mock.MagicMock()
         fake_webapp._ScrapeBlockedError = ValueError
         fake_webapp._ScrapeResponseTooLargeError = RuntimeError
-        fake_webapp._is_reserved_scrape_host = lambda h: h in ("localhost", "localhost.localdomain") or h.endswith(".local")
+        fake_webapp._is_reserved_scrape_host = lambda h: (
+            h in ("localhost", "localhost.localdomain") or h.endswith(".local")
+        )
         fake_webapp._is_ip_blocked = lambda ip: (
             ipaddress.ip_address(ip).is_loopback or ipaddress.ip_address(ip).is_private
         )
@@ -2486,6 +2425,62 @@ class TestAiWebuiPatches(unittest.TestCase):
         self.assertEqual(captured.get("engines"), "arxiv,semantic_scholar")
         self.assertEqual(captured.get("time_range"), "year")
 
+    def test_webui_next_scrape_url_direct_prioritizes_ipv4_and_handles_oserror(self):
+        import contextlib
+        import socket
+
+        import webui_next
+
+        fake_webapp = mock.MagicMock()
+        fake_webapp._ScrapeBlockedError = ValueError
+        fake_webapp._ScrapeResponseTooLargeError = RuntimeError
+        fake_webapp._is_reserved_scrape_host = lambda h: False
+        fake_webapp._is_ip_blocked = lambda ip: False
+        fake_webapp._is_blocked_scrape_host = lambda h: False
+
+        captured_pinned_ips = []
+
+        @contextlib.contextmanager
+        def mock_pinned_dns(host, ips, port):
+            captured_pinned_ips.append((host, ips, port))
+            yield
+
+        fake_webapp.pinned_dns = mock_pinned_dns
+
+        # Mock httpx response stream
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {}
+        fake_client = mock.MagicMock()
+        fake_client.stream.return_value.__enter__.return_value = mock_resp
+        fake_webapp._scrape_client = fake_client
+        fake_webapp._scrape_client_lock = contextlib.nullcontext()
+        fake_webapp._read_scrape_response = lambda resp, max_duration=15.0: (
+            "<html><body>Extracted test page</body></html>"
+        )
+        fake_webapp.trafilatura.extract = lambda html, **kw: "Extracted test page"
+
+        # 1. Simulate getaddrinfo returning IPv6 first, then IPv4
+        mock_addrs = [
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::1", 443, 0, 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443)),
+        ]
+        with mock.patch("webui_next.socket.getaddrinfo", return_value=mock_addrs):
+            res = webui_next._scrape_url_direct(fake_webapp, "https://example.com/test")
+            self.assertEqual(res.get("content"), "Extracted test page")
+            self.assertTrue(len(captured_pinned_ips) > 0)
+            pinned_host, pinned_ips, pinned_port = captured_pinned_ips[-1]
+            self.assertEqual(pinned_host, "example.com")
+            self.assertEqual(pinned_port, 443)
+            # IPv4 must be prioritized at index 0
+            self.assertEqual(pinned_ips, ["93.184.216.34", "2001:db8::1"])
+
+        # 2. Simulate OSError during DNS resolution
+        with mock.patch("webui_next.socket.getaddrinfo", side_effect=OSError("Network is unreachable")):
+            err_res = webui_next._scrape_url_direct(fake_webapp, "https://example.com/unreachable")
+            self.assertIn("スクレイピング拒否", err_res.get("error", ""))
+            self.assertIn("DNS resolution failed", err_res.get("error", ""))
+
 
 class TestPatchCache(unittest.TestCase):
     """Tests for patch caching and fast-path verification."""
@@ -2508,7 +2503,7 @@ class TestPatchCache(unittest.TestCase):
         # Temporarily tamper with cache file
         with open(apply_patches.CACHE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        
+
         orig_files = data.get("files", {})
         # Fake a modified mtime
         if orig_files:
@@ -2516,9 +2511,9 @@ class TestPatchCache(unittest.TestCase):
             data["files"][first_key]["size"] = orig_files[first_key]["size"] + 9999
             with open(apply_patches.CACHE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f)
-            
+
             self.assertFalse(apply_patches.is_patch_cache_valid())
-        
+
         # Restore valid cache
         apply_patches.save_patch_cache()
         self.assertTrue(apply_patches.is_patch_cache_valid())
@@ -2563,21 +2558,17 @@ class TestPatchDiagnosticsAndResilience(unittest.TestCase):
         patched = apply_patches.patch_webutils(sample, "webutils.py")
         self.assertIn("def get_json_lite_response", patched)
         import ast
+
         ast.parse(patched)  # syntax must be valid
 
     def test_patch_webapp_scrape_route_fallback_anchors(self):
         """If @app.route('/search') is absent, fallback anchors inject /scrape route safely."""
-        sample = (
-            "import warnings\n"
-            "from flask import Flask\n\n"
-            "@main_bp.route('/search')\n"
-            "def search():\n"
-            "    pass\n"
-        )
+        sample = "import warnings\nfrom flask import Flask\n\n@main_bp.route('/search')\ndef search():\n    pass\n"
         patched = apply_patches.patch_webapp_scrape_route(sample, "webapp.py")
         self.assertIn("def scrape():", patched)
         self.assertIn("@app.route('/scrape'", patched)
         import ast
+
         ast.parse(patched)
 
     def test_patch_online_captcha_fallback_anchors(self):
@@ -2601,6 +2592,7 @@ class TestPatchDiagnosticsAndResilience(unittest.TestCase):
         self.assertIn("def _parse_retry_after_header", patched)
         self.assertIn("except SearxEngineCaptchaException as e:", patched)
         import ast
+
         ast.parse(patched)
 
     def test_diagnose_patch_failure_identifies_missing_anchors_and_tokens(self):
@@ -2750,5 +2742,3 @@ class TestPatchDiagnosticsAndResilience(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-
-

@@ -251,7 +251,9 @@ def cmd_search(args: argparse.Namespace) -> int:
     )
 
     if use_unified:
-        effective_mode = "scrape" if (mode == "scrape" or _is_url_arg(args.query)) else ("fast" if depth == "fast" else "deep")
+        effective_mode = (
+            "scrape" if (mode == "scrape" or _is_url_arg(args.query)) else ("fast" if depth == "fast" else "deep")
+        )
         res = searxng_client.unified_search(
             query=args.query,
             mode=effective_mode,
@@ -392,4 +394,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -77,14 +77,94 @@ DEFAULT_SPAM_PATTERNS: list[str] = [
 
 # Common English and Japanese stopwords for light distillation
 STOP_WORDS: set[str] = {
-    "a", "an", "the", "and", "or", "but", "if", "then", "of", "to", "for", "in", "on", "at",
-    "by", "with", "from", "about", "how", "what", "why", "when", "where", "which", "who",
-    "is", "are", "was", "were", "be", "been", "being", "do", "does", "did", "have", "has",
-    "had", "it", "its", "this", "that", "these", "those", "can", "could", "should", "would",
-    "please", "tell", "me", "show", "find", "search", "give",
-    "の", "に", "は", "を", "た", "が", "で", "て", "と", "し", "れ", "さ", "ある", "いる", "も", "する",
-    "から", "な", "こと", "として", "い", "や", "れる", "など", "なっ", "ない", "この", "ため", "その",
-    "について", "教えて", "方法", "どうやって",
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "but",
+    "if",
+    "then",
+    "of",
+    "to",
+    "for",
+    "in",
+    "on",
+    "at",
+    "by",
+    "with",
+    "from",
+    "about",
+    "how",
+    "what",
+    "why",
+    "when",
+    "where",
+    "which",
+    "who",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "do",
+    "does",
+    "did",
+    "have",
+    "has",
+    "had",
+    "it",
+    "its",
+    "this",
+    "that",
+    "these",
+    "those",
+    "can",
+    "could",
+    "should",
+    "would",
+    "please",
+    "tell",
+    "me",
+    "show",
+    "find",
+    "search",
+    "give",
+    "の",
+    "に",
+    "は",
+    "を",
+    "た",
+    "が",
+    "で",
+    "て",
+    "と",
+    "し",
+    "れ",
+    "さ",
+    "ある",
+    "いる",
+    "も",
+    "する",
+    "から",
+    "な",
+    "こと",
+    "として",
+    "い",
+    "や",
+    "れる",
+    "など",
+    "なっ",
+    "ない",
+    "この",
+    "ため",
+    "その",
+    "について",
+    "教えて",
+    "方法",
+    "どうやって",
 }
 
 
@@ -163,6 +243,7 @@ def parse_domain_list(val: Any) -> list[str]:
     for d in raw_items:
         dom = (
             d.strip()
+            .strip("\"'")
             .lower()
             .removeprefix("https://")
             .removeprefix("http://")
@@ -179,22 +260,79 @@ class QueryOptimizer:
     """Analyzes and optimizes natural language search queries for AI agents."""
 
     CODE_KEYWORDS: ClassVar[set[str]] = {
-        "error", "exception", "traceback", "syntax", "def", "class", "function",
-        "api", "method", "bug", "crash", "segfault", "module", "import", "package",
-        "npm", "pip", "cargo", "go", "python", "typescript", "javascript", "rust",
-        "react", "fastapi", "docker", "k8s", "kubernetes", "async", "await", "null",
-        "undefined", "pointer", "regex", "sql", "hook", "component", "lifespan",
+        "error",
+        "exception",
+        "traceback",
+        "syntax",
+        "def",
+        "class",
+        "function",
+        "api",
+        "method",
+        "bug",
+        "crash",
+        "segfault",
+        "module",
+        "import",
+        "package",
+        "npm",
+        "pip",
+        "cargo",
+        "go",
+        "python",
+        "typescript",
+        "javascript",
+        "rust",
+        "react",
+        "fastapi",
+        "docker",
+        "k8s",
+        "kubernetes",
+        "async",
+        "await",
+        "null",
+        "undefined",
+        "pointer",
+        "regex",
+        "sql",
+        "hook",
+        "component",
+        "lifespan",
     }
 
     ACADEMIC_KEYWORDS: ClassVar[set[str]] = {
-        "paper", "arxiv", "theorem", "proof", "dataset", "benchmark", "survey",
-        "algorithm", "evaluation", "ablation", "transformer", "neural", "deep learning",
-        "model", "parameters", "citation",
+        "paper",
+        "arxiv",
+        "theorem",
+        "proof",
+        "dataset",
+        "benchmark",
+        "survey",
+        "algorithm",
+        "evaluation",
+        "ablation",
+        "transformer",
+        "neural",
+        "deep learning",
+        "model",
+        "parameters",
+        "citation",
     }
 
     NEWS_KEYWORDS: ClassVar[set[str]] = {
-        "news", "announcement", "announced", "release", "released", "vulnerability",
-        "cve", "breaking", "update", "latest", "today", "yesterday", "launch",
+        "news",
+        "announcement",
+        "announced",
+        "release",
+        "released",
+        "vulnerability",
+        "cve",
+        "breaking",
+        "update",
+        "latest",
+        "today",
+        "yesterday",
+        "launch",
     }
 
     @classmethod
@@ -350,7 +488,12 @@ class DomainScorer:
 
             # Engine score if provided by SearXNG
             raw_score = r.get("score")
-            if isinstance(raw_score, (int, float)) and not math.isnan(raw_score) and not math.isinf(raw_score) and raw_score > 0:
+            if (
+                isinstance(raw_score, (int, float))
+                and not math.isnan(raw_score)
+                and not math.isinf(raw_score)
+                and raw_score > 0
+            ):
                 base_score = (base_score + min(float(raw_score), 5.0) / 5.0) / 2.0
 
             dom_weight = self.get_domain_weight(dom)
@@ -570,7 +713,7 @@ class TokenBudgeter:
         """Roughly estimate token count (English ~4 chars/token, CJK ~1.5 chars/token)."""
         if not text:
             return 0
-        cjk_chars = len(re.findall(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]", text))
+        cjk_chars = len(re.findall(r"[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef]", text))
         other_chars = len(text) - cjk_chars
         return int(cjk_chars / 1.5 + other_chars / 4.0)
 
@@ -1000,11 +1143,7 @@ def execute_unified_search(
     top_candidates = scored_items[:max_res]
 
     # Speculative fetching & BM25 highlight extraction (for deep advanced/code modes)
-    should_scrape = (
-        norm_mode == "deep"
-        and norm_depth in ("advanced", "code")
-        and include_highlights
-    )
+    should_scrape = norm_mode == "deep" and norm_depth in ("advanced", "code") and include_highlights
     if should_scrape:
         fetcher = SpeculativeFetcher(scrape_func=scrape_func)
         extractor = BM25PassageExtractor()
@@ -1086,5 +1225,3 @@ def execute_deep_search(
         base_url=base_url,
         timeout=timeout,
     )
-
-

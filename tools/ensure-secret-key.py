@@ -32,6 +32,7 @@ The launcher always exports ``SEARXNG_SECRET`` from whatever key this script
 emits, which means the ``secret_key`` value in ``config/settings.yml`` is
 never used at runtime.
 """
+
 from __future__ import annotations
 
 import os
@@ -120,8 +121,7 @@ def _ensure_settings_file() -> None:
 
     if not os.path.exists(SETTINGS_EXAMPLE_PATH):
         print(
-            f"[ERROR] Neither {SETTINGS_PATH} nor {SETTINGS_EXAMPLE_PATH} "
-            "exists. Cannot seed a default configuration.",
+            f"[ERROR] Neither {SETTINGS_PATH} nor {SETTINGS_EXAMPLE_PATH} exists. Cannot seed a default configuration.",
             file=sys.stderr,
         )
         sys.exit(1)

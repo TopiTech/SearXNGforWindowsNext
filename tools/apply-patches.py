@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger("apply-patches")
 
 # Determine repository root
@@ -25,7 +25,7 @@ REPORT_FILE = os.path.join(REPO_ROOT, "python", ".patches_report.json")
 
 class PatchSeverity:
     CRITICAL = "CRITICAL"  # Essential for Windows runtime (e.g., pwd bypass)
-    FEATURE = "FEATURE"    # Custom project features (/scrape, json_lite, Retry-After)
+    FEATURE = "FEATURE"  # Custom project features (/scrape, json_lite, Retry-After)
     OPTIONAL = "OPTIONAL"  # UI tweaks, engine edge-cases, default tuning
 
 
@@ -112,7 +112,7 @@ class PatchTransaction:
         if self.originals:
             for path, content in self.originals.items():
                 try:
-                    _atomic_write(path, content, encoding='utf-8', newline='\n')
+                    _atomic_write(path, content, encoding="utf-8", newline="\n")
                     restored.append(path)
                 except OSError as exc:
                     logger.error(f"Failed to restore {path} from memory backup: {exc}")
@@ -128,7 +128,7 @@ class PatchTransaction:
                     if os.path.exists(bak_path):
                         with open(bak_path, "r", encoding="utf-8") as f:
                             content = f.read()
-                        _atomic_write(orig_path, content, encoding='utf-8', newline='\n')
+                        _atomic_write(orig_path, content, encoding="utf-8", newline="\n")
                         restored.append(orig_path)
             except (OSError, json.JSONDecodeError) as exc:
                 logger.error(f"Failed to restore from disk backups: {exc}")
@@ -190,7 +190,11 @@ def diagnose_patch_failure(
             if anchor not in file_content:
                 missing_anchors.append(anchor)
                 # Try finding relevant tokens in the file to aid developer
-                tokens = [t for t in re.findall(r'[a-zA-Z_][a-zA-Z0-9_]{3,}', anchor) if t not in ('self', 'None', 'True', 'False', 'import', 'from', 'def', 'class')]
+                tokens = [
+                    t
+                    for t in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{3,}", anchor)
+                    if t not in ("self", "None", "True", "False", "import", "from", "def", "class")
+                ]
                 found_lines = []
                 for lineno, line in enumerate(file_content.splitlines(), start=1):
                     for tok in tokens[:3]:
@@ -198,7 +202,10 @@ def diagnose_patch_failure(
                             found_lines.append(f"L{lineno}: {line.strip()[:80]}")
                             break
                 if found_lines:
-                    suggestions.append(f"Anchor '{anchor[:40]}...' not found. Nearby matches for tokens in file:\n      " + "\n      ".join(found_lines))
+                    suggestions.append(
+                        f"Anchor '{anchor[:40]}...' not found. Nearby matches for tokens in file:\n      "
+                        + "\n      ".join(found_lines)
+                    )
 
     if diagnostic_hint:
         suggestions.append(f"Hint: {diagnostic_hint}")
@@ -281,7 +288,7 @@ def save_patch_cache() -> None:
         logger.warning(f"Failed to write patch cache: {exc}")
 
 
-def _atomic_write(file_path: str, data: str, encoding: str = 'utf-8', newline: str = '\n') -> None:
+def _atomic_write(file_path: str, data: str, encoding: str = "utf-8", newline: str = "\n") -> None:
     """Atomically write data to file_path using a temporary file and os.replace.
     Includes retries with backoff for Windows filesystem lock contention.
     """
@@ -290,7 +297,7 @@ def _atomic_write(file_path: str, data: str, encoding: str = 'utf-8', newline: s
 
     temp_fd, temp_path = tempfile.mkstemp(prefix=".tmp_patch_", dir=directory, text=True)
     try:
-        with open(temp_fd, 'w', encoding=encoding, newline=newline) as f:
+        with open(temp_fd, "w", encoding=encoding, newline=newline) as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
@@ -302,7 +309,7 @@ def _atomic_write(file_path: str, data: str, encoding: str = 'utf-8', newline: s
                 return
             except PermissionError as exc:
                 last_err = exc
-                time.sleep(0.05 * (2 ** attempt))
+                time.sleep(0.05 * (2**attempt))
         if last_err:
             raise last_err
     except Exception:
@@ -374,7 +381,7 @@ def update_file(
         )
 
     try:
-        with open(file_path, 'r', encoding='utf-8-sig') as f:
+        with open(file_path, "r", encoding="utf-8-sig") as f:
             content = f.read()
     except Exception as exc:
         err = f"Could not read {file_path} for {description}: {exc}"
@@ -390,7 +397,7 @@ def update_file(
         )
 
     # Normalize CRLF to LF for consistent regex and anchor matching
-    normalized_content = content.replace('\r\n', '\n')
+    normalized_content = content.replace("\r\n", "\n")
 
     # Record original content in transaction for safe rollback
     if transaction is not None:
@@ -403,7 +410,12 @@ def update_file(
         if raise_on_failure:
             raise RuntimeError(err) from exc
         missing, suggestions = diagnose_patch_failure(
-            file_path, description, expected_anchors, diagnostic_hint, error_message=str(exc), file_content=normalized_content
+            file_path,
+            description,
+            expected_anchors,
+            diagnostic_hint,
+            error_message=str(exc),
+            file_content=normalized_content,
         )
         return PatchResult(
             name=description,
@@ -443,7 +455,12 @@ def update_file(
         if raise_on_failure:
             raise RuntimeError(err)
         missing, suggestions = diagnose_patch_failure(
-            file_path, description, expected_anchors, diagnostic_hint, error_message=err, file_content=normalized_content
+            file_path,
+            description,
+            expected_anchors,
+            diagnostic_hint,
+            error_message=err,
+            file_content=normalized_content,
         )
         return PatchResult(
             name=description,
@@ -457,7 +474,7 @@ def update_file(
         )
     else:
         # Validate syntax if patching a Python file to prevent runtime breakage
-        if file_path.endswith('.py'):
+        if file_path.endswith(".py"):
             try:
                 ast.parse(result, filename=file_path)
             except SyntaxError as exc:
@@ -480,7 +497,7 @@ def update_file(
                 )
 
         if not dry_run:
-            _atomic_write(file_path, result, encoding='utf-8', newline='\n')
+            _atomic_write(file_path, result, encoding="utf-8", newline="\n")
             logger.info(f"Patched: {description}")
         else:
             logger.info(f"[DRY-RUN] Would patch: {description}")
@@ -498,8 +515,10 @@ def update_file(
 
 # --- Patch 1: valkeydb.py (Windows compatibility: pwd → os.environ fallback) ---
 def patch_valkeydb(content, path):
-    if ('def _windows_safe_current_user():' in content
-            and '_user_name, _user_uid = _windows_safe_current_user()' in content):
+    if (
+        "def _windows_safe_current_user():" in content
+        and "_user_name, _user_uid = _windows_safe_current_user()" in content
+    ):
         return "ALREADY_APPLIED"
 
     # If upstream has completely eliminated Unix pwd dependency, it is safe on Windows
@@ -508,9 +527,10 @@ def patch_valkeydb(content, path):
 
     # 1. Wrap Unix-only `import pwd` in try/except
     content = re.sub(
-        r'^(?:import pwd\b|from pwd import\b.*)$',
+        r"^(?:import pwd\b|from pwd import\b.*)$",
         "try:\n    import pwd  # Unix only\nexcept ImportError:\n    pwd = None",
-        content, flags=re.MULTILINE
+        content,
+        flags=re.MULTILINE,
     )
 
     # 2. Inject Windows fallback function after logger (PEP 8: 2 blank lines)
@@ -534,25 +554,21 @@ def _windows_safe_current_user():
     )
     return username, -1
 '''
-    if 'def _windows_safe_current_user():' in content:
+    if "def _windows_safe_current_user():" in content:
         content = re.sub(
-            r'\n{1,3}def _windows_safe_current_user\(\):.*?return username, -1',
-            helper.rstrip(), content, flags=re.DOTALL
+            r"\n{1,3}def _windows_safe_current_user\(\):.*?return username, -1",
+            helper.rstrip(),
+            content,
+            flags=re.DOTALL,
         )
     else:
         # Try primary anchor
-        content, count = re.subn(
-            r'(logger = logging\.getLogger\(__name__\))',
-            r'\1' + helper, content, count=1
-        )
+        content, count = re.subn(r"(logger = logging\.getLogger\(__name__\))", r"\1" + helper, content, count=1)
         if count == 0:
             # Fallback: logger with other arguments or after the last top-level import
-            content, count = re.subn(
-                r'(logger\s*=\s*logging\.getLogger\([^)]+\))',
-                r'\1' + helper, content, count=1
-            )
+            content, count = re.subn(r"(logger\s*=\s*logging\.getLogger\([^)]+\))", r"\1" + helper, content, count=1)
         if count == 0:
-            import_matches = list(re.finditer(r'(?m)^(?:from\s+\S+\s+import\s+.+|import\s+.+)$', content))
+            import_matches = list(re.finditer(r"(?m)^(?:from\s+\S+\s+import\s+.+|import\s+.+)$", content))
             if import_matches:
                 last_import = import_matches[-1]
                 idx = last_import.end()
@@ -562,23 +578,27 @@ def _windows_safe_current_user():
 
     # 3. Replace call-site (indent-aware, exclude nested blocks)
     content = re.sub(
-        r'^(\s{1,8})_pw = pwd\.getpwuid\(os\.getuid\(\)\)',
-        r'\1_user_name, _user_uid = _windows_safe_current_user()',
-        content, flags=re.MULTILINE
+        r"^(\s{1,8})_pw = pwd\.getpwuid\(os\.getuid\(\)\)",
+        r"\1_user_name, _user_uid = _windows_safe_current_user()",
+        content,
+        flags=re.MULTILINE,
     )
     content = re.sub(
-        r'^(\s{1,8})\w+\s*=\s*pwd\.getpwuid\([^)]+\)',
-        r'\1_user_name, _user_uid = _windows_safe_current_user()',
-        content, flags=re.MULTILINE
+        r"^(\s{1,8})\w+\s*=\s*pwd\.getpwuid\([^)]+\)",
+        r"\1_user_name, _user_uid = _windows_safe_current_user()",
+        content,
+        flags=re.MULTILINE,
     )
 
     # 4. Update logger.exception call with new variables
     content = re.sub(
         r'^(\s{1,8})logger\.exception\(".*?can\'t connect valkey DB \.\.\..*?\)',
         r'\1logger.exception("[%s (%s)] can\'t connect valkey DB ...", _user_name, _user_uid)',
-        content, flags=re.MULTILINE
+        content,
+        flags=re.MULTILINE,
     )
     return content
+
 
 # --- Patch 2: settings_defaults.py (register json_lite output format) ---
 def patch_settings_defaults(content, path):
@@ -610,7 +630,7 @@ def patch_settings_defaults(content, path):
         else:
             body = "'json_lite'"
 
-    return content[:match.start()] + opening + body + closing + content[match.end():]
+    return content[: match.start()] + opening + body + closing + content[match.end() :]
 
 
 # --- Patch 3: webutils.py (add get_json_lite_response, optimised & hardened) ---
@@ -752,29 +772,31 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
     return json.dumps(data, cls=JSONEncoder, ensure_ascii=False)
 '''
 
-
     # If old version exists, remove it first
     if "def get_json_lite_response" in content:
-        content = re.sub(r'(?s)\n+def get_json_lite_response.*?return json\.dumps\(data, cls=JSONEncoder.*?\)\n+', "\n", content)
+        content = re.sub(
+            r"(?s)\n+def get_json_lite_response.*?return json\.dumps\(data, cls=JSONEncoder.*?\)\n+", "\n", content
+        )
 
     # Insert before get_themes while preserving a single blank-line boundary.
     # If get_themes is missing (e.g. relocated upstream), fall back to other stable entry points or EOF.
     fallback_anchors = [
-        r'(^|\n)(def get_themes\b)',
-        r'(^|\n)(def render\b)',
-        r'(^|\n)(def is_safe_url\b)',
-        r'(^|\n)(def [a-zA-Z0-9_]+\b)',
+        r"(^|\n)(def get_themes\b)",
+        r"(^|\n)(def render\b)",
+        r"(^|\n)(def is_safe_url\b)",
+        r"(^|\n)(def [a-zA-Z0-9_]+\b)",
     ]
     inserted = False
     for anchor in fallback_anchors:
         if re.search(anchor, content):
-            content, count = re.subn(anchor, lite_func + r'\1\2', content, count=1)
+            content, count = re.subn(anchor, lite_func + r"\1\2", content, count=1)
             if count > 0:
                 inserted = True
                 break
     if not inserted:
         content = content.rstrip() + "\n\n" + lite_func + "\n"
     return content
+
 
 # --- Patch 3b: webutils.py (normalize Windows paths used in URL lookups) ---
 def patch_webutils_windows_paths(content, path):
@@ -788,10 +810,8 @@ def patch_webutils_windows_paths(content, path):
         return "ALREADY_APPLIED"
 
     replacements = {
-        "file_list.append(str(f.relative_to(static_path)))":
-            "file_list.append(str(f.relative_to(static_path)).replace(os.sep, '/'))",
-        "result_templates.add(f)":
-            "result_templates.add(f.replace(os.sep, '/'))",
+        "file_list.append(str(f.relative_to(static_path)))": "file_list.append(str(f.relative_to(static_path)).replace(os.sep, '/'))",
+        "result_templates.add(f)": "result_templates.add(f.replace(os.sep, '/'))",
     }
     patched = content
     for old, new in replacements.items():
@@ -821,12 +841,12 @@ def patch_simple_search_accessibility(content, path):
     # Fallback: robust regex matching if attribute order is altered upstream
     def _add_aria_label(match):
         tag = match.group(0)
-        if 'aria-label=' in tag:
+        if "aria-label=" in tag:
             return tag
         m = re.search(r'\bid=["\']q["\']', tag)
         if m:
             insert_pos = m.end()
-            return tag[:insert_pos] + ' aria-label="{{ _(\'Search for...\') }}"' + tag[insert_pos:]
+            return tag[:insert_pos] + " aria-label=\"{{ _('Search for...') }}\"" + tag[insert_pos:]
         return tag
 
     patched, count = re.subn(r'<input\b[^>]*\bid=["\']q["\'][^>]*>', _add_aria_label, content, count=1)
@@ -837,7 +857,7 @@ def patch_simple_search_accessibility(content, path):
 def patch_preferences_accessibility(content, path):
     """Give the preferences hash input field an accessible, localized name."""
     patch_preferences_accessibility._noop_when_unchanged = True
-    if 'id="pref-hash-input"' in content and 'aria-label=' in content:
+    if 'id="pref-hash-input"' in content and "aria-label=" in content:
         return "ALREADY_APPLIED"
     if 'id="pref-hash-input"' not in content:
         return content
@@ -849,12 +869,12 @@ def patch_preferences_accessibility(content, path):
 
     def _add_aria_label(match):
         tag = match.group(0)
-        if 'aria-label=' in tag:
+        if "aria-label=" in tag:
             return tag
         m = re.search(r'\bid=["\']pref-hash-input["\']', tag)
         if m:
             insert_pos = m.end()
-            return tag[:insert_pos] + ' aria-label="{{- _(\'Preferences hash\') -}}"' + tag[insert_pos:]
+            return tag[:insert_pos] + " aria-label=\"{{- _('Preferences hash') -}}\"" + tag[insert_pos:]
         return tag
 
     patched, count = re.subn(r'<input\b[^>]*\bid=["\']pref-hash-input["\'][^>]*>', _add_aria_label, content, count=1)
@@ -866,7 +886,7 @@ def patch_webapp_json_handler(content, path):
     checks = [
         "output_format in ('json', 'json_lite')" in content,
         "output_format == 'json_lite'" in content,
-        bool(re.search(r'^import ipaddress', content, re.MULTILINE)),
+        bool(re.search(r"^import ipaddress", content, re.MULTILINE)),
         "WindowsSelectorEventLoopPolicy" in content,
     ]
     if all(checks):
@@ -877,20 +897,26 @@ def patch_webapp_json_handler(content, path):
         content, n = re.subn(
             r"(def index_error\b.*?\n\s*)if\s+output_format\s*==\s*['\"]json['\"]:",
             r"\1if output_format in ('json', 'json_lite'):",
-            content, flags=re.DOTALL
+            content,
+            flags=re.DOTALL,
         )
         if n == 0 and "output_format in ('json', 'json_lite')" not in content:
             logger.warning("Could not patch index_error for json_lite, anchor not found.")
 
     # 2. Add top-level `import ipaddress` (remove any indented duplicates first)
-    if not re.search(r'^import ipaddress', content, re.MULTILINE):
-        content = re.sub(r'^\s+import ipaddress\n', '', content, flags=re.MULTILINE)
-        content, count = re.subn(r'(import warnings\n)', r'\1import ipaddress\n', content, count=1)
+    if not re.search(r"^import ipaddress", content, re.MULTILINE):
+        content = re.sub(r"^\s+import ipaddress\n", "", content, flags=re.MULTILINE)
+        content, count = re.subn(r"(import warnings\n)", r"\1import ipaddress\n", content, count=1)
         if count == 0:
-            content, count = re.subn(r'(from flask import\b|import flask\b)', r'import ipaddress\n\1', content, count=1)
+            content, count = re.subn(r"(from flask import\b|import flask\b)", r"import ipaddress\n\1", content, count=1)
         if count == 0:
             # Fallback: after the last top-level import or at the beginning of the file
-            content, count = re.subn(r'(?m)^(import\s+[a-zA-Z0-9_.]+|from\s+[a-zA-Z0-9_.]+\s+import\s+.*)$', r'\g<0>\nimport ipaddress', content, count=1)
+            content, count = re.subn(
+                r"(?m)^(import\s+[a-zA-Z0-9_.]+|from\s+[a-zA-Z0-9_.]+\s+import\s+.*)$",
+                r"\g<0>\nimport ipaddress",
+                content,
+                count=1,
+            )
         if count == 0:
             content = "import ipaddress\n" + content
 
@@ -904,11 +930,11 @@ def patch_webapp_json_handler(content, path):
             "    except Exception:\n"
             "        pass\n"
         )
-        content, count = re.subn(r'(import sys\n)', r'\1' + loop_policy, content, count=1)
+        content, count = re.subn(r"(import sys\n)", r"\1" + loop_policy, content, count=1)
         if count == 0:
-            content, count = re.subn(r'(import os\n)', r'\1' + loop_policy, content, count=1)
+            content, count = re.subn(r"(import os\n)", r"\1" + loop_policy, content, count=1)
         if count == 0:
-            content, count = re.subn(r'(import ipaddress\n)', r'\1' + loop_policy, content, count=1)
+            content, count = re.subn(r"(import ipaddress\n)", r"\1" + loop_policy, content, count=1)
         if count == 0:
             logger.warning("Could not inject WindowsSelectorEventLoopPolicy, anchor not found.")
 
@@ -923,28 +949,25 @@ def patch_webapp_json_handler(content, path):
             r"(?m)^(\s*if\s+output_format\s*==\s*['\"]json['\"]:\s*\n\s*response\s*=\s*webutils\.get_json_response)",
             handler + r"\1",
             content,
-            count=1
+            count=1,
         )
         if count == 0:
             content, count = re.subn(
-                r"(?m)^(\s*if\s+output_format\s*==\s*['\"]json['\"]:\s*)",
-                handler + r"\1",
-                content,
-                count=1
+                r"(?m)^(\s*if\s+output_format\s*==\s*['\"]json['\"]:\s*)", handler + r"\1", content, count=1
             )
         if count == 0:
             content, count = re.subn(r"(# 3\. formats without a template\r?\n)", r"\1" + handler, content, count=1)
         if count == 0:
             content, count = re.subn(
-                r"(?m)^(\s*if\s+output_format\s*==\s*['\"](?:csv|rss)['\"]:)",
-                handler + r"\1",
-                content,
-                count=1
+                r"(?m)^(\s*if\s+output_format\s*==\s*['\"](?:csv|rss)['\"]:)", handler + r"\1", content, count=1
             )
         if count == 0:
-            raise RuntimeError(f"Patch failed for {path}: Could not find json format handler anchor to inject json_lite handler.")
+            raise RuntimeError(
+                f"Patch failed for {path}: Could not find json format handler anchor to inject json_lite handler."
+            )
 
     return content
+
 
 # --- Patch 5: webapp.py (/scrape route + trafilatura & socket & contextlib & threading imports + thread-safe pinned_dns + reusable httpx client) ---
 def patch_webapp_scrape_route(content, path):
@@ -963,7 +986,7 @@ def patch_webapp_scrape_route(content, path):
         "Fetched response exceeds size limit",
         "Blocked invalid scheme",
         "Redirect without Location header",
-        "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')", # default should be true
+        "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')",  # default should be true
         "max_keepalive_connections=20",
         "_searxng_original_getaddrinfo",
         "v18-bulletproof-scrape-fix",
@@ -992,35 +1015,54 @@ def patch_webapp_scrape_route(content, path):
         return "ALREADY_APPLIED"
 
     # 1. Add imports at module level (ensure re, html, httpx, idna, time, and urllib are present)
-    for mod in ('re', 'html', 'httpx', 'idna', 'time', 'urllib'):
-        if f'import {mod}' not in content:
-            content, count = re.subn(r'(import warnings\n)', f'import {mod}\n' + r'\1', content, count=1)
+    for mod in ("re", "html", "httpx", "idna", "time", "urllib"):
+        if f"import {mod}" not in content:
+            content, count = re.subn(r"(import warnings\n)", f"import {mod}\n" + r"\1", content, count=1)
             if count == 0:
-                content, count = re.subn(r'(from flask import\b|import flask\b)', f'import {mod}\n' + r'\1', content, count=1)
+                content, count = re.subn(
+                    r"(from flask import\b|import flask\b)", f"import {mod}\n" + r"\1", content, count=1
+                )
             if count == 0:
                 raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for {mod}.")
-    if 'import trafilatura' not in content:
-        content, count = re.subn(r'(import flask\b|from flask import\b)', r'import trafilatura\nimport socket\nimport contextlib\nimport threading\n\1', content, count=1)
+    if "import trafilatura" not in content:
+        content, count = re.subn(
+            r"(import flask\b|from flask import\b)",
+            r"import trafilatura\nimport socket\nimport contextlib\nimport threading\n\1",
+            content,
+            count=1,
+        )
         if count == 0:
-            content, count = re.subn(r'(import warnings\n)', r'import trafilatura\nimport socket\nimport contextlib\nimport threading\n\1', content, count=1)
+            content, count = re.subn(
+                r"(import warnings\n)",
+                r"import trafilatura\nimport socket\nimport contextlib\nimport threading\n\1",
+                content,
+                count=1,
+            )
         if count == 0:
             raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for trafilatura.")
     else:
         # ensure socket, contextlib, and threading exist
-        for mod in ('socket', 'contextlib', 'threading'):
-            if f'import {mod}' not in content:
-                content, count = re.subn(r'(import trafilatura\n)', r'\1' + f'import {mod}\n', content)
+        for mod in ("socket", "contextlib", "threading"):
+            if f"import {mod}" not in content:
+                content, count = re.subn(r"(import trafilatura\n)", r"\1" + f"import {mod}\n", content)
                 if count == 0:
-                    content, count = re.subn(r'(from flask import\b|import flask\b)', f'import {mod}\n' + r'\1', content, count=1)
+                    content, count = re.subn(
+                        r"(from flask import\b|import flask\b)", f"import {mod}\n" + r"\1", content, count=1
+                    )
                 if count == 0:
                     raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for {mod}.")
 
     # 2. Clean ALL previous helper blocks and scrape routes completely (idempotency & duplicate removal)
-    while '# --- GenAI Scrape Helpers ---' in content:
-        content = re.sub(r'(?s)\n# --- GenAI Scrape Helpers ---.*?(?=\n@app\.route|\n# --- GenAI Scrape Helpers ---|\Z)', '', content, count=1)
-    
+    while "# --- GenAI Scrape Helpers ---" in content:
+        content = re.sub(
+            r"(?s)\n# --- GenAI Scrape Helpers ---.*?(?=\n@app\.route|\n# --- GenAI Scrape Helpers ---|\Z)",
+            "",
+            content,
+            count=1,
+        )
+
     while "@app.route('/scrape'" in content or '@app.route("/scrape"' in content:
-        content = re.sub(r'(?s)\n@app\.route\(\s*[\'"]/scrape[\'"].*?(?=\n@app\.route|\Z)', '', content, count=1)
+        content = re.sub(r'(?s)\n@app\.route\(\s*[\'"]/scrape[\'"].*?(?=\n@app\.route|\Z)', "", content, count=1)
 
     # 3. Inject global client holder and pinned_dns context manager before scrape route
     # Also define the new route
@@ -1475,22 +1517,29 @@ def scrape():
 '''
 
     # Primary anchor: @app.route('/search')
-    content, count = re.subn(r"(?m)^(\s*@app\.route\(\s*['\"]/search['\"])", lambda m: scrape_route_code + m.group(1), content, count=1)
+    content, count = re.subn(
+        r"(?m)^(\s*@app\.route\(\s*['\"]/search['\"])", lambda m: scrape_route_code + m.group(1), content, count=1
+    )
     if count == 0:
         # Fallback 1: any blueprint or route on /search
-        content, count = re.subn(r"(?m)^(\s*@\w+\.route\(\s*['\"]/search['\"])", lambda m: scrape_route_code + m.group(1), content, count=1)
+        content, count = re.subn(
+            r"(?m)^(\s*@\w+\.route\(\s*['\"]/search['\"])", lambda m: scrape_route_code + m.group(1), content, count=1
+        )
     if count == 0:
         # Fallback 2: any route on root '/'
-        content, count = re.subn(r"(?m)^(\s*@\w+\.route\(\s*['\"]/['\"])", lambda m: scrape_route_code + m.group(1), content, count=1)
+        content, count = re.subn(
+            r"(?m)^(\s*@\w+\.route\(\s*['\"]/['\"])", lambda m: scrape_route_code + m.group(1), content, count=1
+        )
     if count == 0:
         # Fallback 3: def search()
-        content, count = re.subn(r"(?m)^(\s*def search\s*\()", lambda m: scrape_route_code + m.group(1), content, count=1)
+        content, count = re.subn(
+            r"(?m)^(\s*def search\s*\()", lambda m: scrape_route_code + m.group(1), content, count=1
+        )
     if count == 0:
         # Fallback 4: append to end of webapp.py
         content = content.rstrip() + "\n\n" + scrape_route_code + "\n"
 
     return content
-
 
 
 # --- Patch 6: engines/__init__.py (restore upstream disabled-engine semantics) ---
@@ -1540,6 +1589,7 @@ def patch_processors_init(content, path):
     patched = content.replace(injected_block, "")
     return "ALREADY_APPLIED" if patched == content else patched
 
+
 # --- Patch 8: engines/google.py (fix CAPTCHA false positives) ---
 def patch_google_captcha(content, path):
     # replace() rewrite; unchanged means upstream no longer has the old block
@@ -1551,21 +1601,22 @@ def patch_google_captcha(content, path):
         "    if resp.status_code == 302:\n"
         "        raise SearxEngineCaptchaException()\n"
         "\n"
-        "    if len(resp.text) < 2000 and \"/sorry/\" in resp.text:\n"
+        '    if len(resp.text) < 2000 and "/sorry/" in resp.text:\n'
         "        raise SearxEngineCaptchaException()"
     )
     new = (
         "    if resp.status_code == 302:\n"
-        "        loc = (resp.headers.get(\"Location\") or resp.headers.get(\"location\") or \"\")\n"
-        "        if \"/sorry\" in loc or \"sorry.google.com\" in loc or not loc:\n"
+        '        loc = (resp.headers.get("Location") or resp.headers.get("location") or "")\n'
+        '        if "/sorry" in loc or "sorry.google.com" in loc or not loc:\n'
         "            raise SearxEngineCaptchaException()\n"
         "\n"
-        "    if len(resp.text) < 2000 and \"/sorry/\" in resp.text:\n"
+        '    if len(resp.text) < 2000 and "/sorry/" in resp.text:\n'
         "        raise SearxEngineCaptchaException()"
     )
     if old in content:
         return content.replace(old, new)
     return content
+
 
 # --- Patch 9: engines/sogou.py (robust CAPTCHA detection) ---
 def patch_sogou_captcha(content, path):
@@ -1578,30 +1629,31 @@ def patch_sogou_captcha(content, path):
         "    if (\n"
         "        resp.status_code == 302\n"
         "        and resp.next_request is not None\n"
-        "        and str(resp.next_request.url).startswith(\"http://www.sogou.com/antispider\")\n"
+        '        and str(resp.next_request.url).startswith("http://www.sogou.com/antispider")\n'
         "    ):\n"
         "        raise SearxEngineCaptchaException()"
     )
     new = (
         "def response(resp):\n"
         "    if resp.status_code == 302:\n"
-        "        loc = resp.headers.get(\"Location\") or resp.headers.get(\"location\") or \"\"\n"
-        "        if \"antispider\" in loc or \"sogou.com/antispider\" in loc:\n"
+        '        loc = resp.headers.get("Location") or resp.headers.get("location") or ""\n'
+        '        if "antispider" in loc or "sogou.com/antispider" in loc:\n'
         "            raise SearxEngineCaptchaException()\n"
-        "        if resp.next_request is not None and str(resp.next_request.url).startswith(\"http://www.sogou.com/antispider\"):\n"
+        '        if resp.next_request is not None and str(resp.next_request.url).startswith("http://www.sogou.com/antispider"):\n'
         "            raise SearxEngineCaptchaException()\n"
-        "        text_preview = (resp.text or \"\")[:4096]\n"
-        "        if \"antispider\" in text_preview or \"captcha\" in text_preview.lower():\n"
+        '        text_preview = (resp.text or "")[:4096]\n'
+        '        if "antispider" in text_preview or "captcha" in text_preview.lower():\n'
         "            raise SearxEngineCaptchaException()\n"
         "    if resp.status_code == 200:\n"
-        "        text_preview = (resp.text or \"\")[:8192].lower()\n"
-        "        if \"antispider\" in text_preview and (\"captcha\" in text_preview or \"verify\" in text_preview):\n"
-        "            if \"class=\\\"result\\\"\" not in text_preview and \"class=\\\"rb\\\"\" not in text_preview:\n"
+        '        text_preview = (resp.text or "")[:8192].lower()\n'
+        '        if "antispider" in text_preview and ("captcha" in text_preview or "verify" in text_preview):\n'
+        '            if "class=\\"result\\"" not in text_preview and "class=\\"rb\\"" not in text_preview:\n'
         "                raise SearxEngineCaptchaException()"
     )
     if old in content:
         return content.replace(old, new)
     return content
+
 
 # --- Patch 10: search/processors/abstract.py (restore configured suspension times) ---
 def patch_abstract_suspend(content, path):
@@ -1614,23 +1666,24 @@ def patch_abstract_suspend(content, path):
     ``search.suspended_times`` and must retain those configured values.
     """
     legacy = (
-        "            suspended_time = min(suspended_time, get_setting(\"search.max_ban_time_on_fail\"))\n"
-        "            if \"captcha\" in suspend_reason.lower() or \"SearxEngineCaptcha\" in suspend_reason:\n"
+        '            suspended_time = min(suspended_time, get_setting("search.max_ban_time_on_fail"))\n'
+        '            if "captcha" in suspend_reason.lower() or "SearxEngineCaptcha" in suspend_reason:\n'
         "                suspended_time = min(suspended_time, 900)\n"
         "            if suspended_time > 120 and self.continuous_errors == 1:\n"
         "                suspended_time = min(suspended_time, 120)\n"
         "\n"
         "            self.suspend_end_time = default_timer() + suspended_time\n"
         "            self.suspend_reason = suspend_reason\n"
-        "            logger.debug(\"Suspend for %i seconds\", suspended_time)"
+        '            logger.debug("Suspend for %i seconds", suspended_time)'
     )
     upstream = (
         "            self.suspend_end_time = default_timer() + suspended_time\n"
         "            self.suspend_reason = suspend_reason\n"
-        "            logger.debug(\"Suspend for %i seconds\", suspended_time)"
+        '            logger.debug("Suspend for %i seconds", suspended_time)'
     )
     patched = content.replace(legacy, upstream)
     return "ALREADY_APPLIED" if patched == content else patched
+
 
 # --- Patch 11: search/processors/online.py (Retry-After + CAPTCHA logging) ---
 def patch_online_captcha(content, path):
@@ -1675,27 +1728,28 @@ def patch_online_captcha(content, path):
     )
 
     if not helper_present:
-        old_import = "from searx.metrics.error_recorder import count_error\nfrom .abstract import EngineProcessor, RequestParams"
+        old_import = (
+            "from searx.metrics.error_recorder import count_error\nfrom .abstract import EngineProcessor, RequestParams"
+        )
         new_import = (
             "from searx.metrics.error_recorder import count_error\n"
             "from .abstract import EngineProcessor, RequestParams\n"
             "\n"
-            "\n"
-            + new_helper
+            "\n" + new_helper
         )
         if old_import in content:
             content = content.replace(old_import, new_import, 1)
             helper_present = True
         else:
             # Fallback 1: match "from .abstract import ..."
-            m = re.search(r'(?m)^(from \.abstract import [^\n]+\n)', content)
+            m = re.search(r"(?m)^(from \.abstract import [^\n]+\n)", content)
             if m:
                 idx = m.end()
                 content = content[:idx] + "\n\n" + new_helper + "\n" + content[idx:]
                 helper_present = True
             else:
                 # Fallback 2: match "class OnlineEngineProcessor"
-                m = re.search(r'(?m)^(class OnlineEngineProcessor\b)', content)
+                m = re.search(r"(?m)^(class OnlineEngineProcessor\b)", content)
                 if m:
                     idx = m.start()
                     content = content[:idx] + new_helper + "\n\n\n" + content[idx:]
@@ -1703,7 +1757,7 @@ def patch_online_captcha(content, path):
     else:
         if "return max(5, min(v, 900))" in content and ("parsedate_to_datetime" not in content or "utcnow" in content):
             content = re.sub(
-                r'(?s)def _parse_retry_after_header\(resp\).*?except Exception:\s*pass\s*return None',
+                r"(?s)def _parse_retry_after_header\(resp\).*?except Exception:\s*pass\s*return None",
                 new_helper,
                 content,
                 count=1,
@@ -1726,7 +1780,7 @@ def patch_online_captcha(content, path):
         "            if retry_after is not None:\n"
         "                e.suspended_time = min(e.suspended_time, retry_after)\n"
         "            self.handle_exception(result_container, e, suspend=True)\n"
-        "            self.logger.warning(\"CAPTCHA %s suspended for %ss: %s\", self.engine.name, e.suspended_time, e.message)\n"
+        '            self.logger.warning("CAPTCHA %s suspended for %ss: %s", self.engine.name, e.suspended_time, e.message)\n'
         "        except SearxEngineTooManyRequestsException as e:\n"
         "            retry_after = _parse_retry_after_header(getattr(e, 'response', None))\n"
         "            if retry_after is not None:\n"
@@ -1765,9 +1819,9 @@ def patch_online_captcha(content, path):
         else:
             # Regex fallback for slight whitespace or formatting variations
             pattern = re.compile(
-                r'([ \t]*)except\s*\(\s*SearxEngineCaptchaException\s*,\s*SearxEngineTooManyRequestsException\s*,\s*SearxEngineAccessDeniedException\s*\)\s*as\s*e:\s*\n'
-                r'[ \t]*self\.handle_exception\([^)]+\)\s*\n'
-                r'[ \t]*self\.logger\.debug\(e\.message\)'
+                r"([ \t]*)except\s*\(\s*SearxEngineCaptchaException\s*,\s*SearxEngineTooManyRequestsException\s*,\s*SearxEngineAccessDeniedException\s*\)\s*as\s*e:\s*\n"
+                r"[ \t]*self\.handle_exception\([^)]+\)\s*\n"
+                r"[ \t]*self\.logger\.debug\(e\.message\)"
             )
             if pattern.search(content):
                 content = pattern.sub(new_split, content, count=1)
@@ -1810,10 +1864,10 @@ def _attach_response_to_raises(content: str) -> tuple[str, bool]:
             i += 1
         if depth:
             continue  # unbalanced; leave this raise untouched
-        args = content[match.end("open"):i - 1]
+        args = content[match.end("open") : i - 1]
         indent = match.group("indent")
         cls = match.group("cls")
-        out.append(content[pos:match.start()])
+        out.append(content[pos : match.start()])
         out.append(f"{indent}_exc = {cls}({args})\n{indent}_exc.response = resp\n{indent}raise _exc")
         pos = i
         changed = True
@@ -1833,27 +1887,29 @@ def patch_raise_for_httperror(content, path):
     content, _ = _attach_response_to_raises(content)
     return content  # unchanged content => update_file reports "anchor not found"
 
+
 # --- Patch 12: settings.yml / settings_defaults.py (reduce suspended_times) ---
 def patch_settings_yml(content, path):
     if "SearxEngineCaptcha: 900" in content and (
         "cf_SearxEngineAccessDenied" not in content or "cf_SearxEngineAccessDenied: 1800" in content
     ):
         return "ALREADY_APPLIED"
-    patched = re.sub(r'SearxEngineCaptcha:\s*\d+', 'SearxEngineCaptcha: 900', content)
-    patched = re.sub(r'SearxEngineAccessDenied:\s*\d+', 'SearxEngineAccessDenied: 900', patched)
-    patched = re.sub(r'SearxEngineTooManyRequests:\s*\d+', 'SearxEngineTooManyRequests: 600', patched)
-    patched = re.sub(r'cf_SearxEngineCaptcha:\s*\d+', 'cf_SearxEngineCaptcha: 3600', patched)
-    patched = re.sub(r'cf_SearxEngineAccessDenied:\s*\d+', 'cf_SearxEngineAccessDenied: 1800', patched)
-    patched = re.sub(r'recaptcha_SearxEngineCaptcha:\s*\d+', 'recaptcha_SearxEngineCaptcha: 3600', patched)
+    patched = re.sub(r"SearxEngineCaptcha:\s*\d+", "SearxEngineCaptcha: 900", content)
+    patched = re.sub(r"SearxEngineAccessDenied:\s*\d+", "SearxEngineAccessDenied: 900", patched)
+    patched = re.sub(r"SearxEngineTooManyRequests:\s*\d+", "SearxEngineTooManyRequests: 600", patched)
+    patched = re.sub(r"cf_SearxEngineCaptcha:\s*\d+", "cf_SearxEngineCaptcha: 3600", patched)
+    patched = re.sub(r"cf_SearxEngineAccessDenied:\s*\d+", "cf_SearxEngineAccessDenied: 1800", patched)
+    patched = re.sub(r"recaptcha_SearxEngineCaptcha:\s*\d+", "recaptcha_SearxEngineCaptcha: 3600", patched)
     if patched == content:
         return "ALREADY_APPLIED"
     return patched
+
 
 def patch_config_settings_yml(content, path):
     if "SearxEngineCaptcha: 900" in content:
         return "ALREADY_APPLIED"
     # If user has custom SearxEngineCaptcha (not legacy 86400/3600), or if absent, preserve user customization
-    if re.search(r'SearxEngineCaptcha:\s*(?!86400|3600)\d+', content) or "SearxEngineCaptcha" not in content:
+    if re.search(r"SearxEngineCaptcha:\s*(?!86400|3600)\d+", content) or "SearxEngineCaptcha" not in content:
         return "ALREADY_APPLIED"
     patched = patch_settings_yml(content, path)
     if patched == content:
@@ -1880,7 +1936,7 @@ def patch_webapp_ai_webui(content, path):
             count=1,
         )
 
-    integration_code = '''
+    integration_code = """
 
 # --- GenAI Next WebUI Integration ---
 try:
@@ -1892,7 +1948,7 @@ try:
 except Exception as _webui_exc:
     logger.warning('Could not initialize SearXNG Next AI WebUI: %s', _webui_exc)
 
-'''
+"""
 
     content, count = re.subn(
         r"(?m)^(\s*@app\.route\(\s*['\"]/search['\"])",
@@ -1919,11 +1975,13 @@ def patch_simple_base_ai_webui(content, path):
     if 'class="link_on_top_ai"' not in patched:
         ai_nav_block = (
             "      {%- block linkto_ai_workspace -%}\n"
-            "        <a href=\"/ai\" class=\"link_on_top_ai\" title=\"AI Search &amp; Context Studio\"><span>⚡ AI Workspace</span></a>\n"
+            '        <a href="/ai" class="link_on_top_ai" title="AI Search &amp; Context Studio"><span>⚡ AI Workspace</span></a>\n'
             "      {%- endblock -%}\n"
         )
         if "{%- block linkto_about -%}" in patched:
-            patched = patched.replace("{%- block linkto_about -%}", ai_nav_block + "      {%- block linkto_about -%}", 1)
+            patched = patched.replace(
+                "{%- block linkto_about -%}", ai_nav_block + "      {%- block linkto_about -%}", 1
+            )
         elif '<nav id="links_on_top">' in patched:
             patched = patched.replace('<nav id="links_on_top">\n', '<nav id="links_on_top">\n' + ai_nav_block, 1)
 
@@ -2000,17 +2058,17 @@ def patch_simple_results_ai_webui(content, path):
         '<div id="results" class="{{ only_template }}">\n'
         '  <div id="sxng-ai-results-bar" class="sxng-ai-results-bar" data-query="{{ q|e }}" role="region" aria-label="AI Agent Toolkit">\n'
         '    <div class="sxng-ai-results-bar-left">\n'
-        '      <strong>🤖 AI Toolkit</strong>\n'
+        "      <strong>🤖 AI Toolkit</strong>\n"
         '      <span id="sxng-ai-page-tokens" class="sxng-ai-token-pill">~0 tokens</span>\n'
         '      <button type="button" id="sxng-ai-inline-deep-btn" class="sxng-ai-btn sxng-ai-btn-primary">⚡ Deep Search (BM25 + 並列本文抽出)</button>\n'
         '      <button type="button" id="sxng-ai-copy-md-btn" class="sxng-ai-btn">📋 AI用Markdownをコピー</button>\n'
         '      <button type="button" id="sxng-ai-copy-prompt-btn" class="sxng-ai-btn">💬 プロンプト形式でコピー</button>\n'
-        '    </div>\n'
+        "    </div>\n"
         '    <div class="sxng-ai-results-bar-right">\n'
         '      <a href="/search?q={{ q|urlencode }}&amp;format=json_lite" target="_blank" rel="noopener" class="sxng-ai-btn">{ } json_lite</a>\n'
         '      <a href="/ai?q={{ q|urlencode }}&amp;mode=deep" class="sxng-ai-btn">🚀 AI Studioで開く</a>\n'
-        '    </div>\n'
-        '  </div>\n'
+        "    </div>\n"
+        "  </div>\n"
         '  <div id="sxng-ai-deep-drawer" class="sxng-ai-deep-drawer" aria-live="polite"></div>'
     )
     return content.replace(target_div, toolkit_bar, 1)
@@ -2304,11 +2362,21 @@ def main() -> int:
         description="Apply Windows compatibility and enhancement patches to SearXNG with enhanced error diagnostics."
     )
     parser.add_argument("--force", action="store_true", help="Ignore cache and re-apply all patches")
-    parser.add_argument("--check", "--dry-run", action="store_true", dest="check", help="Verify patches without writing changes")
-    parser.add_argument("--strict", action="store_true", help="Treat any patch failure (including optional) as fatal (exit 1)")
-    parser.add_argument("--rollback", action="store_true", help="Roll back files to their pre-patch state using stored backups")
-    parser.add_argument("--rollback-on-failure", action="store_true", help="Automatically rollback changes if any CRITICAL patch fails")
-    parser.add_argument("--report", nargs="?", const=REPORT_FILE, default=None, help="Save JSON diagnostic report to specified file")
+    parser.add_argument(
+        "--check", "--dry-run", action="store_true", dest="check", help="Verify patches without writing changes"
+    )
+    parser.add_argument(
+        "--strict", action="store_true", help="Treat any patch failure (including optional) as fatal (exit 1)"
+    )
+    parser.add_argument(
+        "--rollback", action="store_true", help="Roll back files to their pre-patch state using stored backups"
+    )
+    parser.add_argument(
+        "--rollback-on-failure", action="store_true", help="Automatically rollback changes if any CRITICAL patch fails"
+    )
+    parser.add_argument(
+        "--report", nargs="?", const=REPORT_FILE, default=None, help="Save JSON diagnostic report to specified file"
+    )
     parser.add_argument("--json", action="store_true", help="Output summary in JSON format to stdout")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose debug logging")
     args = parser.parse_args()
@@ -2345,6 +2413,7 @@ def main() -> int:
     if os.path.exists(engines_dir) and not args.check:
         try:
             import importlib.util
+
             spec = importlib.util.spec_from_file_location(
                 "disable_missing_engines", os.path.join(REPO_ROOT, "tools", "disable-missing-engines.py")
             )
@@ -2464,4 +2533,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
