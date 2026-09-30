@@ -19,6 +19,7 @@ Provides:
 
 from __future__ import annotations
 
+import contextlib
 import html
 import ipaddress
 import json
@@ -26,7 +27,6 @@ import os
 import re
 import socket
 import sys
-import time
 import urllib.parse
 from typing import Any
 
@@ -108,12 +108,38 @@ def _scrape_url_direct(
         except ValueError as exc:
             raise blocked_exc_cls("Invalid URL") from exc
 
+    def _is_static_host_blocked(host: str | None) -> bool:
+        host_clean = (host or "").strip().rstrip(".").lower()
+        if not host_clean:
+            return True
+        is_reserved_fn = getattr(webapp_mod, "_is_reserved_scrape_host", None)
+        if callable(is_reserved_fn):
+            if is_reserved_fn(host_clean):
+                return True
+        elif webapp_mod._is_blocked_scrape_host(host_clean):
+            return True
+        if "%" in host_clean:
+            host_clean = host_clean.split("%", 1)[0]
+        try:
+            ip_direct = ipaddress.ip_address(host_clean)
+            return bool(webapp_mod._is_ip_blocked(ip_direct))
+        except ValueError:
+            if host_clean.isdigit():
+                with contextlib.suppress(ValueError, TypeError, OverflowError):
+                    ip_int = int(host_clean)
+                    if 0 <= ip_int <= 0xFFFFFFFF:
+                        return bool(webapp_mod._is_ip_blocked(ipaddress.IPv4Address(ip_int)))
+            with contextlib.suppress(OSError, ValueError):
+                packed = socket.inet_aton(host_clean)
+                return bool(webapp_mod._is_ip_blocked(ipaddress.IPv4Address(packed)))
+        return False
+
     try:
         parsed = _parse_url(clean_url)
-    except Exception as exc:
-        return {"url": clean_url, "content": "", "error": str(exc)}
+    except (ValueError, RuntimeError, blocked_exc_cls) as exc:
+        return {"url": clean_url, "content": "", "error": f"スクレイピング拒否 (400): {exc}"}
 
-    if parsed.scheme not in ("http", "https") or webapp_mod._is_blocked_scrape_host(parsed.hostname):
+    if parsed.scheme not in ("http", "https") or _is_static_host_blocked(parsed.hostname):
         return {
             "url": clean_url,
             "content": "",
@@ -125,7 +151,7 @@ def _scrape_url_direct(
         if p_url.scheme not in ("http", "https"):
             raise blocked_exc_cls(f"Blocked invalid scheme: {p_url.scheme}")
         host = p_url.hostname
-        if not host or webapp_mod._is_blocked_scrape_host(host):
+        if not host or _is_static_host_blocked(host):
             raise blocked_exc_cls(f"Blocked: {host} is a private/reserved host or IP")
         port = p_url.port or (443 if p_url.scheme == "https" else 80)
         try:
@@ -155,10 +181,8 @@ def _scrape_url_direct(
             if webapp_mod._scrape_client is None or webapp_mod._scrape_client_verify_ssl != verify_ssl:
                 scrape_limits = httpx_mod.Limits(max_keepalive_connections=20, max_connections=50)
                 if webapp_mod._scrape_client is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         webapp_mod._scrape_client.close()
-                    except Exception:
-                        pass
                 webapp_mod._scrape_client = httpx_mod.Client(
                     timeout=httpx_mod.Timeout(10.0, connect=5.0, read=10.0, write=5.0),
                     follow_redirects=False,
@@ -176,18 +200,20 @@ def _scrape_url_direct(
                 raise blocked_exc_cls(f"Blocked invalid scheme during redirect: {cur_parsed.scheme}")
             safe_ip, original_host, port = _resolve_safe_ip(current_url)
             headers = {"User-Agent": ua}
-            with webapp_mod.pinned_dns(original_host, safe_ip, port):
-                with webapp_mod._scrape_client.stream("GET", current_url, headers=headers) as response:
-                    if response.status_code not in (301, 302, 303, 307, 308):
-                        response.raise_for_status()
-                        downloaded = webapp_mod._read_scrape_response(
-                            response, max_duration=min(max(float(timeout or 10.0), 2.0), 15.0)
-                        )
-                        break
-                    location = response.headers.get("location")
-                    if not location or not location.strip():
-                        raise RuntimeError(f"Redirect without Location header (status {response.status_code})")
-                    current_url = urllib.parse.urljoin(current_url, location.strip())
+            with (
+                webapp_mod.pinned_dns(original_host, safe_ip, port),
+                webapp_mod._scrape_client.stream("GET", current_url, headers=headers) as response,
+            ):
+                if response.status_code not in (301, 302, 303, 307, 308):
+                    response.raise_for_status()
+                    downloaded = webapp_mod._read_scrape_response(
+                        response, max_duration=min(max(float(timeout or 10.0), 2.0), 15.0)
+                    )
+                    break
+                location = response.headers.get("location")
+                if not location or not location.strip():
+                    raise RuntimeError(f"Redirect without Location header (status {response.status_code})")
+                current_url = urllib.parse.urljoin(current_url, location.strip())
         else:
             raise RuntimeError("Too many redirects")
 
@@ -197,7 +223,7 @@ def _scrape_url_direct(
                 content_text = webapp_mod.trafilatura.extract(
                     downloaded, include_comments=False, include_tables=True
                 )
-            except Exception:
+            except (ValueError, RuntimeError, TypeError, AttributeError):
                 content_text = None
 
         if not content_text and downloaded:
@@ -233,7 +259,7 @@ def _scrape_url_direct(
         return {"url": clean_url, "content": "", "error": "レスポンスサイズが上限を超えています。"}
     except blocked_exc_cls as exc:
         return {"url": clean_url, "content": "", "error": f"スクレイピング拒否: {str(exc)[:120]}"}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return {"url": clean_url, "content": "", "error": f"取得失敗: {str(exc)[:120]}"}
 
 
@@ -308,7 +334,7 @@ def _search_in_process(
                     "infoboxes": data.get("infoboxes", []),
                     "suggestions": data.get("suggestions", []),
                 }
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             # Fall back to HTTP client if outside request context or any internal mismatch
             pass
 
@@ -331,6 +357,9 @@ def execute_server_deep_search(
     include_highlights: bool = True,
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
+    categories: str = "",
+    engines: str = "",
+    time_range: str = "",
     max_tokens: int = 3000,
     mode: str = "auto",
     focus_query: str = "",
@@ -351,6 +380,7 @@ def execute_server_deep_search(
         count: int = 15,
         categories: str = "",
         engines: str = "",
+        time_range: str = "",
         base_url: str | None = None,
         timeout: float | None = None,
     ) -> dict[str, Any]:
@@ -360,6 +390,7 @@ def execute_server_deep_search(
             count=count,
             categories=categories,
             engines=engines,
+            time_range=time_range,
             base_url=base_url,
             timeout=timeout,
         )
@@ -386,6 +417,9 @@ def execute_server_deep_search(
         include_highlights=include_highlights,
         include_domains=include_domains,
         exclude_domains=exclude_domains,
+        categories=categories,
+        engines=engines,
+        time_range=time_range,
         focus_query=focus_query,
         max_tokens=max_tok,
         max_scrape_length=max_scrape_length,
@@ -429,15 +463,13 @@ def get_ai_info(webapp_mod: Any = None, host_url: str = "http://127.0.0.1:8888")
     enabled_engines_count = 0
 
     if webapp_mod is not None:
-        try:
+        with contextlib.suppress(Exception):
             instance_name = webapp_mod.get_setting("general.instance_name") or instance_name
             version_str = getattr(webapp_mod, "VERSION_STRING", version_str)
             eng_dict = getattr(webapp_mod, "engines", {}) or {}
             enabled_engines_count = sum(
                 1 for e in eng_dict.values() if not getattr(e, "disabled", False)
             )
-        except Exception:
-            pass
 
     mcp_py = os.path.join(REPO_ROOT, "tools", "mcp_server.py").replace("\\", "/")
     cli_py = os.path.join(REPO_ROOT, "tools", "searxng_cli.py").replace("\\", "/")
@@ -676,6 +708,12 @@ html.theme-dark .sxng-ai-btn-primary {
   border-color: var(--sxng-ai-accent);
   color: var(--sxng-ai-accent);
 }
+.sxng-ai-btn:focus-visible,
+.sxng-ai-inline-action:focus-visible,
+.link_on_top_ai:focus-visible {
+  outline: 2px solid var(--sxng-ai-accent);
+  outline-offset: 2px;
+}
 .sxng-ai-scrape-box {
   margin-top: 0.55rem;
   padding: 0.65rem 0.8rem;
@@ -698,6 +736,15 @@ html.theme-dark .sxng-ai-btn-primary {
 SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple Theme */
 (function () {
   'use strict';
+
+  function escapeHtml(str) {
+    return String(str == null ? '' : str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
 
   function estimateTokens(text) {
     if (!text) return 0;
@@ -817,6 +864,7 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
       scrapeBtn.className = 'sxng-ai-inline-action';
       scrapeBtn.innerHTML = '📄 本文抽出';
       scrapeBtn.title = 'このURLの本文を抽出してプレビュー (/scrape)';
+      scrapeBtn.setAttribute('aria-expanded', 'false');
 
       var citeBtn = document.createElement('button');
       citeBtn.type = 'button';
@@ -832,7 +880,9 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
       scrapeBtn.addEventListener('click', function () {
         var existingBox = art.querySelector('.sxng-ai-scrape-box');
         if (existingBox) {
-          existingBox.style.display = existingBox.style.display === 'none' ? 'block' : 'none';
+          var isHidden = existingBox.style.display === 'none';
+          existingBox.style.display = isHidden ? 'block' : 'none';
+          scrapeBtn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
           return;
         }
         var box = document.createElement('div');
@@ -840,6 +890,7 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
         box.innerHTML = '<span>⏳ 本文を抽出中 (trafilatura)...</span>';
         art.appendChild(box);
         scrapeBtn.disabled = true;
+        scrapeBtn.setAttribute('aria-expanded', 'true');
 
         var qInput = document.getElementById('q');
         var qVal = qInput ? qInput.value.trim() : '';
@@ -849,7 +900,7 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
           .then(function (res) {
             scrapeBtn.disabled = false;
             if (res.error) {
-              box.innerHTML = '<div style="color:#ef4444;">⚠️ ' + res.error + '</div>';
+              box.innerHTML = '<div style="color:#ef4444;">⚠️ ' + escapeHtml(res.error) + '</div>';
               return;
             }
             var tok = res.estimated_tokens || estimateTokens(res.content || '');
@@ -862,7 +913,7 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
 
             var meta = document.createElement('span');
             meta.innerHTML = '<strong>📄 抽出本文</strong> <span class="sxng-ai-token-pill">' +
-              (res.char_count || 0) + ' chars / ~' + tok + ' tokens</span>';
+              escapeHtml(res.char_count || 0) + ' chars / ~' + escapeHtml(tok) + ' tokens</span>';
 
             var copyExtractedBtn = document.createElement('button');
             copyExtractedBtn.type = 'button';
@@ -884,7 +935,7 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
           })
           .catch(function (err) {
             scrapeBtn.disabled = false;
-            box.innerHTML = '<div style="color:#ef4444;">⚠️ 通信エラー: ' + err + '</div>';
+            box.innerHTML = '<div style="color:#ef4444;">⚠️ 通信エラー: ' + escapeHtml(err) + '</div>';
           });
       });
 
@@ -917,12 +968,16 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
     var inlineDeepBtn = document.getElementById('sxng-ai-inline-deep-btn');
     var deepDrawer = document.getElementById('sxng-ai-deep-drawer');
     if (inlineDeepBtn && deepDrawer) {
+      inlineDeepBtn.setAttribute('aria-expanded', 'false');
+      inlineDeepBtn.setAttribute('aria-controls', 'sxng-ai-deep-drawer');
       inlineDeepBtn.addEventListener('click', function () {
         if (deepDrawer.classList.contains('open') && deepDrawer.dataset.loaded === '1') {
           deepDrawer.classList.remove('open');
+          inlineDeepBtn.setAttribute('aria-expanded', 'false');
           return;
         }
         deepDrawer.classList.add('open');
+        inlineDeepBtn.setAttribute('aria-expanded', 'true');
         if (deepDrawer.dataset.loaded === '1') return;
 
         var bar = document.getElementById('sxng-ai-results-bar');
@@ -934,7 +989,7 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
           .then(function (r) { return r.json(); })
           .then(function (res) {
             if (res.error) {
-              deepDrawer.innerHTML = '<div style="color:#ef4444;">⚠️ ' + res.error + '</div>';
+              deepDrawer.innerHTML = '<div style="color:#ef4444;">⚠️ ' + escapeHtml(res.error) + '</div>';
               return;
             }
             deepDrawer.dataset.loaded = '1';
@@ -949,9 +1004,9 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
 
             var titleSpan = document.createElement('div');
             titleSpan.innerHTML = '<strong>⚡ Deep Search 完了</strong> ' +
-              '<span class="sxng-ai-token-pill">Intent: ' + (res.intent || 'general') + '</span> ' +
-              '<span class="sxng-ai-token-pill">~' + (res.estimated_tokens || 0) + ' tokens</span> ' +
-              '<span class="sxng-ai-token-pill">' + (res.elapsed_ms || 0) + ' ms</span>';
+              '<span class="sxng-ai-token-pill">Intent: ' + escapeHtml(res.intent || 'general') + '</span> ' +
+              '<span class="sxng-ai-token-pill">~' + escapeHtml(res.estimated_tokens || 0) + ' tokens</span> ' +
+              '<span class="sxng-ai-token-pill">' + escapeHtml(res.elapsed_ms || 0) + ' ms</span>';
 
             var btnGroup = document.createElement('div');
             btnGroup.style.display = 'flex';
@@ -982,7 +1037,7 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
             deepDrawer.appendChild(pre);
           })
           .catch(function (err) {
-            deepDrawer.innerHTML = '<div style="color:#ef4444;">⚠️ Deep Search 通信エラー: ' + err + '</div>';
+            deepDrawer.innerHTML = '<div style="color:#ef4444;">⚠️ Deep Search 通信エラー: ' + escapeHtml(err) + '</div>';
           });
       });
     }
@@ -1209,8 +1264,24 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       outline: none;
       transition: border-color 0.15s ease;
     }
-    .search-input:focus {
+    .search-input:focus,
+    .search-input:focus-visible,
+    .opt-select:focus,
+    .opt-select:focus-visible,
+    .opt-input:focus,
+    .opt-input:focus-visible,
+    .context-textarea:focus,
+    .context-textarea:focus-visible {
       border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-soft);
+    }
+    .btn:focus-visible,
+    .nav-tab:focus-visible,
+    .chip:focus-visible,
+    .ctx-tab:focus-visible,
+    .brand-logo:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
     }
     .kbd-hint {
       position: absolute;
@@ -1327,6 +1398,34 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
     @media (max-width: 1024px) {
       .split-grid {
         grid-template-columns: 1fr;
+      }
+      .context-panel {
+        position: static;
+      }
+    }
+    @media (max-width: 640px) {
+      header.topbar {
+        padding: 0.65rem 0.9rem;
+      }
+      main.workspace {
+        padding: 0.9rem 0.9rem 2rem;
+      }
+      .search-bar-row {
+        flex-wrap: wrap;
+      }
+      .search-bar-row #run-btn {
+        width: 100%;
+        justify-content: center;
+      }
+      .kbd-hint {
+        display: none;
+      }
+      .search-input {
+        padding-right: 0.95rem;
+      }
+      .preset-chips {
+        margin-left: 0;
+        width: 100%;
       }
     }
     /* Result Cards */
@@ -1500,7 +1599,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
     /* Agent Hub Grid */
     .hub-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
       gap: 1rem;
     }
     .hub-card {
@@ -1569,12 +1668,12 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         <span>⚡ SearXNG Next</span>
       </a>
       <span class="brand-badge">AI-First Studio</span>
-      <span class="status-dot" id="health-dot" title="Server Online"></span>
+      <span class="status-dot" id="health-dot" role="img" aria-label="Server Online" title="Server Online"></span>
     </div>
 
     <nav class="nav-tabs" role="tablist" aria-label="Workspace Modes">
-      <button type="button" class="nav-tab active" data-mode="deep" id="tab-deep">⚡ Unified Search &amp; Scrape</button>
-      <button type="button" class="nav-tab" data-mode="agent" id="tab-agent">🤖 Agent &amp; MCP Hub</button>
+      <button type="button" class="nav-tab active" role="tab" aria-selected="true" aria-controls="main-split-view" data-mode="deep" id="tab-deep">⚡ Unified Search &amp; Scrape</button>
+      <button type="button" class="nav-tab" role="tab" aria-selected="false" aria-controls="agent-hub-view" data-mode="agent" id="tab-agent">🤖 Agent &amp; MCP Hub</button>
     </nav>
 
     <div class="header-actions">
@@ -1674,7 +1773,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
     </section>
 
     <!-- Telemetry & Quick Action Ribbon -->
-    <section class="telemetry-bar" id="telemetry-bar">
+    <section class="telemetry-bar" id="telemetry-bar" role="status" aria-live="polite">
       <div class="telemetry-left" id="telemetry-badges"></div>
       <div class="telemetry-right">
         <button type="button" class="btn btn-primary btn-sm" id="copy-md-main">📋 AI用Markdownをコピー</button>
@@ -1685,8 +1784,8 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
     </section>
 
     <!-- Main Search / Scrape Split View -->
-    <section class="split-grid" id="main-split-view">
-      <div class="results-list" id="results-container">
+    <section class="split-grid" id="main-split-view" role="tabpanel" aria-labelledby="tab-deep">
+      <div class="results-list" id="results-container" aria-live="polite" aria-busy="false">
         <div class="empty-state" id="initial-empty-state">
           <h2>⚡ AI-First Unified Search &amp; Context Extraction</h2>
           <p>検索キーワードを入力すると Deep Search / Fast (json_lite) を実行し、URL (https://...) を貼り付けると自動で本文抽出 + BM25 ハイライト抽出に切り替わります。</p>
@@ -1706,11 +1805,11 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
             <button type="button" class="btn btn-primary btn-sm" id="ctx-copy-btn">📋 コピー</button>
           </div>
         </div>
-        <div class="context-tabs">
-          <button type="button" class="ctx-tab active" data-ctx="markdown">Markdown</button>
-          <button type="button" class="ctx-tab" data-ctx="prompt">RAG Prompt</button>
-          <button type="button" class="ctx-tab" data-ctx="json">JSON</button>
-          <button type="button" class="ctx-tab" data-ctx="curl">API / CLI</button>
+        <div class="context-tabs" role="tablist" aria-label="Context Output Format">
+          <button type="button" class="ctx-tab active" role="tab" aria-selected="true" aria-controls="ctx-output" data-ctx="markdown">Markdown</button>
+          <button type="button" class="ctx-tab" role="tab" aria-selected="false" aria-controls="ctx-output" data-ctx="prompt">RAG Prompt</button>
+          <button type="button" class="ctx-tab" role="tab" aria-selected="false" aria-controls="ctx-output" data-ctx="json">JSON</button>
+          <button type="button" class="ctx-tab" role="tab" aria-selected="false" aria-controls="ctx-output" data-ctx="curl">API / CLI</button>
         </div>
         <textarea id="ctx-output" class="context-textarea" readonly aria-label="Generated AI Context" placeholder="検索またはURL本文抽出を実行すると、ここにLLM貼り付け用の構造化Markdown・プロンプト・JSONが生成されます。"></textarea>
         <div class="token-progress-wrap">
@@ -1721,8 +1820,8 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
     </section>
 
     <!-- Agent & MCP Hub View -->
-    <section id="agent-hub-view" style="display:none;">
-      <div class="hub-grid" id="hub-cards-container"></div>
+    <section id="agent-hub-view" role="tabpanel" aria-labelledby="tab-agent" style="display:none;">
+      <div class="hub-grid" id="hub-cards-container" aria-live="polite"></div>
     </section>
   </main>
 
@@ -1747,6 +1846,35 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         curlStr: '',
         maxTokens: 3000
       };
+
+      function escapeHtml(str) {
+        return String(str == null ? '' : str)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function safeHttpUrl(url) {
+        var s = String(url == null ? '' : url).trim();
+        if (!s) return '#';
+        try {
+          var parsed = new URL(s, window.location.origin);
+          if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+            return parsed.href;
+          }
+        } catch (e) {}
+        return '#';
+      }
+
+      function escapeShellDoubleQuoted(str) {
+        return String(str == null ? '' : str)
+          .replace(/\\\\/g, '\\\\\\\\')
+          .replace(/"/g, '\\\\"')
+          .replace(/\\$/g, '\\\\$')
+          .replace(/`/g, '\\\\`');
+      }
 
       // Theme initialization
       var savedTheme = localStorage.getItem('sxng_ai_theme') || 'dark';
@@ -1817,7 +1945,9 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         state.mode = mode;
         document.querySelectorAll('.nav-tab').forEach(function (t) {
           var activeTab = (mode === 'agent') ? 'agent' : 'deep';
-          t.classList.toggle('active', t.dataset.mode === activeTab);
+          var isSelected = (t.dataset.mode === activeTab);
+          t.classList.toggle('active', isSelected);
+          t.setAttribute('aria-selected', isSelected ? 'true' : 'false');
         });
 
         var inputPanel = document.getElementById('input-panel');
@@ -1849,9 +1979,18 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         syncInputOptionsVisibility();
       });
 
-      document.querySelectorAll('.nav-tab').forEach(function (btn) {
+      var navTabs = Array.prototype.slice.call(document.querySelectorAll('.nav-tab'));
+      navTabs.forEach(function (btn, idx) {
         btn.addEventListener('click', function () {
           setMode(btn.dataset.mode);
+        });
+        btn.addEventListener('keydown', function (e) {
+          if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+            e.preventDefault();
+            var nextIdx = (idx + (e.key === 'ArrowRight' ? 1 : navTabs.length - 1)) % navTabs.length;
+            navTabs[nextIdx].focus();
+            setMode(navTabs[nextIdx].dataset.mode);
+          }
         });
       });
 
@@ -1888,13 +2027,27 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         document.getElementById('token-bar-fill').style.width = pct + '%';
       }
 
-      document.querySelectorAll('.ctx-tab').forEach(function (tab) {
+      var ctxTabs = Array.prototype.slice.call(document.querySelectorAll('.ctx-tab'));
+      function selectCtxTab(ctxName) {
+        state.ctxTab = ctxName;
+        ctxTabs.forEach(function (t) {
+          var isSelected = (t.dataset.ctx === state.ctxTab);
+          t.classList.toggle('active', isSelected);
+          t.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+        });
+        updateContextView();
+      }
+      ctxTabs.forEach(function (tab, idx) {
         tab.addEventListener('click', function () {
-          state.ctxTab = tab.dataset.ctx;
-          document.querySelectorAll('.ctx-tab').forEach(function (t) {
-            t.classList.toggle('active', t.dataset.ctx === state.ctxTab);
-          });
-          updateContextView();
+          selectCtxTab(tab.dataset.ctx);
+        });
+        tab.addEventListener('keydown', function (e) {
+          if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+            e.preventDefault();
+            var nextIdx = (idx + (e.key === 'ArrowRight' ? 1 : ctxTabs.length - 1)) % ctxTabs.length;
+            ctxTabs[nextIdx].focus();
+            selectCtxTab(ctxTabs[nextIdx].dataset.ctx);
+          }
         });
       });
 
@@ -1914,10 +2067,14 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       document.getElementById('download-md-btn').addEventListener('click', function () {
         if (!state.markdown) return;
         var blob = new Blob([state.markdown], { type: 'text/markdown;charset=utf-8' });
+        var objUrl = URL.createObjectURL(blob);
         var a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
+        a.href = objUrl;
         a.download = 'searxng-context.md';
+        document.body.appendChild(a);
         a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(objUrl); }, 1000);
       });
 
       function renderHighlights(container, highlights, fallbackContent) {
@@ -2004,7 +2161,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           var titleEl = document.createElement('div');
           titleEl.className = 'card-title';
           var link = document.createElement('a');
-          link.href = item.url;
+          link.href = safeHttpUrl(item.url);
           link.target = '_blank';
           link.rel = 'noopener noreferrer';
           link.textContent = item.title || item.url;
@@ -2022,16 +2179,20 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           scrapeBtn.type = 'button';
           scrapeBtn.className = 'btn btn-sm';
           scrapeBtn.innerHTML = '📄 全文を抽出 (/scrape)';
+          scrapeBtn.setAttribute('aria-expanded', 'false');
           scrapeBtn.addEventListener('click', function () {
             var existing = card.querySelector('.inline-scrape-drawer');
             if (existing) {
-              existing.style.display = existing.style.display === 'none' ? 'block' : 'none';
+              var isHidden = existing.style.display === 'none';
+              existing.style.display = isHidden ? 'block' : 'none';
+              scrapeBtn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
               return;
             }
             var drawer = document.createElement('div');
             drawer.className = 'inline-scrape-drawer';
             drawer.textContent = '⏳ URLから本文を抽出中...';
             card.appendChild(drawer);
+            scrapeBtn.setAttribute('aria-expanded', 'true');
             fetch('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
               .then(function (r) { return r.json(); })
               .then(function (res) {
@@ -2060,7 +2221,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
             var filterDomBtn = document.createElement('button');
             filterDomBtn.type = 'button';
             filterDomBtn.className = 'btn btn-sm';
-            filterDomBtn.innerHTML = '🎯 site:' + domain;
+            filterDomBtn.textContent = '🎯 site:' + domain;
             filterDomBtn.addEventListener('click', function () {
               document.getElementById('opt-site').value = domain;
               if (state.mode !== 'deep') setMode('deep');
@@ -2084,6 +2245,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         state.maxTokens = maxTok;
 
         var container = document.getElementById('results-container');
+        container.setAttribute('aria-busy', 'true');
         var isFast = (depth === 'fast');
         container.innerHTML = isFast
           ? '<div class="empty-state"><h2>🚀 Fast Search (json_lite) 実行中...</h2><p>高速メタ検索とトークン予算パッキングを実行しています。</p></div>'
@@ -2099,13 +2261,14 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
         var url = '/deep_search?' + params.toString();
         var origin = window.location.origin;
-        state.curlStr = 'curl -sG "' + origin + '/deep_search" --data-urlencode "q=' + query + '" --data-urlencode "depth=' + depth + '" --data-urlencode "format=markdown"';
+        state.curlStr = 'curl -sG "' + origin + '/deep_search" --data-urlencode "q=' + escapeShellDoubleQuoted(query) + '" --data-urlencode "depth=' + escapeShellDoubleQuoted(depth) + '" --data-urlencode "format=markdown"';
 
         fetch(url)
           .then(function (r) { return r.json(); })
           .then(function (res) {
+            container.setAttribute('aria-busy', 'false');
             if (res.error && (!res.results || !res.results.length)) {
-              container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">⚠️ エラー</h2><p>' + res.error + '</p></div>';
+              container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">⚠️ エラー</h2><p>' + escapeHtml(res.error) + '</p></div>';
               return;
             }
             state.markdown = res.markdown || '';
@@ -2116,16 +2279,17 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
             var badges = document.getElementById('telemetry-badges');
             telBar.classList.add('visible');
             badges.innerHTML =
-              '<span class="pill pill-accent">Mode: ' + (res.search_depth || depth) + ' (' + (res.intent || 'general') + ')</span>' +
-              '<span class="pill pill-emerald">取得: ' + (res.results_count || 0) + '件 (本文抽出: ' + (res.scraped_count || 0) + '件)</span>' +
-              '<span class="pill">~' + (res.estimated_tokens || 0) + ' tokens</span>' +
-              '<span class="pill">' + (res.elapsed_ms || 0) + ' ms</span>';
+              '<span class="pill pill-accent">Mode: ' + escapeHtml(res.search_depth || depth) + ' (' + escapeHtml(res.intent || 'general') + ')</span>' +
+              '<span class="pill pill-emerald">取得: ' + escapeHtml(res.results_count || 0) + '件 (本文抽出: ' + escapeHtml(res.scraped_count || 0) + '件)</span>' +
+              '<span class="pill">~' + escapeHtml(res.estimated_tokens || 0) + ' tokens</span>' +
+              '<span class="pill">' + escapeHtml(res.elapsed_ms || 0) + ' ms</span>';
 
             renderSearchResults(res.results || [], query);
             updateContextView();
           })
           .catch(function (err) {
-            container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">⚠️ 通信エラー</h2><p>' + err + '</p></div>';
+            container.setAttribute('aria-busy', 'false');
+            container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">⚠️ 通信エラー</h2><p>' + escapeHtml(err) + '</p></div>';
           });
       }
 
@@ -2133,17 +2297,19 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         var maxLen = document.getElementById('opt-scrape-len').value || '8000';
         var focusQ = document.getElementById('opt-scrape-query').value.trim();
         var container = document.getElementById('results-container');
-        container.innerHTML = '<div class="empty-state"><h2>📄 URL 本文抽出中 (trafilatura)...</h2><p>' + targetUrl + '</p></div>';
+        container.setAttribute('aria-busy', 'true');
+        container.innerHTML = '<div class="empty-state"><h2>📄 URL 本文抽出中 (trafilatura)...</h2><p>' + escapeHtml(targetUrl) + '</p></div>';
 
         var api = '/api/scrape_analyze?url=' + encodeURIComponent(targetUrl) + '&max_length=' + encodeURIComponent(maxLen);
         if (focusQ) api += '&q=' + encodeURIComponent(focusQ);
-        state.curlStr = 'curl -sG "' + window.location.origin + '/scrape" --data-urlencode "url=' + targetUrl + '"';
+        state.curlStr = 'curl -sG "' + window.location.origin + '/scrape" --data-urlencode "url=' + escapeShellDoubleQuoted(targetUrl) + '"';
 
         fetch(api)
           .then(function (r) { return r.json(); })
           .then(function (res) {
+            container.setAttribute('aria-busy', 'false');
             if (res.error) {
-              container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">⚠️ 抽出エラー</h2><p>' + res.error + '</p></div>';
+              container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">⚠️ 抽出エラー</h2><p>' + escapeHtml(res.error) + '</p></div>';
               return;
             }
             state.markdown = res.markdown || res.content || '';
@@ -2154,9 +2320,9 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
             var badges = document.getElementById('telemetry-badges');
             telBar.classList.add('visible');
             badges.innerHTML =
-              '<span class="pill pill-emerald">✅ 本文抽出完了 (' + (res.char_count || 0) + ' 文字)</span>' +
-              '<span class="pill pill-accent">~' + (res.estimated_tokens || 0) + ' tokens</span>' +
-              '<span class="pill">' + (res.elapsed_ms || 0) + ' ms</span>';
+              '<span class="pill pill-emerald">✅ 本文抽出完了 (' + escapeHtml(res.char_count || 0) + ' 文字)</span>' +
+              '<span class="pill pill-accent">~' + escapeHtml(res.estimated_tokens || 0) + ' tokens</span>' +
+              '<span class="pill">' + escapeHtml(res.elapsed_ms || 0) + ' ms</span>';
 
             container.innerHTML = '';
             var card = document.createElement('article');
@@ -2164,7 +2330,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
             var title = document.createElement('div');
             title.className = 'card-title';
             var a = document.createElement('a');
-            a.href = res.url;
+            a.href = safeHttpUrl(res.url);
             a.target = '_blank';
             a.rel = 'noopener noreferrer';
             a.textContent = res.url;
@@ -2190,7 +2356,8 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
             updateContextView();
           })
           .catch(function (err) {
-            container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">⚠️ 通信エラー</h2><p>' + err + '</p></div>';
+            container.setAttribute('aria-busy', 'false');
+            container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">⚠️ 通信エラー</h2><p>' + escapeHtml(err) + '</p></div>';
           });
       }
 
@@ -2261,7 +2428,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
             });
           })
           .catch(function (err) {
-            container.innerHTML = '<div class="empty-state"><p>エラー: ' + err + '</p></div>';
+            container.innerHTML = '<div class="empty-state"><p>エラー: ' + escapeHtml(err) + '</p></div>';
           });
       }
 
@@ -2449,6 +2616,21 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             or payload.get("max_length")
             or 8000
         )
+        categories = (
+            request.values.get("categories")
+            or payload.get("categories")
+            or ""
+        )
+        engines = (
+            request.values.get("engines")
+            or payload.get("engines")
+            or ""
+        )
+        time_range = (
+            request.values.get("time_range")
+            or payload.get("time_range")
+            or ""
+        )
         inc_hl = _parse_bool(
             request.values.get("include_highlights", payload.get("include_highlights")),
             default=True,
@@ -2475,6 +2657,9 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             include_highlights=inc_hl,
             include_domains=inc_domains or None,
             exclude_domains=exc_domains or None,
+            categories=str(categories),
+            engines=str(engines),
+            time_range=str(time_range),
             max_tokens=max_tokens,
             mode=str(mode),
             focus_query=str(focus_query),

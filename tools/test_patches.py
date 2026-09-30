@@ -2379,6 +2379,93 @@ class TestAiWebuiPatches(unittest.TestCase):
             self.assertEqual(auto_url_res["scraped_count"], 1)
             self.assertIn("FastAPI lifespan", auto_url_res["markdown"])
 
+    def test_webui_next_xss_url_sanitization_and_accessibility_markup(self):
+        import webui_next
+
+        html_doc = webui_next.AI_WORKSPACE_HTML
+        embed_js = webui_next.SIMPLE_EMBED_JS
+        embed_css = webui_next.SIMPLE_EMBED_CSS
+
+        # Regression: targetUrl in runScrapeMode must be escaped with escapeHtml(targetUrl)
+        self.assertNotIn("<p>' + targetUrl + '</p>", html_doc)
+        self.assertIn("<p>' + escapeHtml(targetUrl) + '</p>", html_doc)
+
+        # Verify URL scheme sanitizer and shell double-quote escaper exist
+        self.assertIn("function safeHttpUrl(", html_doc)
+        self.assertIn("function escapeShellDoubleQuoted(", html_doc)
+        self.assertIn("function escapeHtml(", embed_js)
+
+        # Verify WAI-ARIA tab roles, live regions, and keyboard focus styles
+        self.assertIn('role="tablist"', html_doc)
+        self.assertIn('role="tab"', html_doc)
+        self.assertIn('role="tabpanel"', html_doc)
+        self.assertIn('aria-live="polite"', html_doc)
+        self.assertIn(":focus-visible", html_doc)
+        self.assertIn(":focus-visible", embed_css)
+
+    def test_webui_next_ssrf_shorthand_ip_and_single_dns_resolution(self):
+        import ipaddress
+
+        import webui_next
+
+        fake_webapp = mock.MagicMock()
+        fake_webapp._ScrapeBlockedError = ValueError
+        fake_webapp._ScrapeResponseTooLargeError = RuntimeError
+        fake_webapp._is_reserved_scrape_host = lambda h: h in ("localhost", "localhost.localdomain") or h.endswith(".local")
+        fake_webapp._is_ip_blocked = lambda ip: (
+            ipaddress.ip_address(ip).is_loopback or ipaddress.ip_address(ip).is_private
+        )
+        fake_webapp._is_blocked_scrape_host = lambda h: False
+        fake_webapp.pinned_dns = mock.MagicMock()
+
+        # Shorthand, integer, and octal/hex IPv4 loopback must be statically blocked without DNS lookup
+        with mock.patch("webui_next.socket.getaddrinfo") as mock_getaddrinfo:
+            for host in ("127.1", "127.0.1", "2130706433", "0177.0.0.1", "0x7f.0.0.1", "localhost"):
+                res = webui_next._scrape_url_direct(fake_webapp, f"http://{host}/secret")
+                self.assertIn(
+                    "スクレイピング拒否 (400)",
+                    res.get("error", ""),
+                    f"Expected {host} to be statically blocked",
+                )
+            mock_getaddrinfo.assert_not_called()
+
+        # Port 0 must return 400 prefix so /api/scrape_analyze returns HTTP 400
+        port_zero_res = webui_next._scrape_url_direct(fake_webapp, "http://example.com:0/test")
+        self.assertIn("スクレイピング拒否 (400)", port_zero_res.get("error", ""))
+
+        # Verify patch_webapp_scrape_route includes resolve_dns=False and socket.inet_aton
+        sample = (
+            "import warnings\n"
+            "from flask import request\n\n"
+            "@app.route('/search', methods=['GET', 'POST'])\n"
+            "def search():\n"
+            "    pass\n"
+        )
+        patched_webapp = apply_patches.patch_webapp_scrape_route(sample, "webapp.py")
+        self.assertIn("resolve_dns=False", patched_webapp)
+        self.assertIn("socket.inet_aton(host_clean)", patched_webapp)
+
+    def test_webui_next_forwards_categories_engines_time_range(self):
+        import webui_next
+
+        captured = {}
+
+        def spy_search_in_process(webapp_mod, query, **kwargs):
+            captured["query"] = query
+            captured.update(kwargs)
+            return {"query": query, "results": [], "answers": []}
+
+        with mock.patch.object(webui_next, "_search_in_process", side_effect=spy_search_in_process):
+            webui_next.execute_server_deep_search(
+                query="quantum computing",
+                mode="fast",
+                categories="science",
+                engines="arxiv,semantic_scholar",
+                time_range="year",
+            )
+        self.assertEqual(captured.get("categories"), "science")
+        self.assertEqual(captured.get("engines"), "arxiv,semantic_scholar")
+        self.assertEqual(captured.get("time_range"), "year")
 
 
 class TestPatchCache(unittest.TestCase):

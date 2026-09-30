@@ -127,10 +127,9 @@ def extract_domain(url: str) -> str:
     """Extract lowercase netloc/domain from a URL."""
     try:
         parsed = urllib.parse.urlparse(url)
-        netloc = parsed.netloc.lower().split(":")[0]
+        host = (parsed.hostname or "").lower()
         # Remove leading www.
-        netloc = netloc.removeprefix("www.")
-        return netloc
+        return host.removeprefix("www.")
     except (ValueError, AttributeError):
         return ""
 
@@ -214,13 +213,13 @@ class QueryOptimizer:
         for token in tokens:
             lower = token.lower()
             if lower.startswith("site:") and len(token) > 5:
-                domain = token[5:].strip().lower().removeprefix("www.")
-                if domain:
-                    include_domains.append(domain)
+                for domain in parse_domain_list(token[5:]):
+                    if domain not in include_domains:
+                        include_domains.append(domain)
             elif lower.startswith("-site:") and len(token) > 6:
-                domain = token[6:].strip().lower().removeprefix("www.")
-                if domain:
-                    exclude_domains.append(domain)
+                for domain in parse_domain_list(token[6:]):
+                    if domain not in exclude_domains:
+                        exclude_domains.append(domain)
             else:
                 remaining_tokens.append(token)
 
@@ -330,7 +329,9 @@ class DomainScorer:
         total = len(raw_results)
 
         for rank, r in enumerate(raw_results):
-            url = r.get("url", "").strip()
+            if not isinstance(r, dict):
+                continue
+            url = str(r.get("url") or "").strip()
             if not url:
                 continue
 
@@ -349,20 +350,20 @@ class DomainScorer:
 
             # Engine score if provided by SearXNG
             raw_score = r.get("score")
-            if isinstance(raw_score, (int, float)) and raw_score > 0:
+            if isinstance(raw_score, (int, float)) and not math.isnan(raw_score) and not math.isinf(raw_score) and raw_score > 0:
                 base_score = (base_score + min(float(raw_score), 5.0) / 5.0) / 2.0
 
             dom_weight = self.get_domain_weight(dom)
             final_score = base_score * dom_weight
 
             item = SearchResultItem(
-                title=r.get("title", "").strip(),
+                title=str(r.get("title") or "").strip() or "Untitled",
                 url=url,
                 domain=dom,
-                content=r.get("content", "").strip(),
-                source=str(r.get("source", "")).strip(),
+                content=str(r.get("content") or "").strip(),
+                source=str(r.get("source") or "").strip(),
                 score=final_score,
-                published_date=str(r.get("published_date") or "").strip(),
+                published_date=str(r.get("published_date") or r.get("publishedDate") or "").strip(),
             )
             items.append(item)
 
@@ -500,34 +501,63 @@ class SpeculativeFetcher:
         max_fetch: int = 5,
         scrape_length: int = 12000,
         timeout: float = 6.0,
+        base_url: str | None = None,
     ) -> list[SearchResultItem]:
-        """Concurrently scrape top items and populate full_content."""
+        """Concurrently scrape top items and populate full_content without blocking on hung threads."""
         to_fetch = items[:max_fetch]
         if not to_fetch:
             return items
 
-        def _do_scrape(item: SearchResultItem) -> SearchResultItem:
-            try:
-                res = self.scrape_func(item.url, max_length=scrape_length, timeout=timeout)
-                err = res.get("error")
-                content = res.get("content", "").strip()
-                if err:
-                    item.scrape_error = err
-                    item.is_scraped = False
-                elif content:
-                    item.full_content = content
-                    item.is_scraped = True
-                else:
-                    item.scrape_error = "本文が見つかりませんでした"
-                    item.is_scraped = False
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError, RuntimeError) as e:
-                item.scrape_error = str(e)
-                item.is_scraped = False
-            return item
+        eff_timeout = float(timeout) if timeout is not None and timeout > 0 else 6.0
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = [executor.submit(_do_scrape, it) for it in to_fetch]
-            concurrent.futures.wait(futures, timeout=timeout + 2.0)
+        def _do_scrape(target_url: str) -> dict[str, Any]:
+            try:
+                if base_url is not None:
+                    try:
+                        res = self.scrape_func(
+                            target_url,
+                            max_length=scrape_length,
+                            timeout=eff_timeout,
+                            base_url=base_url,
+                        )
+                    except TypeError:
+                        res = self.scrape_func(target_url, max_length=scrape_length, timeout=eff_timeout)
+                else:
+                    res = self.scrape_func(target_url, max_length=scrape_length, timeout=eff_timeout)
+                err = res.get("error") if isinstance(res, dict) else "Invalid scrape response"
+                content = (res.get("content") or "").strip() if isinstance(res, dict) else ""
+                if err:
+                    return {"is_scraped": False, "full_content": "", "scrape_error": str(err)}
+                if content:
+                    return {"is_scraped": True, "full_content": content, "scrape_error": ""}
+                return {"is_scraped": False, "full_content": "", "scrape_error": "本文が見つかりませんでした"}
+            except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError) as e:
+                return {"is_scraped": False, "full_content": "", "scrape_error": str(e)}
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers)
+        try:
+            future_to_item = {executor.submit(_do_scrape, it.url): it for it in to_fetch}
+            done, not_done = concurrent.futures.wait(
+                future_to_item.keys(),
+                timeout=eff_timeout,
+            )
+            for fut in done:
+                item = future_to_item[fut]
+                try:
+                    outcome = fut.result()
+                    item.is_scraped = bool(outcome.get("is_scraped", False))
+                    item.full_content = str(outcome.get("full_content") or "")
+                    item.scrape_error = str(outcome.get("scrape_error") or "")
+                except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError) as exc:
+                    item.is_scraped = False
+                    item.scrape_error = str(exc)
+            for fut in not_done:
+                fut.cancel()
+                item = future_to_item[fut]
+                item.is_scraped = False
+                item.scrape_error = "Scrape timed out"
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         return items
 
@@ -701,13 +731,16 @@ def execute_scrape_pipeline(
     scrape_kwargs: dict[str, Any] = {"max_length": max_len}
     if timeout is not None:
         scrape_kwargs["timeout"] = timeout
-    if base_url is not None:
-        try:
-            scrape_res = scrape_func(clean_url, base_url=base_url, **scrape_kwargs)
-        except TypeError:
+    try:
+        if base_url is not None:
+            try:
+                scrape_res = scrape_func(clean_url, base_url=base_url, **scrape_kwargs)
+            except TypeError:
+                scrape_res = scrape_func(clean_url, **scrape_kwargs)
+        else:
             scrape_res = scrape_func(clean_url, **scrape_kwargs)
-    else:
-        scrape_res = scrape_func(clean_url, **scrape_kwargs)
+    except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError) as exc:
+        scrape_res = {"error": str(exc)}
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
     dom = extract_domain(clean_url)
@@ -870,6 +903,11 @@ def execute_unified_search(
     except (ValueError, TypeError):
         max_tok = 3000
 
+    try:
+        scrape_len = max(500, min(int(max_scrape_length), 50000))
+    except (ValueError, TypeError):
+        scrape_len = 8000
+
     # Merge explicit domain filters deterministically
     final_inc = sorted(set(parse_domain_list(include_domains) + explicit_inc))
     final_exc = sorted(set(parse_domain_list(exclude_domains) + explicit_exc))
@@ -902,7 +940,12 @@ def execute_unified_search(
         search_res = search_func(**search_kwargs)
     except TypeError:
         search_kwargs.pop("time_range", None)
-        search_res = search_func(**search_kwargs)
+        try:
+            search_res = search_func(**search_kwargs)
+        except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError) as exc:
+            search_res = {"error": str(exc)}
+    except (OSError, ValueError, RuntimeError, KeyError, AttributeError) as exc:
+        search_res = {"error": str(exc)}
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
 
@@ -965,7 +1008,13 @@ def execute_unified_search(
     if should_scrape:
         fetcher = SpeculativeFetcher(scrape_func=scrape_func)
         extractor = BM25PassageExtractor()
-        fetcher.fetch_pages(top_candidates, max_fetch=max_res)
+        fetcher.fetch_pages(
+            top_candidates,
+            max_fetch=max_res,
+            scrape_length=scrape_len,
+            timeout=float(timeout) if timeout is not None and timeout > 0 else 6.0,
+            base_url=base_url,
+        )
 
         for item in top_candidates:
             if item.is_scraped and item.full_content:

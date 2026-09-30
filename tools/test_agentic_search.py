@@ -328,6 +328,122 @@ class TestExecuteDeepSearch(unittest.TestCase):
         self.assertIn("Fast Search Results", res["markdown"])
         self.assertIn("rag_prompt", res)
 
+    def test_parse_query_normalizes_full_urls_in_site_operators(self) -> None:
+        query = "kernel patch site:https://www.github.com/torvalds/linux -site:http://www.spam.example.com:8080/ads"
+        clean_q, inc, exc = agentic_search.QueryOptimizer.parse_query(query)
+        self.assertEqual(clean_q, "kernel patch")
+        self.assertEqual(inc, ["github.com"])
+        self.assertEqual(exc, ["spam.example.com"])
+
+    def test_extract_domain_strips_credentials_and_brackets(self) -> None:
+        self.assertEqual(
+            agentic_search.extract_domain("https://user:secret@www.example.com:8443/path"),
+            "example.com",
+        )
+        self.assertEqual(
+            agentic_search.extract_domain("http://[::1]:8080/status"),
+            "::1",
+        )
+
+    def test_domain_scorer_handles_none_fields_nan_score_and_published_date(self) -> None:
+        scorer = agentic_search.DomainScorer()
+        raw = [
+            {
+                "title": None,
+                "url": "https://docs.python.org/3/library/asyncio.html",
+                "content": None,
+                "source": None,
+                "score": float("nan"),
+                "publishedDate": "2026-03-30",
+            }
+        ]
+        scored = scorer.score_results(raw)
+        self.assertEqual(len(scored), 1)
+        self.assertEqual(scored[0].title, "Untitled")
+        self.assertEqual(scored[0].content, "")
+        self.assertEqual(scored[0].source, "")
+        self.assertEqual(scored[0].published_date, "2026-03-30")
+        self.assertGreater(scored[0].score, 0.0)
+
+    def test_speculative_fetcher_timeout_does_not_block_on_hung_worker(self) -> None:
+        import threading
+        import time
+
+        release_event = threading.Event()
+
+        def hung_scrape(url: str, **kwargs):
+            if "slow" in url:
+                release_event.wait(timeout=5.0)
+                return {"content": "Too late"}
+            return {"content": "Fast page content"}
+
+        fetcher = agentic_search.SpeculativeFetcher(scrape_func=hung_scrape, max_workers=2)
+        items = [
+            agentic_search.SearchResultItem(title="Fast", url="https://fast.example.com", domain="fast.example.com", content="s1"),
+            agentic_search.SearchResultItem(title="Slow", url="https://slow.example.com", domain="slow.example.com", content="s2"),
+        ]
+        start = time.monotonic()
+        try:
+            updated = fetcher.fetch_pages(items, max_fetch=2, timeout=0.15)
+            elapsed = time.monotonic() - start
+            # Must not block for the full 5.0s hung thread duration
+            self.assertLess(elapsed, 1.5)
+            self.assertTrue(updated[0].is_scraped)
+            self.assertEqual(updated[0].full_content, "Fast page content")
+            self.assertFalse(updated[1].is_scraped)
+            self.assertEqual(updated[1].scrape_error, "Scrape timed out")
+        finally:
+            release_event.set()
+
+    def test_execute_unified_search_forwards_scrape_params_and_handles_exceptions(self) -> None:
+        mock_search = MagicMock()
+        mock_search.return_value = {
+            "query": "rust tokio",
+            "results": [
+                {
+                    "title": "Tokio Docs",
+                    "url": "https://tokio.rs/tokio/tutorial",
+                    "content": "Tokio is an asynchronous runtime for Rust.",
+                    "source": "brave",
+                    "score": 1.0,
+                }
+            ],
+            "answers": [],
+        }
+        captured_kwargs = {}
+
+        def spy_scrape(url: str, **kwargs):
+            captured_kwargs.update(kwargs)
+            return {"url": url, "content": "Tokio tutorial full body text for async Rust."}
+
+        res = agentic_search.execute_unified_search(
+            query="rust tokio",
+            search_func=mock_search,
+            scrape_func=spy_scrape,
+            mode="deep",
+            max_results=1,
+            max_scrape_length=4321,
+            timeout=9,
+            base_url="http://127.0.0.1:9999",
+        )
+        self.assertEqual(res["scraped_count"], 1)
+        self.assertEqual(captured_kwargs.get("max_length"), 4321)
+        self.assertEqual(captured_kwargs.get("base_url"), "http://127.0.0.1:9999")
+        self.assertLessEqual(captured_kwargs.get("timeout", 99), 9)
+
+        # Verify exception resilience when search_func raises
+        def raising_search(query: str, **kwargs):
+            raise RuntimeError("search backend crashed")
+
+        err_res = agentic_search.execute_unified_search(
+            query="rust tokio",
+            search_func=raising_search,
+            scrape_func=spy_scrape,
+            mode="fast",
+        )
+        self.assertIn("error", err_res)
+        self.assertIn("search backend crashed", err_res["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

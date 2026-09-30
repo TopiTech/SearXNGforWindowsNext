@@ -604,6 +604,7 @@ def patch_webapp_scrape_route(content, path):
     if (
         all(anchor in content for anchor in required_anchors)
         and ("Resolution failed for pinned host" in content or "except Exception:\n                    pass" not in content)
+        and ("def scrape():" not in content or "resolve_dns=False" in content)
     ):
         return "ALREADY_APPLIED"
 
@@ -825,7 +826,7 @@ def _is_ip_blocked(ip):
     return False
 
 
-def _is_blocked_scrape_host(host):
+def _is_blocked_scrape_host(host, resolve_dns=True):
     if isinstance(host, (bytes, bytearray)):
         try:
             host = host.decode('ascii')
@@ -847,6 +848,15 @@ def _is_blocked_scrape_host(host):
                     return _is_ip_blocked(ipaddress.IPv4Address(ip_int))
             except Exception:
                 pass
+        if ':' not in host_clean:
+            try:
+                packed_ip = socket.inet_aton(host_clean)
+                return _is_ip_blocked(ipaddress.IPv4Address(packed_ip))
+            except Exception:
+                pass
+
+    if not resolve_dns:
+        return False
 
     try:
         for res in socket.getaddrinfo(host_clean, None):
@@ -949,6 +959,15 @@ def scrape():
                         raise
                     except Exception:
                         pass
+                if ':' not in host_clean:
+                    try:
+                        packed_ip = socket.inet_aton(host_clean)
+                        if _is_ip_blocked(ipaddress.IPv4Address(packed_ip)):
+                            raise _ScrapeBlockedError(f'Blocked: {host} is a private/reserved IP')
+                    except _ScrapeBlockedError:
+                        raise
+                    except Exception:
+                        pass
 
             try:
                 port = parsed.port or (443 if parsed.scheme == 'https' else 80)
@@ -1000,7 +1019,7 @@ def scrape():
         parsed = _parse_scrape_url(url)
     except _ScrapeBlockedError as e:
         return jsonify({'error': str(e)}), 400
-    if parsed.scheme not in ('http', 'https') or _is_blocked_scrape_host(parsed.hostname):
+    if parsed.scheme not in ('http', 'https') or _is_blocked_scrape_host(parsed.hostname, resolve_dns=False):
         return jsonify({'error': 'Invalid or blocked URL'}), 400
 
     try:
