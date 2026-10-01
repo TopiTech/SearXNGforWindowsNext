@@ -2154,6 +2154,7 @@ def patch_simple_index_ai_webui(content, path):
         "onclick=\"var q=document.getElementById('q');window.location.href='/ai'+(q&&q.value.trim()?'?q='+encodeURIComponent(q.value.trim()):'');\">"
         "⚡ AI Search &amp; Scrape Studio</button>\n"
         '        <a href="/ai?mode=agent" class="sxng-ai-btn">🤖 Agent &amp; MCP Hub</a>\n'
+        '        <script>(function(){if(!window.__AI_STUDIO_LOADED__&&window.location.pathname!=="/"){window.location.replace("/"+(window.location.search||""));}})();</script>\n'
         "    </div>"
     )
 
@@ -2283,7 +2284,7 @@ PATCH_SPECS = [
         target_path=os.path.join(SITE_PACKAGES, "searx", "webapp.py"),
         description="webapp.py (AI WebUI & /deep_search integration)",
         patch_func=patch_webapp_ai_webui,
-        severity=PatchSeverity.FEATURE,
+        severity=PatchSeverity.CRITICAL,
         required_file=True,
         expected_anchors=[
             "# --- GenAI Next WebUI Integration ---",

@@ -1091,12 +1091,12 @@ def execute_unified_search(
             norm_mode = "balanced"
         else:
             norm_mode = "deep"
-    elif norm_mode == "fast":
+    elif norm_mode in ("fast", "classic"):
         norm_depth = "fast"
     elif norm_mode in ("balanced", "retrieval"):
         norm_mode = "balanced"
         norm_depth = "balanced"
-    elif norm_mode not in ("deep", "fast", "scrape"):
+    elif norm_mode not in ("deep", "fast", "classic", "scrape"):
         norm_mode = "deep"
 
     # Balanced Retrieval Pipeline
@@ -1180,8 +1180,8 @@ def execute_unified_search(
     eng_str = (engines or "").strip()
     tr_str = (time_range or "").strip()
 
-    # In fast mode, only use explicit categories/engines unless none are specified
-    if norm_mode == "fast" and not (cat_str or eng_str):
+    # In fast/classic mode, only use explicit categories/engines unless none are specified
+    if norm_mode in ("fast", "classic") and not (cat_str or eng_str):
         target_cats = ""
         target_engs = ""
         fetch_count = max_res if not (final_inc or final_exc) else max(max_res * 2, 10)
@@ -1295,7 +1295,11 @@ def execute_unified_search(
         for item in top_candidates:
             item.highlights = [item.content] if item.content else []
 
-    header_label = "Fast Search Results" if norm_mode == "fast" else "Deep Search Results"
+    header_label = (
+        "Classic Search Results"
+        if norm_mode == "classic"
+        else ("Fast Search Results" if norm_mode == "fast" else "Deep Search Results")
+    )
     packed_markdown = TokenBudgeter.pack_markdown(
         query=clean_q,
         items=top_candidates,

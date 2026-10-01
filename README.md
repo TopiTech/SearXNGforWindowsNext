@@ -16,10 +16,10 @@
 
 - ⚡ **Windows Native**: 組み込みPython環境により、DockerなしでWindows上で直接動作。
 - 🧠 **GenAI Retrieval API (`/api/retrieval` & `json_ai`)**: LLM や AI エージェントが根拠・引用として利用できる高品質な検索結果と見出し単位の根拠パッセージ（Evidence Passages）を提供する検索基盤。Reciprocal Rank Fusion、多言語 BM25 字句再ランキング、決定論的クエリ展開、SSRF 防御を統合。
-- 🎨 **AI-First WebUI (`/ai` & ネイティブ統合)**: 外部CDN・フレームワーク不要の超軽量「AI Search & Context Studio」と、既存の `simple` テーマ上でのインライン本文抽出・ワンクリックMarkdown/RAGコピー機能を搭載。
+- 🎨 **AI-First Dedicated WebUI (`/`)**: 従来のレガシーClassic UIを完全廃止し、AI Search & Context Studioに一本化。4つの専用モード（⚡ AI Deep Search / 🔍 Classic 検索 / 🤖 Agent & MCP Hub / ⚙️ 設定）を統合し、全エンジンの稼働状況や信頼性をリアルタイムに監視・設定可能。
 - 📦 **GenAI Optimized**: LLMのトークン消費を抑える専用の `json_lite`、新世代 `json_ai` / `evidence_json` フォーマット、および HTTP `/deep_search` エンドポイントを搭載。
 - 🔍 **High-Quality Engines**: Bing, DuckDuckGo, Mojeekなどの信頼性の高いエンジンを標準で最適化。
-- 🔄 **Auto-Sync Architecture**: `searxng/searxng` 本家の最新コードを追従しつつ、Windows固有のパッチを自動適用。常に最新の状態に。
+- 🔄 **Auto-Sync Architecture**: `searxng/searxng` 本家の最新コードを追従しつつ、Windows固有のパッチを自動適用。レガシーUIの誤復活を阻止する多層防御を完備。
 - 🛡️ **Secure & Local**: ローカルホストでの動作に特化したセキュアなデフォルト設定。SSRF防御およびプロンプトインジェクション検知スキャナを内蔵。
 
 ---
@@ -36,8 +36,11 @@
 
 ### 2. 起動
 `SearXNG for Windows.bat` を実行します。起動後、ブラウザで以下にアクセスできます：
-- **AI Search & Context Studio (AIファースト専用UI)**: [http://127.0.0.1:8888/ai](http://127.0.0.1:8888/ai)
-- **Classic SearXNG (AI拡張バー付き)**: [http://127.0.0.1:8888](http://127.0.0.1:8888)
+- **AI-First Search & Context Studio (統合UI)**: [http://127.0.0.1:8888](http://127.0.0.1:8888)（または `/ai`）
+  - ⚡ **AI Deep Search**: BM25 + 並列スクレイピング + トークン推定 + RAGプロンプト生成
+  - 🔍 **Classic 検索**: カテゴリタブ・時間フィルタ・エンジンバッジを備えた軽快な1カラム検索＆1クリックAI深掘り
+  - 🤖 **Agent & MCP Hub**: Claude Code, Cursor, OpenCode 連携設定・ワンクリックコピー
+  - ⚙️ **設定**: 全260+エンジンのリアルタイム稼働状態（Online/Suspended/Disabled）、応答速度(ms)、信頼性(%)の可視化とトグル切り替え
 
 ### 3. 動作確認 (Testing)
 以下のコマンドを実行して、特に `json_lite` 形式や `/deep_search` のレスポンスが正しく返ってくるか確認できます。
@@ -104,20 +107,38 @@ SearXNG for Windows Next は、AI モデル自身が回答を生成するため�
 
 ---
 
-## 🖥️ AI-First WebUI (`/ai` & Classic 統合)
+## 🖥️ AI-First Dedicated WebUI (`/`)
 
-本プロジェクトでは、人間とAIエージェントの双方にとって直感的かつ超軽量（外部JS/CSS依存ゼロ・単一ファイル完結）な2つのUI体験を提供します。検索ロジック（`json_lite` 高速スニペット・`/scrape` 本文抽出・`Agentic Deep Search`）は単一の統合パイプライン（`tools/agentic_search.py`）に集約されています。
+SearXNG for Windows Next では、旧来の Jinja2 `simple` テーマ画面を完全に廃止し、**AI Search & Context Studio** を単一のプライマリWebインターフェースとして一本化しました。外部CDNや重量級JSフレームワークに一切依存せず（完全ローカル完結）、人間とAIコーディングエージェントの双方にとって最高峰の操作性と情報密度を提供します。
 
-### 1. AI Search & Context Studio (`/ai` または `/next`)
-ブラウザで `http://127.0.0.1:8888/ai` を開くと、**単一の統合検索＆本文抽出バー**を備えたAIコンテキスト生成ワークスペースが起動します。
-- **🔍 入力自動判別 (Keyword vs URL)**:
-  - **キーワードや質問を入力**: 選択した `Mode / Depth`（`Deep: Advanced` / `Deep: Code & Docs` / `Basic` / `Fast: json_lite`）で統合検索を実行。
-  - **URL (`https://...`) を貼り付け**: 自動的に **URL 本文抽出モード** に切り替わり、SSRF保護付き本文抽出（`trafilatura`）と任意キーワードによる BM25 重要段落ハイライト抽出を実行。
-- **🤖 Agent & MCP Hub モード**: Claude Code / Cursor / OpenCode 用の設定JSONやCLIコマンドを、稼働中サーバーのURLに合わせて自動生成・ワンクリックコピー。
-- **コンテキスト予算＆ワンクリック出力**: 推定トークン数のプログレスバー表示、`📋 AI用Markdownをコピー`、`💬 RAGプロンプト形式でコピー`（情報源引用ルール付きプロンプト）、`{ } JSONをコピー`、`💾 .md 保存` を完備。
+### 4つの専用モード
 
-### 2. 標準 `simple` テーマへのプログレッシブ拡張 (`/`・`/search`)
-従来のSearXNG画面（`/` および `/search`）もそのまま利用でき、ホーム画面の `⚡ AI Search & Scrape Studio` ボタンや検索結果画面上部のスリムな **AI Toolkit** と各検索結果カードのアクションボタン（`📄 本文抽出`・`📋 引用コピー`）によって、ページ遷移なしで本文プレビューやLLM向けMarkdownコピーが可能です。
+1. **⚡ AI Deep Search (`mode=deep`)**:
+   - ワンストップでメタ検索＋並列スクレイピング＋多言語BM25パッセージ抽出を実行。
+   - 推定トークン数メーター、`📋 AI用Markdown`、`💬 RAGプロンプト`、`{ } JSON`、`💾 .md 保存` をワンクリックで提供。
+2. **🔍 Classic 検索 (`mode=classic`)**:
+   - 従来の検索エンジンの軽快さを好むユーザー向けの高速・軽量1カラム検索モード。
+   - カテゴリタブ（IT, 科学, ニュース, ソーシャル等）、時間フィルタ（全期間, 1日, 1週間, 1か月, 1年）、各結果カードのエンジン識別バッジ、ページネーションを完備。
+   - 各検索結果カードからワンクリックで「⚡ AIで深掘り」を実行でき、瞬時に Deep Search モードへ連携可能。
+3. **🤖 Agent & MCP Hub (`mode=agent`)**:
+   - Claude Code / Cursor / Windsurf / OpenCode / CLI 向けの設定JSONや登録コマンドを、現在のサーバーホストURLに合わせて自動生成・ワンクリックコピー。
+4. **⚙️ 設定ダッシュボード (`mode=settings`)**:
+   - 全260以上のエンジンのリアルタイム稼働状態（🟢 Online / 🟡 Suspended (レート制限等) / ⚪ Disabled）、応答時間(ms)、信頼性(%)を一目で把握できる一覧グリッド。
+   - カテゴリ別フィルタリング、エンジン名リアルタイム絞り込み、個別トグルスイッチおよび一括「全有効 / 全無効 / デフォルトに戻す」ボタンを搭載。
+   - 設定は `disabled_engines` / `enabled_engines` Cookie および `localStorage` に保存され、ブラウザとAPIリクエストの双方で永続化。
+
+### 既存URLからの自動ルーティング & アップストリーム防御
+
+- **ブラウザリクエストの自動遷移**:
+  - `GET /` → AI Search & Context Studio
+  - `GET /search?q=...` → `GET /?q=...`（HTMLアクセス時は自動的にAIスタジオへ302リダイレクト）
+  - `GET /preferences` → `GET /?mode=settings`
+  - `GET /about` → `GET /?mode=agent`
+- **API互換性の100%保証**:
+  - `GET /search?q=...&format=json` や `format=json_lite`、`format=csv`、HTTPヘッダー `Accept: application/json` を含むリクエストは、リダイレクトされず従来のAPIハンドラーに透過的に引き渡されます。
+- **5層のアップストリーム誤復活防止アーキテクチャ**:
+  - `webapp_ai_webui` パッチを `CRITICAL` に指定し、アップストリーム同期時にルーティング注入が失敗した場合は即座に同期・起動を中断。
+  - `app.before_request` による最優先インターセプト、`app.view_functions` による第2防衛層、テンプレートレベルのクライアントサイド・リダイレクトガード、`sync-upstream.ps1` での自動テスト検証、起動バッチのパッチ先行適用により、本家コードの更新によって旧UIが意図せず復活することを構造的に防ぎます。
 
 ---
 

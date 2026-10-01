@@ -45,7 +45,9 @@ workspace/
 
 2. **webapp.py** → Flask server
    - Binds to `http://127.0.0.1:8888` (localhost only)
-   - Handles `/search`, `/scrape` (custom), and standard SearXNG routes
+   - Serves unified AI-First WebUI (`/` and `/ai`) with 4 modes (Deep Search, Classic Search, Agent & MCP Hub, Settings Dashboard)
+   - Intercepts legacy browser routes (`/search` (HTML), `/preferences`, `/about`) via dual-tier routing (Tier A `before_request`, Tier B `view_functions`)
+   - Preserves 100% backward compatibility for API queries (`/search?format=json`, `/search?format=json_lite`, `/deep_search`, `/api/retrieval`, `/scrape`)
    - Applies search engine filtering + output formatting
 
 ---
@@ -54,27 +56,29 @@ workspace/
 
 ### Design Principle
 
-This project **stays synchronized with upstream SearXNG** while maintaining Windows compatibility via **idempotent patches**. Patches are applied after every upstream sync and are safe to run multiple times.
+This project **stays synchronized with upstream SearXNG** while maintaining Windows compatibility and AI-first unification via **idempotent patches**. Patches are applied after every upstream sync and are safe to run multiple times.
+The `webapp_ai_webui` patch is elevated to `CRITICAL` severity to guarantee that any upstream modification that breaks UI unification halts the sync process immediately rather than silently reviving the legacy Jinja2 UI.
 
-### Patch Targets (15 Patch Steps across 15 Target Files)
+### Patch Targets (16 Patch Steps across Target Files)
 
-| # | File | Patch | Purpose |
-|---|------|-------|---------|
-| 1 | `valkeydb.py` | Windows `pwd` module fallback | Cache system compatibility |
-| 2 | `settings_defaults.py` | Register `json_lite` format | Output format registration |
-| 3 | `webutils.py` | `get_json_lite_response()` function | Lightweight GenAI-friendly responses |
-| 3b | `webutils.py` | Normalize Windows paths for URL lookups | Static assets and result templates |
-| 3c | `templates/simple/{search,simple_search}.html` | Localized accessible name for search input | Keyboard/screen-reader usability |
-| 4 | `webapp.py` (pt 1) | `json_lite` handler + `WindowsSelectorEventLoopPolicy` | Route handler, SSRF libs, curl_cffi compatibility |
-| 5 | `webapp.py` (pt 2) | `/scrape` endpoint (SSRF-protected, streaming timeout) | Content extraction API (blocks 6to4/Teredo, slowloris defense) |
-| 6 | `engines/__init__.py` | Remove legacy `disabled` short-circuit | Preserve SearXNG preference semantics |
-| 7 | `search/processors/__init__.py` | Remove legacy `disabled` processor skip | Allow manual activation from Preferences |
-| 8 | `engines/google.py` | CAPTCHA false-positive fix | Reduce spurious suspensions |
-| 9 | `engines/sogou.py` | Robust CAPTCHA detection | Reduce spurious suspensions |
-| 10 | `search/processors/abstract.py` | Remove legacy global suspension cap | Honor `search.suspended_times` |
-| 11 | `search/processors/online.py` | Retry-After + CAPTCHA logging | Respect retry hints |
-| 11b | `exceptions.py` | Attach HTTP response to `SearxEngineCaptchaException` | Preserve headers (e.g. Retry-After) for CAPTCHA handling |
-| 12 | `settings.yml` + `config/settings.yml` | Reduce suspended_times defaults | Auto-recovery on single-user instance |
+| # | File | Patch | Severity | Purpose |
+|---|------|-------|:---:|---------|
+| 1 | `valkeydb.py` | Windows `pwd` module fallback | CRITICAL | Cache system compatibility |
+| 2 | `settings_defaults.py` | Register `json_lite` format | FEATURE | Output format registration |
+| 3 | `webutils.py` | `get_json_lite_response()` function | FEATURE | Lightweight GenAI-friendly responses |
+| 3b | `webutils.py` | Normalize Windows paths for URL lookups | CRITICAL | Static assets and result templates |
+| 3c | `templates/simple/{search,simple_search}.html` | Localized accessible name for search input | OPTIONAL | Keyboard/screen-reader usability |
+| 4 | `webapp.py` (pt 1) | `json_lite` handler + `WindowsSelectorEventLoopPolicy` | CRITICAL | Route handler, SSRF libs, curl_cffi compatibility |
+| 5 | `webapp.py` (pt 2) | `/scrape` endpoint (SSRF-protected, streaming timeout) | FEATURE | Content extraction API (blocks 6to4/Teredo, slowloris defense) |
+| 5b | `webapp.py` (pt 3) | `webapp_ai_webui` (AI Studio unification & API routing) | CRITICAL | Dedicated AI Studio, Classic search mode, Settings API, legacy UI abolition |
+| 6 | `engines/__init__.py` | Remove legacy `disabled` short-circuit | OPTIONAL | Preserve SearXNG preference semantics |
+| 7 | `search/processors/__init__.py` | Remove legacy `disabled` processor skip | OPTIONAL | Allow manual activation from Preferences |
+| 8 | `engines/google.py` | CAPTCHA false-positive fix | OPTIONAL | Reduce spurious suspensions |
+| 9 | `engines/sogou.py` | Robust CAPTCHA detection | OPTIONAL | Reduce spurious suspensions |
+| 10 | `search/processors/abstract.py` | Remove legacy global suspension cap | OPTIONAL | Honor `search.suspended_times` |
+| 11 | `search/processors/online.py` | Retry-After + CAPTCHA logging | FEATURE | Respect retry hints |
+| 11b | `exceptions.py` | Attach HTTP response to `SearxEngineCaptchaException` | FEATURE | Preserve headers (e.g. Retry-After) for CAPTCHA handling |
+| 12 | `settings.yml` + `config/settings.yml` | Reduce suspended_times defaults | OPTIONAL | Auto-recovery on single-user instance |
 
 ### Patch Execution Flow
 
@@ -85,22 +89,25 @@ sync-upstream.ps1
   ├─ Sync searx/ and searxng_extra/ packages
   ├─ Copy requirements.txt, setup.py, LICENSE
   ├─ Update UPSTREAM_VERSION.txt (metadata)
-  └─ apply-patches.py (15 patch steps, idempotent)
-       ├─ Patch 1: valkeydb.py ✓
-       ├─ Patch 2: settings_defaults.py ✓
-       ├─ Patch 3: webutils.py ✓
-       ├─ Patch 3b: webutils.py (Windows path normalization) ✓
-       ├─ Patch 3c: simple search templates (accessible input name) ✓
-       ├─ Patch 4a: webapp.py (json_lite handler + WindowsSelectorEventLoopPolicy) ✓
-       ├─ Patch 4b: webapp.py (/scrape route + 6to4/Teredo SSRF guard + slowloris timeout) ✓
-       ├─ Patch 6: engines/__init__.py ✓
-       ├─ Patch 7: search/processors/__init__.py ✓
-       ├─ Patch 8: engines/google.py ✓
-       ├─ Patch 9: engines/sogou.py ✓
-       ├─ Patch 10: search/processors/abstract.py ✓
-       ├─ Patch 11: search/processors/online.py ✓
-       ├─ Patch 11b: exceptions.py ✓
-       └─ Patch 12: settings.yml + config/settings.yml ✓
+  ├─ apply-patches.py (idempotent, halts on CRITICAL failure)
+  │    ├─ Patch 1: valkeydb.py [CRITICAL] ✓
+  │    ├─ Patch 2: settings_defaults.py [FEATURE] ✓
+  │    ├─ Patch 3: webutils.py [FEATURE] ✓
+  │    ├─ Patch 3b: webutils.py (Windows path normalization) [CRITICAL] ✓
+  │    ├─ Patch 3c: simple search templates (accessible input name) [OPTIONAL] ✓
+  │    ├─ Patch 4a: webapp.py (json_lite handler + loop policy) [CRITICAL] ✓
+  │    ├─ Patch 4b: webapp.py (/scrape route + SSRF guard) [FEATURE] ✓
+  │    ├─ Patch 5b: webapp.py (AI Studio unification & /deep_search) [CRITICAL] ✓
+  │    ├─ Patch 6: engines/__init__.py [OPTIONAL] ✓
+  │    ├─ Patch 7: search/processors/__init__.py [OPTIONAL] ✓
+  │    ├─ Patch 8: engines/google.py [OPTIONAL] ✓
+  │    ├─ Patch 9: engines/sogou.py [OPTIONAL] ✓
+  │    ├─ Patch 10: search/processors/abstract.py [OPTIONAL] ✓
+  │    ├─ Patch 11: search/processors/online.py [FEATURE] ✓
+  │    ├─ Patch 11b: exceptions.py [FEATURE] ✓
+  │    └─ Patch 12: settings.yml + config/settings.yml [OPTIONAL] ✓
+  └─ Post-Sync Verification (tools/test_patches.py)
+       └─ Validates root AI Studio, legacy redirects, API passthrough, and Settings API
 ```
 
 ### Idempotency Strategy

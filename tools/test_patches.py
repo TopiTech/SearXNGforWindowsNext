@@ -2558,6 +2558,147 @@ class TestAiWebuiPatches(unittest.TestCase):
             self.assertIn("スクレイピング拒否", err_res.get("error", ""))
             self.assertIn("DNS resolution failed", err_res.get("error", ""))
 
+    def test_unified_root_serves_ai_first_workspace(self):
+        """Verify root / serves the unified AI Search & Context Studio HTML with classic & settings tabs."""
+        import webui_next
+        from flask import Flask
+
+        app = Flask("test_unified_root")
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        resp = client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/html", resp.headers.get("Content-Type", ""))
+        body = resp.data.decode("utf-8")
+        self.assertIn("SearXNG Next", body)
+        self.assertIn('id="tab-classic"', body)
+        self.assertIn('id="tab-settings"', body)
+        self.assertIn('data-mode="classic"', body)
+        self.assertIn('data-mode="settings"', body)
+
+    def test_unified_search_browser_redirects_and_api_passes(self):
+        """Verify /search redirects HTML browser queries to /?q=... while preserving API json/data output."""
+        import webui_next
+        from flask import Flask, jsonify
+
+        app = Flask("test_unified_search")
+
+        @app.route("/search", methods=["GET", "POST"])
+        def orig_search():
+            return jsonify({"results": [{"title": "API result"}]}), 200
+
+        @app.route("/preferences", methods=["GET", "POST"])
+        def orig_preferences():
+            return "ORIG_PREFERENCES_PAGE"
+
+        @app.route("/about", methods=["GET"])
+        def orig_about():
+            return "ORIG_ABOUT_PAGE"
+
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        # HTML browser requests redirect to unified studio
+        html_resp = client.get("/search?q=machine+learning", headers={"Accept": "text/html,application/xhtml+xml"})
+        self.assertEqual(html_resp.status_code, 302)
+        self.assertIn("/?q=machine+learning", html_resp.headers.get("Location", ""))
+
+        pref_resp = client.get("/preferences", headers={"Accept": "text/html"})
+        self.assertEqual(pref_resp.status_code, 302)
+        self.assertIn("/?mode=settings", pref_resp.headers.get("Location", ""))
+
+        about_resp = client.get("/about")
+        self.assertEqual(about_resp.status_code, 302)
+        self.assertIn("/?mode=agent", about_resp.headers.get("Location", ""))
+
+        # API requests pass through to original handler
+        json_resp = client.get("/search?q=machine+learning&format=json")
+        self.assertEqual(json_resp.status_code, 200)
+        json_data = json_resp.get_json()
+        self.assertEqual(json_data["results"][0]["title"], "API result")
+
+        header_json_resp = client.get("/search?q=machine+learning", headers={"Accept": "application/json"})
+        self.assertEqual(header_json_resp.status_code, 200)
+
+    def test_settings_engines_api_get_and_post(self):
+        """Verify /api/settings/engines GET introspects engine data and POST persists cookie settings."""
+        import webui_next
+        from flask import Flask
+
+        app = Flask("test_settings_api")
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        # GET request returns schema with engines, categories, total_engines
+        get_resp = client.get("/api/settings/engines")
+        self.assertEqual(get_resp.status_code, 200)
+        get_data = get_resp.get_json()
+        self.assertIn("engines", get_data)
+        self.assertIn("categories", get_data)
+        self.assertIn("total_engines", get_data)
+
+        # POST request sets persistence cookies for enabled/disabled engines
+        post_resp = client.post(
+            "/api/settings/engines",
+            json={
+                "disabled_engines": ["duckduckgo", "google"],
+                "enabled_engines": ["brave"],
+            },
+        )
+        self.assertEqual(post_resp.status_code, 200)
+        post_data = post_resp.get_json()
+        self.assertTrue(post_data.get("success"))
+        self.assertEqual(post_data.get("disabled_engines_count"), 2)
+        self.assertEqual(post_data.get("enabled_engines_count"), 1)
+
+        set_cookies = post_resp.headers.getlist("Set-Cookie")
+        self.assertTrue(any("disabled_engines=" in c for c in set_cookies))
+        self.assertTrue(any("enabled_engines=" in c for c in set_cookies))
+
+    def test_classic_search_mode_and_pagination(self):
+        """Verify execute_server_deep_search supports mode=classic and pageno."""
+        import webui_next
+
+        captured_kwargs = {}
+
+        def mock_search_in_process(webapp_mod, query, **kwargs):
+            captured_kwargs.update(kwargs)
+            return {
+                "query": query,
+                "results": [
+                    {
+                        "title": "Classic Result",
+                        "url": "https://example.com/classic",
+                        "content": "A lightweight search card content.",
+                        "source": "google",
+                        "score": 1.5,
+                    }
+                ],
+                "answers": [],
+            }
+
+        with mock.patch.object(webui_next, "_search_in_process", side_effect=mock_search_in_process):
+            res = webui_next.execute_server_deep_search(
+                query="rust programming",
+                mode="classic",
+                categories="it",
+                pageno=3,
+            )
+            self.assertEqual(res["mode"], "classic")
+            self.assertEqual(res["page"], 3)
+            self.assertEqual(res["scraped_count"], 0)
+            self.assertEqual(captured_kwargs.get("pageno"), 3)
+            self.assertEqual(captured_kwargs.get("categories"), "it")
+            self.assertIn("Classic Search Results", res["markdown"])
+            self.assertIn("rust programming", res["markdown"])
+
+    def test_webapp_ai_webui_patch_is_critical_severity(self):
+        """Ensure webapp_ai_webui patch is marked CRITICAL to abort upstream sync if injection fails."""
+        ai_patch = next((p for p in apply_patches.PATCH_SPECS if p.name == "webapp_ai_webui"), None)
+        self.assertIsNotNone(ai_patch)
+        self.assertEqual(ai_patch.severity, apply_patches.PatchSeverity.CRITICAL)
+
 
 class TestPatchCache(unittest.TestCase):
     """Tests for patch caching and fast-path verification."""

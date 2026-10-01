@@ -285,6 +285,7 @@ def _search_in_process(
     categories: str = "",
     engines: str = "",
     time_range: str = "",
+    pageno: int = 1,
     base_url: str | None = None,
     timeout: float | None = None,
 ) -> dict[str, Any]:
@@ -302,6 +303,11 @@ def _search_in_process(
     except (ValueError, TypeError):
         count_int = 5
 
+    try:
+        page_int = max(1, min(int(pageno), 100))
+    except (ValueError, TypeError):
+        page_int = 1
+
     if webapp_mod is not None:
         try:
             sxng_req = getattr(webapp_mod, "sxng_request", None)
@@ -316,6 +322,8 @@ def _search_in_process(
                         fallback_form = {"q": clean_query}
                         if time_range.strip():
                             fallback_form["time_range"] = time_range.strip()
+                        if page_int > 1:
+                            fallback_form["pageno"] = str(page_int)
                         sq, _, _, _, _ = webapp_mod.get_search_query_from_webapp(prefs, fallback_form)
                     user_plugins = getattr(sxng_req, "user_plugins", [])
                     search_obj = webapp_mod.searx.search.SearchWithPlugins(sq, sxng_req, user_plugins)
@@ -330,6 +338,8 @@ def _search_in_process(
                     form["engines"] = engines.strip()
                 if time_range.strip():
                     form["time_range"] = time_range.strip()
+                if page_int > 1:
+                    form["pageno"] = str(page_int)
 
                 data = _run_form(form)
                 results = data.get("results", [])
@@ -339,6 +349,8 @@ def _search_in_process(
                     fallback_form = {"q": clean_query}
                     if time_range.strip():
                         fallback_form["time_range"] = time_range.strip()
+                    if page_int > 1:
+                        fallback_form["pageno"] = str(page_int)
                     data = _run_form(fallback_form)
                     results = data.get("results", [])
 
@@ -348,6 +360,7 @@ def _search_in_process(
                 return {
                     "query": clean_query,
                     "results": results,
+                    "page": page_int,
                     "answers": data.get("answers", []),
                     "infoboxes": data.get("infoboxes", []),
                     "suggestions": data.get("suggestions", []),
@@ -382,6 +395,7 @@ def execute_server_deep_search(
     mode: str = "auto",
     focus_query: str = "",
     max_scrape_length: int = 8000,
+    pageno: int = 1,
     base_url: str | None = None,
     timeout: float | None = None,
 ) -> dict[str, Any]:
@@ -392,6 +406,7 @@ def execute_server_deep_search(
 
     max_res = _parse_int(max_results, default=5, minimum=1, maximum=20)
     max_tok = _parse_int(max_tokens, default=3000, minimum=500, maximum=16000)
+    page_num = _parse_int(pageno, default=1, minimum=1, maximum=100)
 
     def _s_func(
         query: str,
@@ -409,6 +424,7 @@ def execute_server_deep_search(
             categories=categories,
             engines=engines,
             time_range=time_range,
+            pageno=page_num,
             base_url=base_url,
             timeout=timeout,
         )
@@ -425,7 +441,7 @@ def execute_server_deep_search(
             timeout=timeout,
         )
 
-    return agentic_search.execute_unified_search(
+    res = agentic_search.execute_unified_search(
         query=query,
         search_func=_s_func,
         scrape_func=_sc_func,
@@ -444,6 +460,8 @@ def execute_server_deep_search(
         base_url=base_url,
         timeout=timeout,
     )
+    res["page"] = page_num
+    return res
 
 
 def execute_server_retrieval_search(
@@ -614,6 +632,193 @@ def get_ai_info(webapp_mod: Any = None, host_url: str = "http://127.0.0.1:8888")
             "pwsh_deep": f'Invoke-RestMethod "{base}/deep_search?q=FastAPI+lifespan&depth=advanced&max_results=5"',
             "pwsh_retrieval": f'Invoke-RestMethod "{base}/api/retrieval?q=FastAPI+lifespan&mode=balanced&count=5"',
         },
+    }
+
+
+def get_engines_settings_data(
+    webapp_mod: Any = None,
+    request_cookies: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Extract full engines health, latency, reliability, and enablement settings."""
+    import time
+
+    disabled_set: set[str] = set()
+    enabled_set: set[str] = set()
+
+    # Read cookies if available
+    cookies = request_cookies or {}
+    cookie_disabled = str(cookies.get("disabled_engines", "")).strip()
+    if cookie_disabled:
+        disabled_set.update(c.strip() for c in cookie_disabled.split(",") if c.strip())
+    cookie_enabled = str(cookies.get("enabled_engines", "")).strip()
+    if cookie_enabled:
+        enabled_set.update(c.strip() for c in cookie_enabled.split(",") if c.strip())
+
+    if webapp_mod is not None:
+        with contextlib.suppress(Exception):
+            sxng_req = getattr(webapp_mod, "sxng_request", None)
+            prefs = getattr(sxng_req, "preferences", None) if sxng_req else None
+            if prefs and hasattr(prefs, "engines"):
+                with contextlib.suppress(Exception):
+                    disabled_set.update(prefs.engines.get_disabled())
+
+    now = time.time()
+    se = None
+    sp = None
+    reliabilities: dict[str, Any] = {}
+    histogram_func = None
+
+    if webapp_mod is not None:
+        searx_pkg = getattr(webapp_mod, "searx", None)
+        if searx_pkg:
+            se = getattr(searx_pkg, "engines", None)
+            search_mod = getattr(searx_pkg, "search", None)
+            sp = getattr(search_mod, "processors", None) if search_mod else None
+
+    if se is None:
+        with contextlib.suppress(Exception):
+            import searx.engines as se_mod
+
+            se = se_mod
+    if sp is None:
+        with contextlib.suppress(Exception):
+            import searx.search.processors as sp_mod
+
+            sp = sp_mod
+
+    with contextlib.suppress(Exception):
+        from searx.metrics import get_reliabilities, histogram
+
+        histogram_func = histogram
+        if se and hasattr(se, "engines"):
+            reliabilities = get_reliabilities(se.engines)
+
+    all_engines = getattr(se, "engines", {}) if se else {}
+    all_categories = getattr(se, "categories", {}) if se else {}
+    processors = getattr(sp, "PROCESSORS", {}) if sp else {}
+
+    engine_items: list[dict[str, Any]] = []
+    category_names = sorted(list(all_categories.keys())) if all_categories else []
+
+    total_latency = 0.0
+    latency_count = 0
+    total_reliability = 0.0
+    rel_count = 0
+    suspended_count = 0
+
+    for name, e in sorted(all_engines.items(), key=lambda kv: kv[0]):
+        cats = list(getattr(e, "categories", []))
+        def_disabled = bool(getattr(e, "disabled", False))
+
+        # Determine enabled state
+        if name in disabled_set:
+            is_enabled = False
+        elif name in enabled_set:
+            is_enabled = True
+        else:
+            is_enabled = not def_disabled
+
+        p = processors.get(name) if processors else None
+        suspend_sec = 0
+        if p and getattr(p, "suspend_end_time", None) and p.suspend_end_time > now:
+            suspend_sec = int(p.suspend_end_time - now)
+            suspended_count += 1
+
+        status = "suspended" if suspend_sec > 0 else ("online" if is_enabled else "disabled")
+
+        med_ms = None
+        if histogram_func:
+            with contextlib.suppress(Exception):
+                h = histogram_func("engine", name, "time", "total")
+                if h is not None and getattr(h, "count", 0) > 0 and hasattr(h, "percentage"):
+                    med_ms = round(h.percentage(50), 1)
+                    total_latency += med_ms
+                    latency_count += 1
+
+        rel_data = reliabilities.get(name, {}) if reliabilities else {}
+        rel_pct = rel_data.get("reliability")
+        if rel_pct is not None:
+            with contextlib.suppress(Exception):
+                rel_val = float(str(rel_pct))
+                total_reliability += rel_val
+                rel_count += 1
+
+        errors = rel_data.get("errors", [])
+
+        about_val = getattr(e, "about", "")
+        about_url = ""
+        if isinstance(about_val, dict):
+            about_url = str(about_val.get("website", ""))
+        elif isinstance(about_val, str):
+            about_url = about_val
+
+        engine_items.append(
+            {
+                "name": name,
+                "categories": cats,
+                "enabled": is_enabled,
+                "default_enabled": not def_disabled,
+                "status": status,
+                "suspend_remaining_sec": suspend_sec,
+                "reliability": rel_pct,
+                "latency_ms": med_ms,
+                "shortcut": getattr(e, "shortcut", "") or "",
+                "about": about_url,
+                "supports": {
+                    "safesearch": bool(getattr(e, "safesearch", False)),
+                    "time_range": bool(getattr(e, "time_range_support", False)),
+                },
+                "errors": errors if isinstance(errors, list) else [],
+            }
+        )
+
+    active_count = sum(1 for item in engine_items if item["enabled"])
+    avg_latency = round(total_latency / latency_count, 1) if latency_count > 0 else 0
+    avg_rel = round(total_reliability / rel_count, 1) if rel_count > 0 else 100.0
+
+    return {
+        "success": True,
+        "total_engines": len(engine_items),
+        "active_engines": active_count,
+        "suspended_engines": suspended_count,
+        "avg_latency_ms": avg_latency,
+        "avg_reliability": avg_rel,
+        "categories": category_names,
+        "engines": engine_items,
+    }
+
+
+def save_engines_settings_data(
+    webapp_mod: Any,
+    payload: dict[str, Any],
+    response: Any = None,
+) -> dict[str, Any]:
+    """Persist user engine toggles and general preferences to session cookies."""
+    disabled_engines = payload.get("disabled_engines")
+    enabled_engines = payload.get("enabled_engines")
+    cookie_max_age = 60 * 60 * 24 * 365 * 5  # 5 years
+
+    dis_str = ""
+    en_str = ""
+
+    if isinstance(disabled_engines, list):
+        clean_dis = [str(x).strip() for x in disabled_engines if str(x).strip()]
+        dis_str = ",".join(clean_dis)
+
+    if isinstance(enabled_engines, list):
+        clean_en = [str(x).strip() for x in enabled_engines if str(x).strip()]
+        en_str = ",".join(clean_en)
+
+    if response is not None and hasattr(response, "set_cookie"):
+        response.set_cookie("disabled_engines", dis_str, max_age=cookie_max_age, path="/")
+        response.set_cookie("enabled_engines", en_str, max_age=cookie_max_age, path="/")
+        if "safesearch" in payload:
+            response.set_cookie("safesearch", str(payload["safesearch"]), max_age=cookie_max_age, path="/")
+
+    return {
+        "success": True,
+        "disabled_engines_count": len(disabled_engines) if isinstance(disabled_engines, list) else 0,
+        "enabled_engines_count": len(enabled_engines) if isinstance(enabled_engines, list) else 0,
     }
 
 
@@ -1190,6 +1395,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       --amber: #f59e0b;
       --amber-soft: rgba(245, 158, 11, 0.14);
       --danger: #ef4444;
+      --danger-soft: rgba(239, 68, 68, 0.14);
       --shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
     }
     [data-theme="light"] {
@@ -1210,6 +1416,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       --amber: #d97706;
       --amber-soft: rgba(217, 119, 6, 0.10);
       --danger: #dc2626;
+      --danger-soft: rgba(220, 38, 38, 0.10);
       --shadow: 0 6px 20px rgba(15, 23, 42, 0.06);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1251,6 +1458,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       display: flex;
       align-items: center;
       gap: 0.45rem;
+      text-decoration: none !important;
     }
     .brand-badge {
       font-size: 0.72rem;
@@ -1284,6 +1492,9 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       border: 1px solid transparent;
       cursor: pointer;
       transition: all 0.14s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
     }
     .nav-tab:hover {
       color: var(--text-main);
@@ -1384,6 +1595,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
     .btn:focus-visible,
     .nav-tab:focus-visible,
     .chip:focus-visible,
+    .cat-btn:focus-visible,
     .ctx-tab:focus-visible,
     .brand-logo:focus-visible {
       outline: 2px solid var(--accent);
@@ -1435,18 +1647,26 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       gap: 0.35rem;
       margin-left: auto;
     }
-    .chip {
-      padding: 0.18rem 0.55rem;
+    .chip, .cat-btn {
+      padding: 0.2rem 0.6rem;
       border-radius: 999px;
-      font-size: 0.73rem;
+      font-size: 0.75rem;
+      font-weight: 500;
       border: 1px solid var(--border-color);
       background: var(--bg-elevated);
       color: var(--text-secondary);
       cursor: pointer;
+      transition: all 0.12s ease;
     }
-    .chip:hover {
+    .chip:hover, .cat-btn:hover {
       border-color: var(--accent);
       color: var(--text-main);
+    }
+    .cat-btn.active {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent-hover);
+      font-weight: 700;
     }
     /* Telemetry Ribbon */
     .telemetry-bar {
@@ -1494,7 +1714,17 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       color: var(--emerald);
       border-color: var(--emerald);
     }
-    /* Split Grid Layout */
+    .pill-amber {
+      background: var(--amber-soft);
+      color: var(--amber);
+      border-color: var(--amber);
+    }
+    .pill-danger {
+      background: var(--danger-soft);
+      color: var(--danger);
+      border-color: var(--danger);
+    }
+    /* Split Grid Layout (AI Deep Search) */
     .split-grid {
       display: grid;
       grid-template-columns: 1.25fr 0.95fr;
@@ -1548,149 +1778,147 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       transition: border-color 0.15s ease;
     }
     .result-card:hover {
-      border-color: var(--accent);
+      border-color: var(--border-hover);
     }
     .card-top {
       display: flex;
-      flex-wrap: wrap;
-      align-items: center;
       justify-content: space-between;
-      gap: 0.4rem;
-      margin-bottom: 0.35rem;
-    }
-    .card-rank {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 0.75rem;
-      font-weight: 700;
-      padding: 0.12rem 0.45rem;
-      border-radius: 0.35rem;
-      background: var(--accent-soft);
-      color: var(--accent-hover);
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.4rem;
+      font-size: 0.76rem;
     }
     .card-domain {
-      font-size: 0.76rem;
-      color: var(--text-secondary);
+      color: var(--text-muted);
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .card-rank {
+      color: var(--accent-hover);
+      font-weight: 700;
     }
     .card-badges {
       display: flex;
-      flex-wrap: wrap;
+      align-items: center;
       gap: 0.35rem;
     }
     .card-title {
-      font-size: 1.02rem;
+      font-size: 1.05rem;
       font-weight: 700;
-      margin-bottom: 0.45rem;
       line-height: 1.35;
+      margin-bottom: 0.45rem;
     }
-    .highlight-block {
-      margin: 0.45rem 0;
-      padding: 0.55rem 0.75rem;
-      border-left: 3px solid var(--accent);
-      background: var(--bg-elevated);
-      border-radius: 0 0.45rem 0.45rem 0;
+    .card-snippet {
       font-size: 0.85rem;
-      color: var(--text-main);
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    .highlight-code {
-      margin: 0.45rem 0;
-      padding: 0.65rem 0.8rem;
-      background: #090d16;
-      color: #e2e8f0;
-      border: 1px solid var(--border-color);
-      border-radius: 0.45rem;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 0.79rem;
-      overflow-x: auto;
-      white-space: pre;
+      color: var(--text-secondary);
+      line-height: 1.5;
+      margin-bottom: 0.6rem;
     }
     .card-actions {
       display: flex;
       flex-wrap: wrap;
-      align-items: center;
-      gap: 0.45rem;
-      margin-top: 0.65rem;
-      padding-top: 0.55rem;
-      border-top: 1px solid var(--border-color);
+      gap: 0.4rem;
+      margin-top: 0.5rem;
+      padding-top: 0.5rem;
+      border-top: 1px dashed var(--border-color);
+    }
+    .highlight-block {
+      background: var(--bg-elevated);
+      border-left: 3px solid var(--accent);
+      padding: 0.5rem 0.75rem;
+      border-radius: 0.35rem;
+      font-size: 0.82rem;
+      color: var(--text-main);
+      margin-bottom: 0.45rem;
+      white-space: pre-wrap;
+    }
+    .highlight-code {
+      background: var(--bg-input);
+      border: 1px solid var(--border-color);
+      padding: 0.6rem 0.75rem;
+      border-radius: 0.45rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+      overflow-x: auto;
+      margin-bottom: 0.45rem;
     }
     .inline-scrape-drawer {
       margin-top: 0.65rem;
-      padding: 0.7rem;
+      padding: 0.8rem;
       border-radius: 0.5rem;
       background: var(--bg-input);
       border: 1px solid var(--border-color);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 0.78rem;
-      max-height: 18rem;
-      overflow: auto;
+      font-size: 0.8rem;
+      max-height: 22rem;
+      overflow-y: auto;
       white-space: pre-wrap;
       word-break: break-word;
     }
-    /* Right Column: AI Context Studio */
+    /* Context Panel (AI Studio Right) */
     .context-panel {
       background: var(--bg-surface);
       border: 1px solid var(--border-color);
-      border-radius: 0.75rem;
-      padding: 0.95rem 1.05rem;
+      border-radius: 0.85rem;
+      padding: 1rem 1.1rem;
+      box-shadow: var(--shadow);
       position: sticky;
-      top: 4.5rem;
+      top: 4.8rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      max-height: calc(100vh - 6rem);
     }
     .context-header {
       display: flex;
-      flex-wrap: wrap;
-      align-items: center;
       justify-content: space-between;
+      align-items: center;
       gap: 0.5rem;
-      margin-bottom: 0.65rem;
     }
     .context-tabs {
       display: flex;
-      flex-wrap: wrap;
       gap: 0.3rem;
-      margin-bottom: 0.65rem;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 0.4rem;
     }
     .ctx-tab {
-      padding: 0.28rem 0.65rem;
+      padding: 0.25rem 0.6rem;
       font-size: 0.76rem;
       font-weight: 600;
-      border-radius: 0.4rem;
-      border: 1px solid var(--border-color);
-      background: var(--bg-elevated);
+      background: transparent;
       color: var(--text-secondary);
+      border: none;
       cursor: pointer;
+      border-radius: 0.35rem;
     }
     .ctx-tab.active {
-      background: var(--accent-soft);
       color: var(--accent-hover);
-      border-color: var(--accent);
+      background: var(--accent-soft);
     }
     .context-textarea {
       width: 100%;
-      height: 28rem;
-      padding: 0.75rem;
-      border-radius: 0.5rem;
-      border: 1px solid var(--border-color);
+      height: 24rem;
       background: var(--bg-input);
       color: var(--text-main);
+      border: 1px solid var(--border-color);
+      border-radius: 0.5rem;
+      padding: 0.75rem;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 0.79rem;
+      font-size: 0.78rem;
       line-height: 1.5;
       resize: vertical;
       outline: none;
     }
     .token-progress-wrap {
-      margin-top: 0.55rem;
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.6rem;
+      flex-direction: column;
+      gap: 0.3rem;
       font-size: 0.75rem;
       color: var(--text-secondary);
     }
     .token-bar-bg {
-      flex: 1;
+      width: 100%;
       height: 6px;
       border-radius: 999px;
       background: var(--bg-elevated);
@@ -1702,6 +1930,280 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       width: 0%;
       transition: width 0.2s ease;
     }
+
+    /* Classic Search Mode View (Centered Single Column) */
+    .classic-view-wrap {
+      max-width: 900px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    .classic-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 0.75rem;
+      padding: 1.05rem 1.25rem;
+      margin-bottom: 0.85rem;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .classic-card:hover {
+      border-color: var(--border-hover);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    }
+    .classic-meta-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.6rem;
+      margin-bottom: 0.35rem;
+      font-size: 0.78rem;
+    }
+    .classic-url-tag {
+      color: var(--text-muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      word-break: break-all;
+    }
+    .classic-title-link {
+      font-size: 1.15rem;
+      font-weight: 700;
+      line-height: 1.35;
+      margin-bottom: 0.45rem;
+      display: inline-block;
+    }
+    .classic-snippet-text {
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+      line-height: 1.55;
+      margin-bottom: 0.65rem;
+    }
+    .classic-actions-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem;
+      padding-top: 0.5rem;
+      border-top: 1px dashed var(--border-color);
+    }
+    .classic-pagination-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      margin-top: 1.5rem;
+      padding: 1rem 0;
+    }
+    .classic-answer-box {
+      background: var(--bg-elevated);
+      border-left: 4px solid var(--accent);
+      border-radius: 0.6rem;
+      padding: 0.9rem 1.1rem;
+      margin-bottom: 1rem;
+      font-size: 0.92rem;
+    }
+
+    /* Settings Dashboard View */
+    .settings-view-wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    .stats-overview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0.85rem;
+      margin-bottom: 1.25rem;
+    }
+    .stat-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 0.75rem;
+      padding: 0.9rem 1.1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .stat-card-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .stat-card-value {
+      font-size: 1.45rem;
+      font-weight: 800;
+      color: var(--text-main);
+    }
+    .settings-subtabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 0.5rem;
+    }
+    .settings-subtab {
+      padding: 0.45rem 1rem;
+      border-radius: 0.5rem;
+      font-size: 0.84rem;
+      font-weight: 600;
+      background: transparent;
+      color: var(--text-secondary);
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+    .settings-subtab.active {
+      color: var(--accent-hover);
+      background: var(--accent-soft);
+      border-color: var(--accent);
+    }
+    .engine-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 0.75rem;
+      padding: 0.75rem 1rem;
+    }
+    .engine-search-wrap {
+      flex: 1;
+      min-width: 14rem;
+    }
+    .engine-search-input {
+      width: 100%;
+      padding: 0.45rem 0.85rem;
+      border-radius: 0.45rem;
+      border: 1px solid var(--border-color);
+      background: var(--bg-input);
+      color: var(--text-main);
+      font-size: 0.82rem;
+      outline: none;
+    }
+    .engine-bulk-actions {
+      display: flex;
+      gap: 0.4rem;
+    }
+    .engines-category-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-bottom: 1rem;
+    }
+    .engines-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+      gap: 0.85rem;
+    }
+    .engine-item-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 0.65rem;
+      padding: 0.85rem 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      transition: border-color 0.15s ease;
+    }
+    .engine-item-card:hover {
+      border-color: var(--border-hover);
+    }
+    .engine-item-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .engine-item-title {
+      font-weight: 700;
+      font-size: 0.92rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .engine-item-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      font-size: 0.74rem;
+    }
+    /* Toggle Switch */
+    .switch-label {
+      position: relative;
+      display: inline-block;
+      width: 40px;
+      height: 22px;
+      flex-shrink: 0;
+    }
+    .switch-label input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .switch-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: var(--bg-elevated);
+      border: 1px solid var(--border-color);
+      transition: .2s;
+      border-radius: 22px;
+    }
+    .switch-slider:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 2px;
+      bottom: 2px;
+      background-color: var(--text-muted);
+      transition: .2s;
+      border-radius: 50%;
+    }
+    input:checked + .switch-slider {
+      background-color: var(--accent);
+      border-color: var(--accent);
+    }
+    input:checked + .switch-slider:before {
+      transform: translateX(18px);
+      background-color: #ffffff;
+    }
+    /* General Settings Form */
+    .general-settings-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 0.75rem;
+      padding: 1.25rem 1.4rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.2rem;
+    }
+    .settings-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .settings-row:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    .settings-label-wrap h4 {
+      font-size: 0.92rem;
+      margin-bottom: 0.2rem;
+    }
+    .settings-label-wrap p {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+    }
+
     /* Agent Hub Grid */
     .hub-grid {
       display: grid;
@@ -1757,6 +2259,29 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       gap: 0.45rem;
       margin-top: 1rem;
     }
+    /* Toast Notification */
+    .toast-notice {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      padding: 0.75rem 1.25rem;
+      border-radius: 0.5rem;
+      background: var(--accent);
+      color: #ffffff;
+      font-size: 0.85rem;
+      font-weight: 600;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      z-index: 1000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease, transform 0.25s ease;
+      transform: translateY(10px);
+    }
+    .toast-notice.show {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
     footer.ws-footer {
       text-align: center;
       padding: 1rem;
@@ -1770,27 +2295,27 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 <body>
   <header class="topbar">
     <div class="brand-group">
-      <a href="/ai" class="brand-logo" style="text-decoration:none;">
+      <a href="/" class="brand-logo" title="SearXNG Next Studio">
         <span>⚡ SearXNG Next</span>
       </a>
-      <span class="brand-badge">AI-First Studio</span>
+      <span class="brand-badge">AI-First Edition</span>
       <span class="status-dot" id="health-dot" role="img" aria-label="Checking server status" title="Checking server status"></span>
     </div>
 
     <nav class="nav-tabs" role="tablist" aria-label="Workspace Modes">
-      <button type="button" class="nav-tab active" role="tab" aria-selected="true" aria-controls="main-split-view" data-mode="deep" id="tab-deep">⚡ Unified Search &amp; Scrape</button>
+      <button type="button" class="nav-tab active" role="tab" aria-selected="true" aria-controls="main-split-view" data-mode="deep" id="tab-deep">⚡ AI Deep Search</button>
+      <button type="button" class="nav-tab" role="tab" aria-selected="false" aria-controls="classic-search-view" data-mode="classic" id="tab-classic">🔍 Classic 検索</button>
       <button type="button" class="nav-tab" role="tab" aria-selected="false" aria-controls="agent-hub-view" data-mode="agent" id="tab-agent">🤖 Agent &amp; MCP Hub</button>
+      <button type="button" class="nav-tab" role="tab" aria-selected="false" aria-controls="settings-view" data-mode="settings" id="tab-settings">⚙️ 設定</button>
     </nav>
 
     <div class="header-actions">
       <button type="button" class="btn btn-sm" id="theme-toggle-btn" title="テーマ切替 (Dark / Light)">🌗 テーマ</button>
-      <a href="/" class="btn btn-sm" id="classic-ui-link" title="標準のSearXNG検索画面へ">🔍 Classic UI</a>
-      <a href="/preferences" class="btn btn-sm" title="エンジン・表示設定">⚙️ 設定</a>
     </div>
   </header>
 
   <main class="workspace">
-    <!-- Search & Scrape Input Panel -->
+    <!-- Common Search & Scrape Input Panel -->
     <section class="search-panel" id="input-panel">
       <form id="ws-form" role="search">
         <div class="search-bar-row">
@@ -1812,10 +2337,10 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           </button>
         </div>
 
-        <!-- Unified Search Options (Deep / Basic / Fast json_lite) -->
+        <!-- AI Deep Search Options -->
         <div class="options-row" id="search-options-row">
           <div class="opt-group" id="opt-depth-group">
-            <label for="opt-depth">Mode / Depth:</label>
+            <label for="opt-depth">Depth:</label>
             <select id="opt-depth" class="opt-select">
               <option value="advanced" selected>⚡ Deep: Advanced (並列本文抽出 + BM25)</option>
               <option value="code">💻 Deep: Code &amp; Docs (技術・GitHub優先)</option>
@@ -1858,6 +2383,43 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           </div>
         </div>
 
+        <!-- Classic Search Options (Category pills & Time range) -->
+        <div class="options-row" id="classic-options-row" style="display:none;">
+          <div class="opt-group" style="flex: 1; flex-wrap: wrap;">
+            <span style="font-weight:600;font-size:0.78rem;color:var(--text-muted);margin-right:0.2rem;">カテゴリー:</span>
+            <div class="preset-chips" id="classic-cat-chips" style="margin-left:0;">
+              <button type="button" class="cat-btn active" data-cat="">🌐 全般</button>
+              <button type="button" class="cat-btn" data-cat="it">💻 IT・技術</button>
+              <button type="button" class="cat-btn" data-cat="news">📰 ニュース</button>
+              <button type="button" class="cat-btn" data-cat="science">🔬 科学</button>
+              <button type="button" class="cat-btn" data-cat="files">📁 ファイル</button>
+              <button type="button" class="cat-btn" data-cat="social media">💬 ソーシャル</button>
+              <button type="button" class="cat-btn" data-cat="images">🖼️ 画像</button>
+              <button type="button" class="cat-btn" data-cat="videos">🎬 動画</button>
+            </div>
+          </div>
+
+          <div class="opt-group">
+            <label for="classic-time-range">期間:</label>
+            <select id="classic-time-range" class="opt-select">
+              <option value="" selected>指定なし</option>
+              <option value="day">24時間以内</option>
+              <option value="week">1週間以内</option>
+              <option value="month">1ヶ月以内</option>
+              <option value="year">1年以内</option>
+            </select>
+          </div>
+
+          <div class="opt-group">
+            <label for="classic-count">件数:</label>
+            <select id="classic-count" class="opt-select">
+              <option value="10" selected>10件</option>
+              <option value="20">20件</option>
+              <option value="30">30件</option>
+            </select>
+          </div>
+        </div>
+
         <!-- Scrape Mode Options (Auto-shown when URL is entered) -->
         <div class="options-row" id="scrape-options-row" style="display:none;">
           <div class="opt-group">
@@ -1889,12 +2451,12 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       </div>
     </section>
 
-    <!-- Main Search / Scrape Split View -->
+    <!-- View 1: AI Deep Search (Split Grid View) -->
     <section class="split-grid" id="main-split-view" role="tabpanel" aria-labelledby="tab-deep">
       <div class="results-list" id="results-container" aria-live="polite" aria-busy="false">
         <div class="empty-state" id="initial-empty-state">
-          <h2>⚡ AI-First Unified Search &amp; Context Extraction</h2>
-          <p>検索キーワードを入力すると Deep Search / Fast (json_lite) を実行し、URL (https://...) を貼り付けると自動で本文抽出 + BM25 ハイライト抽出に切り替わります。</p>
+          <h2>⚡ AI-First Unified Search &amp; Context Studio</h2>
+          <p>検索キーワードを入力すると Deep Search (並列本文抽出 + BM25パッセージ抽出) を実行し、URL を貼り付けると自動で単一ページ本文抽出に切り替わります。</p>
           <div class="sample-queries">
             <button type="button" class="chip sample-q" data-q="FastAPI lifespan context manager syntax">🔎 FastAPI lifespan context manager</button>
             <button type="button" class="chip sample-q" data-q="Python asyncio TaskGroup exception handling">🔎 Python asyncio.TaskGroup</button>
@@ -1925,17 +2487,155 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       </aside>
     </section>
 
-    <!-- Agent & MCP Hub View -->
+    <!-- View 2: Classic Lightweight Search View (Single Column) -->
+    <section id="classic-search-view" class="classic-view-wrap" role="tabpanel" aria-labelledby="tab-classic" style="display:none;">
+      <div id="classic-telemetry-pill" style="margin-bottom:0.75rem;font-size:0.8rem;color:var(--text-muted);display:none;"></div>
+      <div id="classic-answers-container"></div>
+      <div id="classic-results-container" class="results-list" aria-live="polite" aria-busy="false">
+        <div class="empty-state">
+          <h2>🔍 Classic 軽量メタ検索モード</h2>
+          <p>余分なAIパッキングを省き、複数の検索エンジンからスニペットを高速取得して一覧表示します。上部のカテゴリータブで絞り込みも可能です。</p>
+          <div class="sample-queries">
+            <button type="button" class="chip sample-classic-q" data-q="SearXNG Windows next release">🔎 SearXNG Windows next release</button>
+            <button type="button" class="chip sample-classic-q" data-q="uv python package manager">🔎 uv python package manager</button>
+          </div>
+        </div>
+      </div>
+      <div id="classic-pagination-bar" class="classic-pagination-row" style="display:none;">
+        <button type="button" class="btn btn-sm" id="classic-prev-btn">← 前のページ</button>
+        <span id="classic-page-indicator" class="pill">ページ 1</span>
+        <button type="button" class="btn btn-sm" id="classic-next-btn">次のページ →</button>
+      </div>
+    </section>
+
+    <!-- View 3: Agent & MCP Hub View -->
     <section id="agent-hub-view" role="tabpanel" aria-labelledby="tab-agent" style="display:none;">
       <div class="hub-grid" id="hub-cards-container" aria-live="polite"></div>
     </section>
+
+    <!-- View 4: Settings Dashboard View -->
+    <section id="settings-view" class="settings-view-wrap" role="tabpanel" aria-labelledby="tab-settings" style="display:none;">
+      <!-- Stats Overview Cards -->
+      <div class="stats-overview-grid" id="settings-stats-grid">
+        <div class="stat-card">
+          <span class="stat-card-label">稼働中エンジン</span>
+          <span class="stat-card-value" id="stat-active-engines">-- / --</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-card-label">一時停止 / レート制限中</span>
+          <span class="stat-card-value" id="stat-suspended-engines" style="color:var(--amber);">0</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-card-label">平均応答時間</span>
+          <span class="stat-card-value" id="stat-avg-latency">-- ms</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-card-label">全体信頼性スコア</span>
+          <span class="stat-card-value" id="stat-avg-reliability" style="color:var(--emerald);">--%</span>
+        </div>
+      </div>
+
+      <!-- Settings Subtabs -->
+      <div class="settings-subtabs" role="tablist">
+        <button type="button" class="settings-subtab active" data-subtab="engines" id="subtab-engines-btn">🔌 検索エンジン管理</button>
+        <button type="button" class="settings-subtab" data-subtab="general" id="subtab-general-btn">⚙️ 一般設定</button>
+      </div>
+
+      <!-- Section: Search Engines -->
+      <div id="section-settings-engines">
+        <div class="engine-toolbar">
+          <div class="engine-search-wrap">
+            <input type="text" id="engine-search-input" class="engine-search-input" placeholder="エンジン名やカテゴリーで絞り込み...">
+          </div>
+          <div class="engine-bulk-actions">
+            <button type="button" class="btn btn-sm" id="btn-enable-all-cat">カテゴリー内を全有効化</button>
+            <button type="button" class="btn btn-sm" id="btn-disable-all-cat">カテゴリー内を全無効化</button>
+            <button type="button" class="btn btn-sm" id="btn-reset-engines-def">デフォルトに戻す</button>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-save-settings-engines">💾 変更を保存</button>
+          </div>
+        </div>
+
+        <div class="engines-category-chips" id="settings-engine-cat-chips"></div>
+        <div class="engines-grid" id="settings-engines-grid"></div>
+      </div>
+
+      <!-- Section: General Preferences -->
+      <div id="section-settings-general" style="display:none;">
+        <div class="general-settings-card">
+          <div class="settings-row">
+            <div class="settings-label-wrap">
+              <h4>デフォルト検索モード</h4>
+              <p>検索トップ画面にアクセスした際、または外部から検索時の初期モード</p>
+            </div>
+            <div>
+              <select id="pref-default-mode" class="opt-select" style="min-width:14rem;">
+                <option value="deep" selected>⚡ AI Deep Search (並列抽出 + BM25)</option>
+                <option value="classic">🔍 Classic 検索 (軽量メタ検索)</option>
+                <option value="balanced">🧠 Retrieval (Balanced グラウンディング)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-label-wrap">
+              <h4>セーフサーチ (SafeSearch)</h4>
+              <p>成人向けコンテンツのフィルタリング設定</p>
+            </div>
+            <div>
+              <select id="pref-safesearch" class="opt-select" style="min-width:14rem;">
+                <option value="0">無効 (Off)</option>
+                <option value="1" selected>標準 (Moderate)</option>
+                <option value="2">厳格 (Strict)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-label-wrap">
+              <h4>デフォルト取得件数</h4>
+              <p>検索時に各エンジンから集約・選抜する結果件数の標準値</p>
+            </div>
+            <div>
+              <select id="pref-default-count" class="opt-select" style="min-width:14rem;">
+                <option value="5">5件</option>
+                <option value="10" selected>10件</option>
+                <option value="15">15件</option>
+                <option value="20">20件</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-label-wrap">
+              <h4>トークン予算上限</h4>
+              <p>AI Deep Search時にLLMへ渡すMarkdownコンテキストの上限</p>
+            </div>
+            <div>
+              <select id="pref-default-tokens" class="opt-select" style="min-width:14rem;">
+                <option value="1500">1,500 tok</option>
+                <option value="3000" selected>3,000 tok</option>
+                <option value="6000">6,000 tok</option>
+                <option value="10000">10,000 tok</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;gap:0.6rem;margin-top:0.5rem;">
+            <button type="button" class="btn" id="btn-reset-general-prefs">初期値に戻す</button>
+            <button type="button" class="btn btn-primary" id="btn-save-general-prefs">💾 一般設定を保存</button>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
+  <div id="toast-notice" class="toast-notice" role="status" aria-live="polite"></div>
+
   <footer class="ws-footer">
-    SearXNG for Windows Next — AI-First Lightweight WebUI ·
-    <a href="/">Classic Search</a> ·
+    SearXNG for Windows Next — AI-First Dedicated Studio ·
     <a href="/healthz">Health (/healthz)</a> ·
-    <a href="/api/ai_info">AI Info (/api/ai_info)</a>
+    <a href="/api/ai_info">AI Info (/api/ai_info)</a> ·
+    <a href="/api/settings/engines">Engines API</a>
   </footer>
 
   <script>
@@ -1950,7 +2650,16 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         prompt: '',
         jsonStr: '',
         curlStr: '',
-        maxTokens: 3000
+        maxTokens: 3000,
+        classicCategory: '',
+        classicTimeRange: '',
+        classicPage: 1,
+        classicCount: 10,
+        settingsEngines: [],
+        settingsCategories: [],
+        settingsCurrentCat: '',
+        settingsSearch: '',
+        togglesModified: false
       };
 
       function escapeHtml(str) {
@@ -1976,7 +2685,17 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
       function escapeShellDoubleQuoted(str) {
         return String(str == null ? '' : str)
-          .replace(/[\\\\$"\\`!]/g, function (ch) { return '\\\\' + ch; });
+          .replace(/[\\$"\\`!]/g, function (ch) { return '\\' + ch; });
+      }
+
+      function showToast(msg) {
+        var toast = document.getElementById('toast-notice');
+        if (!toast) return;
+        toast.textContent = msg;
+        toast.classList.add('show');
+        setTimeout(function () {
+          toast.classList.remove('show');
+        }, 2200);
       }
 
       // Theme initialization
@@ -1988,7 +2707,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         localStorage.setItem('sxng_ai_theme', cur);
       });
 
-      // Server status indicator: verify /healthz instead of assuming "online".
+      // Server status indicator: verify /healthz
       (function checkServerHealth() {
         var dot = document.getElementById('health-dot');
         if (!dot) return;
@@ -2008,12 +2727,12 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
       function isUrlText(text) {
         var s = (text || '').trim();
-        return /^https?:\\/\\/\\S+$/i.test(s);
+        return /^https?:\/\/\S+$/i.test(s);
       }
 
       function estimateTokens(text) {
         if (!text) return 0;
-        var cjk = (text.match(/[\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff]/g) || []).length;
+        var cjk = (text.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/g) || []).length;
         var other = text.length - cjk;
         return Math.round(cjk / 1.5 + other / 4.0);
       }
@@ -2039,19 +2758,27 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       }
 
       function syncInputOptionsVisibility() {
-        if (state.mode === 'agent') return;
+        if (state.mode === 'agent' || state.mode === 'settings') return;
         var qVal = document.getElementById('q').value.trim();
         var searchOpts = document.getElementById('search-options-row');
+        var classicOpts = document.getElementById('classic-options-row');
         var scrapeOpts = document.getElementById('scrape-options-row');
         var runBtn = document.getElementById('run-btn');
-        var isUrl = (state.mode === 'scrape') || isUrlText(qVal);
+        var isUrl = isUrlText(qVal);
 
         if (isUrl) {
           searchOpts.style.display = 'none';
+          classicOpts.style.display = 'none';
           scrapeOpts.style.display = 'flex';
           runBtn.innerHTML = '📄 URL 本文抽出';
+        } else if (state.mode === 'classic') {
+          searchOpts.style.display = 'none';
+          classicOpts.style.display = 'flex';
+          scrapeOpts.style.display = 'none';
+          runBtn.innerHTML = '🔍 検索';
         } else {
           searchOpts.style.display = 'flex';
+          classicOpts.style.display = 'none';
           scrapeOpts.style.display = 'none';
           var depthVal = document.getElementById('opt-depth').value;
           runBtn.innerHTML = depthVal === 'fast' ? '🚀 Fast Search' : '⚡ 統合検索';
@@ -2059,40 +2786,35 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       }
 
       function setMode(mode) {
-        if (mode === 'fast') {
-          document.getElementById('opt-depth').value = 'fast';
-          mode = 'deep';
-        }
         state.mode = mode;
         document.querySelectorAll('.nav-tab').forEach(function (t) {
-          var activeTab = (mode === 'agent') ? 'agent' : 'deep';
-          var isSelected = (t.dataset.mode === activeTab);
+          var isSelected = (t.dataset.mode === mode);
           t.classList.toggle('active', isSelected);
           t.setAttribute('aria-selected', isSelected ? 'true' : 'false');
         });
 
         var inputPanel = document.getElementById('input-panel');
         var mainSplit = document.getElementById('main-split-view');
+        var classicView = document.getElementById('classic-search-view');
         var agentHub = document.getElementById('agent-hub-view');
+        var settingsView = document.getElementById('settings-view');
+
+        inputPanel.style.display = (mode === 'agent' || mode === 'settings') ? 'none' : 'block';
+        mainSplit.style.display = (mode === 'deep') ? 'grid' : 'none';
+        classicView.style.display = (mode === 'classic') ? 'block' : 'none';
+        agentHub.style.display = (mode === 'agent') ? 'block' : 'none';
+        settingsView.style.display = (mode === 'settings') ? 'block' : 'none';
 
         if (mode === 'agent') {
-          inputPanel.style.display = 'none';
-          mainSplit.style.display = 'none';
-          agentHub.style.display = 'block';
           loadAgentHub();
-          return;
+        } else if (mode === 'settings') {
+          loadSettingsDashboard();
+        } else {
+          syncInputOptionsVisibility();
         }
-
-        inputPanel.style.display = 'block';
-        mainSplit.style.display = 'grid';
-        agentHub.style.display = 'none';
-        syncInputOptionsVisibility();
       }
 
       document.getElementById('q').addEventListener('input', function () {
-        if (state.mode === 'scrape' && !isUrlText(this.value)) {
-          state.mode = 'deep';
-        }
         syncInputOptionsVisibility();
       });
 
@@ -2115,6 +2837,18 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         });
       });
 
+      // Classic Category buttons
+      document.querySelectorAll('#classic-cat-chips .cat-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          document.querySelectorAll('#classic-cat-chips .cat-btn').forEach(function (b) { b.classList.remove('active'); });
+          btn.classList.add('active');
+          state.classicCategory = btn.dataset.cat || '';
+          state.classicPage = 1;
+          var qVal = document.getElementById('q').value.trim();
+          if (qVal) runClassicSearch(qVal, 1);
+        });
+      });
+
       document.querySelectorAll('.chip[data-preset]').forEach(function (chip) {
         chip.addEventListener('click', function () {
           var p = chip.dataset.preset;
@@ -2129,7 +2863,15 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       document.querySelectorAll('.sample-q').forEach(function (chip) {
         chip.addEventListener('click', function () {
           document.getElementById('q').value = chip.dataset.q;
-          syncInputOptionsVisibility();
+          setMode('deep');
+          executeCurrentAction();
+        });
+      });
+
+      document.querySelectorAll('.sample-classic-q').forEach(function (chip) {
+        chip.addEventListener('click', function () {
+          document.getElementById('q').value = chip.dataset.q;
+          setMode('classic');
           executeCurrentAction();
         });
       });
@@ -2205,7 +2947,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           if (h.indexOf('```') === 0) {
             var pre = document.createElement('pre');
             pre.className = 'highlight-code';
-            pre.textContent = h.replace(/^```[a-zA-Z0-9_-]*\\n?/, '').replace(/```$/, '');
+            pre.textContent = h.replace(/^```[a-zA-Z0-9_-]*\n?/, '').replace(/```$/, '');
             container.appendChild(pre);
           } else {
             var div = document.createElement('div');
@@ -2247,7 +2989,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           var domSpan = document.createElement('span');
           domSpan.className = 'card-domain';
           var domain = item.domain || (function () {
-            try { return new URL(item.url).hostname.replace(/^www\\./, ''); } catch (e) { return ''; }
+            try { return new URL(item.url).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
           })();
           domSpan.textContent = domain;
 
@@ -2268,10 +3010,10 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
             scPill.className = 'pill pill-emerald';
             scPill.textContent = '✅ 本文抽出・BM25済';
             badges.appendChild(scPill);
-          } else if (item.source) {
+          } else if (item.source || item.engine) {
             var srcPill = document.createElement('span');
             srcPill.className = 'pill';
-            srcPill.textContent = item.source;
+            srcPill.textContent = item.source || item.engine;
             badges.appendChild(srcPill);
           }
 
@@ -2333,10 +3075,13 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           copyItemBtn.className = 'btn btn-sm';
           copyItemBtn.innerHTML = '📋 この結果を引用コピー';
           copyItemBtn.addEventListener('click', function () {
-            var hText = (item.highlights && item.highlights.length) ? item.highlights.join('\\n\\n') : (item.content || '');
-            var citeMd = '### [' + (idx + 1) + '] [' + (item.title || item.url) + '](' + item.url + ')\\n> ' + hText.replace(/\\n/g, '\\n> ');
+            var hText = (item.highlights && item.highlights.length) ? item.highlights.join('\n\n') : (item.content || '');
+            var citeMd = '### [' + (idx + 1) + '] [' + (item.title || item.url) + '](' + item.url + ')\n> ' + hText.replace(/\n/g, '\n> ');
             copyWithFeedback(citeMd, copyItemBtn, '✅ コピー完了');
           });
+
+          actions.appendChild(scrapeBtn);
+          actions.appendChild(copyItemBtn);
 
           if (domain) {
             var filterDomBtn = document.createElement('button');
@@ -2351,8 +3096,6 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
             actions.appendChild(filterDomBtn);
           }
 
-          actions.insertBefore(copyItemBtn, actions.firstChild);
-          actions.insertBefore(scrapeBtn, actions.firstChild);
           card.appendChild(actions);
           container.appendChild(card);
         });
@@ -2414,6 +3157,193 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           });
       }
 
+      /* -------------------------------------------------------------
+       * Classic Search Mode Implementation
+       * ------------------------------------------------------------- */
+      function renderClassicSearchResults(items, query, page) {
+        var container = document.getElementById('classic-results-container');
+        container.innerHTML = '';
+
+        if (!items || !items.length) {
+          container.innerHTML = '<div class="empty-state"><h2>検索結果が見つかりませんでした</h2><p>キーワードを変更するか、上部のカテゴリーフィルター（全般、IT、ニュース等）を切り替えてみてください。</p></div>';
+          document.getElementById('classic-pagination-bar').style.display = 'none';
+          return;
+        }
+
+        items.forEach(function (item, idx) {
+          var card = document.createElement('article');
+          card.className = 'classic-card';
+
+          var metaRow = document.createElement('div');
+          metaRow.className = 'classic-meta-row';
+
+          var urlSpan = document.createElement('span');
+          urlSpan.className = 'classic-url-tag';
+          var domain = item.domain || (function () {
+            try { return new URL(item.url).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
+          })();
+          urlSpan.innerHTML = '🌐 ' + escapeHtml(domain || item.url);
+
+          var badgeGroup = document.createElement('div');
+          badgeGroup.style.display = 'flex';
+          badgeGroup.style.gap = '0.35rem';
+
+          var engName = item.engine || item.source;
+          if (engName) {
+            var engPill = document.createElement('span');
+            engPill.className = 'pill pill-accent';
+            engPill.textContent = engName;
+            badgeGroup.appendChild(engPill);
+          }
+
+          metaRow.appendChild(urlSpan);
+          metaRow.appendChild(badgeGroup);
+          card.appendChild(metaRow);
+
+          var titleLink = document.createElement('a');
+          titleLink.className = 'classic-title-link';
+          titleLink.href = safeHttpUrl(item.url);
+          titleLink.target = '_blank';
+          titleLink.rel = 'noopener noreferrer';
+          titleLink.textContent = item.title || item.url;
+          card.appendChild(titleLink);
+
+          var snippetDiv = document.createElement('div');
+          snippetDiv.className = 'classic-snippet-text';
+          snippetDiv.textContent = item.content || '(スニペットなし)';
+          card.appendChild(snippetDiv);
+
+          var actRow = document.createElement('div');
+          actRow.className = 'classic-actions-row';
+
+          // 1-Click transfer to AI Deep Search
+          var deepBtn = document.createElement('button');
+          deepBtn.type = 'button';
+          deepBtn.className = 'btn btn-primary btn-sm';
+          deepBtn.innerHTML = '⚡ AIで深掘り';
+          deepBtn.addEventListener('click', function () {
+            document.getElementById('q').value = query;
+            setMode('deep');
+            runUnifiedSearch(query);
+          });
+
+          var scrapeBtn = document.createElement('button');
+          scrapeBtn.type = 'button';
+          scrapeBtn.className = 'btn btn-sm';
+          scrapeBtn.innerHTML = '📄 本文抽出';
+          scrapeBtn.addEventListener('click', function () {
+            var ex = card.querySelector('.inline-scrape-drawer');
+            if (ex) {
+              ex.style.display = ex.style.display === 'none' ? 'block' : 'none';
+              return;
+            }
+            var d = document.createElement('div');
+            d.className = 'inline-scrape-drawer';
+            d.textContent = '⏳ URL本文を抽出中...';
+            card.appendChild(d);
+            fetch('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
+              .then(function (r) { return r.json(); })
+              .then(function (res) { d.textContent = res.content || res.error || '(本文なし)'; })
+              .catch(function (e) { d.textContent = '⚠️ 抽出エラー: ' + e; });
+          });
+
+          var copyBtn = document.createElement('button');
+          copyBtn.type = 'button';
+          copyBtn.className = 'btn btn-sm';
+          copyBtn.innerHTML = '📋 引用コピー';
+          copyBtn.addEventListener('click', function () {
+            var citeText = '### [' + (item.title || item.url) + '](' + item.url + ')\n> ' + (item.content || '').replace(/\n/g, '\n> ');
+            copyWithFeedback(citeText, copyBtn, '✅ コピー済');
+          });
+
+          actRow.appendChild(deepBtn);
+          actRow.appendChild(scrapeBtn);
+          actRow.appendChild(copyBtn);
+          card.appendChild(actRow);
+
+          container.appendChild(card);
+        });
+
+        // Pagination
+        var pagBar = document.getElementById('classic-pagination-bar');
+        pagBar.style.display = 'flex';
+        document.getElementById('classic-page-indicator').textContent = 'ページ ' + page;
+        document.getElementById('classic-prev-btn').disabled = (page <= 1);
+      }
+
+      function runClassicSearch(query, page) {
+        page = page || 1;
+        state.classicPage = page;
+        var cat = state.classicCategory || '';
+        var tr = document.getElementById('classic-time-range').value || '';
+        var count = document.getElementById('classic-count').value || '10';
+
+        var container = document.getElementById('classic-results-container');
+        var telPill = document.getElementById('classic-telemetry-pill');
+        container.setAttribute('aria-busy', 'true');
+        container.innerHTML = '<div class="empty-state"><h2>🔍 検索中 (ページ ' + page + ')...</h2><p>各検索エンジンへ並行リクエストを実行しています。</p></div>';
+
+        var params = new URLSearchParams({
+          q: query,
+          mode: 'classic',
+          categories: cat,
+          time_range: tr,
+          count: count,
+          page: String(page)
+        });
+
+        fetch('/deep_search?' + params.toString())
+          .then(function (r) { return r.json(); })
+          .then(function (res) {
+            container.setAttribute('aria-busy', 'false');
+            if (res.error && (!res.results || !res.results.length)) {
+              container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">⚠️ エラー</h2><p>' + escapeHtml(res.error) + '</p></div>';
+              return;
+            }
+            telPill.style.display = 'block';
+            telPill.innerHTML = '取得: ' + escapeHtml(res.results_count || 0) + '件 (' + escapeHtml(res.elapsed_ms || 0) + ' ms)' +
+              (cat ? ' · カテゴリー: ' + escapeHtml(cat) : '') +
+              (tr ? ' · 期間: ' + escapeHtml(tr) : '');
+
+            // Direct answers box
+            var ansContainer = document.getElementById('classic-answers-container');
+            ansContainer.innerHTML = '';
+            if (res.answers && res.answers.length) {
+              res.answers.forEach(function (a) {
+                var abox = document.createElement('div');
+                abox.className = 'classic-answer-box';
+                abox.innerHTML = '<strong>💡 ダイレクトアンサー:</strong><br>' + escapeHtml(a);
+                ansContainer.appendChild(abox);
+              });
+            }
+
+            renderClassicSearchResults(res.results || [], query, page);
+          })
+          .catch(function (err) {
+            container.setAttribute('aria-busy', 'false');
+            container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">⚠️ 通信エラー</h2><p>' + escapeHtml(err) + '</p></div>';
+          });
+      }
+
+      document.getElementById('classic-prev-btn').addEventListener('click', function () {
+        if (state.classicPage > 1) {
+          var qVal = document.getElementById('q').value.trim();
+          if (qVal) runClassicSearch(qVal, state.classicPage - 1);
+        }
+      });
+      document.getElementById('classic-next-btn').addEventListener('click', function () {
+        var qVal = document.getElementById('q').value.trim();
+        if (qVal) runClassicSearch(qVal, state.classicPage + 1);
+      });
+      document.getElementById('classic-time-range').addEventListener('change', function () {
+        var qVal = document.getElementById('q').value.trim();
+        if (qVal && state.mode === 'classic') runClassicSearch(qVal, 1);
+      });
+      document.getElementById('classic-count').addEventListener('change', function () {
+        var qVal = document.getElementById('q').value.trim();
+        if (qVal && state.mode === 'classic') runClassicSearch(qVal, 1);
+      });
+
       function runScrapeMode(targetUrl) {
         var maxLen = document.getElementById('opt-scrape-len').value || '8000';
         var focusQ = document.getElementById('opt-scrape-query').value.trim();
@@ -2434,7 +3364,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
               return;
             }
             state.markdown = res.markdown || res.content || '';
-            state.prompt = res.rag_prompt || ('以下のWebページ抽出本文を根拠として要点を解説してください。\\n\\nURL: ' + targetUrl + '\\n\\n' + state.markdown);
+            state.prompt = res.rag_prompt || ('以下のWebページ抽出本文を根拠として要点を解説してください。\n\nURL: ' + targetUrl + '\n\n' + state.markdown);
             state.jsonStr = JSON.stringify(res, null, 2);
 
             var telBar = document.getElementById('telemetry-bar');
@@ -2482,6 +3412,298 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           });
       }
 
+      /* -------------------------------------------------------------
+       * Settings Dashboard Implementation
+       * ------------------------------------------------------------- */
+      function renderSettingsEngineCards() {
+        var grid = document.getElementById('settings-engines-grid');
+        grid.innerHTML = '';
+
+        var filter = (state.settingsSearch || '').toLowerCase().trim();
+        var cat = state.settingsCurrentCat || '';
+
+        var list = state.settingsEngines.filter(function (e) {
+          if (cat && (!e.categories || e.categories.indexOf(cat) === -1)) return false;
+          if (filter) {
+            var matchName = e.name.toLowerCase().indexOf(filter) !== -1;
+            var matchCat = (e.categories || []).some(function (c) { return c.toLowerCase().indexOf(filter) !== -1; });
+            var matchBang = (e.shortcut || '').toLowerCase().indexOf(filter) !== -1;
+            if (!matchName && !matchCat && !matchBang) return false;
+          }
+          return true;
+        });
+
+        if (!list.length) {
+          grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:2rem;color:var(--text-muted);">該当する検索エンジンがありません</div>';
+          return;
+        }
+
+        list.forEach(function (e) {
+          var c = document.createElement('div');
+          c.className = 'engine-item-card';
+
+          var top = document.createElement('div');
+          top.className = 'engine-item-header';
+
+          var title = document.createElement('div');
+          title.className = 'engine-item-title';
+
+          var dot = document.createElement('span');
+          dot.style.width = '8px';
+          dot.style.height = '8px';
+          dot.style.borderRadius = '50%';
+          dot.style.display = 'inline-block';
+          if (e.status === 'suspended') {
+            dot.style.background = 'var(--amber)';
+            dot.title = '一時停止 / レート制限中 (' + (e.suspend_remaining_sec || 0) + 's 残り)';
+          } else if (e.enabled) {
+            dot.style.background = 'var(--emerald)';
+            dot.title = '稼働中';
+          } else {
+            dot.style.background = 'var(--text-muted)';
+            dot.title = '無効';
+          }
+
+          var nameSpan = document.createElement('span');
+          nameSpan.textContent = e.name;
+
+          title.appendChild(dot);
+          title.appendChild(nameSpan);
+
+          if (e.shortcut) {
+            var bang = document.createElement('span');
+            bang.className = 'pill';
+            bang.style.fontSize = '0.7rem';
+            bang.textContent = '!' + e.shortcut;
+            title.appendChild(bang);
+          }
+
+          // Toggle switch
+          var swLabel = document.createElement('label');
+          swLabel.className = 'switch-label';
+          var chk = document.createElement('input');
+          chk.type = 'checkbox';
+          chk.checked = !!e.enabled;
+          chk.addEventListener('change', function () {
+            e.enabled = chk.checked;
+            e.status = e.enabled ? 'online' : 'disabled';
+            dot.style.background = e.enabled ? 'var(--emerald)' : 'var(--text-muted)';
+            state.togglesModified = true;
+            updateOverviewStats();
+          });
+          var sld = document.createElement('span');
+          sld.className = 'switch-slider';
+          swLabel.appendChild(chk);
+          swLabel.appendChild(sld);
+
+          top.appendChild(title);
+          top.appendChild(swLabel);
+          c.appendChild(top);
+
+          // Meta info row
+          var meta = document.createElement('div');
+          meta.className = 'engine-item-meta';
+
+          (e.categories || []).forEach(function (catName) {
+            var cp = document.createElement('span');
+            cp.className = 'pill';
+            cp.textContent = catName;
+            meta.appendChild(cp);
+          });
+
+          if (typeof e.latency_ms === 'number' && e.latency_ms > 0) {
+            var latPill = document.createElement('span');
+            latPill.className = 'pill';
+            latPill.textContent = e.latency_ms + ' ms';
+            meta.appendChild(latPill);
+          }
+          if (typeof e.reliability === 'number') {
+            var relPill = document.createElement('span');
+            relPill.className = 'pill ' + (e.reliability >= 90 ? 'pill-emerald' : 'pill-amber');
+            relPill.textContent = '信頼性 ' + e.reliability + '%';
+            meta.appendChild(relPill);
+          }
+
+          c.appendChild(meta);
+          grid.appendChild(c);
+        });
+      }
+
+      function updateOverviewStats() {
+        var active = state.settingsEngines.filter(function (e) { return e.enabled; }).length;
+        var suspended = state.settingsEngines.filter(function (e) { return e.status === 'suspended'; }).length;
+        document.getElementById('stat-active-engines').textContent = active + ' / ' + state.settingsEngines.length;
+        document.getElementById('stat-suspended-engines').textContent = suspended;
+      }
+
+      function loadSettingsDashboard() {
+        var grid = document.getElementById('settings-engines-grid');
+        if (state.settingsEngines.length) {
+          renderSettingsEngineCards();
+          return;
+        }
+
+        grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:2rem;">⏳ エンジン稼働状況を取得中...</div>';
+
+        fetch('/api/settings/engines')
+          .then(function (r) { return r.json(); })
+          .then(function (res) {
+            if (!res.success) throw new Error('Failed to load engines');
+            state.settingsEngines = res.engines || [];
+            state.settingsCategories = res.categories || [];
+
+            document.getElementById('stat-active-engines').textContent = res.active_engines + ' / ' + res.total_engines;
+            document.getElementById('stat-suspended-engines').textContent = res.suspended_engines;
+            document.getElementById('stat-avg-latency').textContent = res.avg_latency_ms + ' ms';
+            document.getElementById('stat-avg-reliability').textContent = res.avg_reliability + '%';
+
+            // Render category chips
+            var chipsContainer = document.getElementById('settings-engine-cat-chips');
+            chipsContainer.innerHTML = '';
+            var allBtn = document.createElement('button');
+            allBtn.type = 'button';
+            allBtn.className = 'cat-btn active';
+            allBtn.textContent = 'すべて (' + res.total_engines + ')';
+            allBtn.addEventListener('click', function () {
+              chipsContainer.querySelectorAll('.cat-btn').forEach(function (b) { b.classList.remove('active'); });
+              allBtn.classList.add('active');
+              state.settingsCurrentCat = '';
+              renderSettingsEngineCards();
+            });
+            chipsContainer.appendChild(allBtn);
+
+            (res.categories || []).forEach(function (cat) {
+              var count = state.settingsEngines.filter(function (e) { return (e.categories || []).indexOf(cat) !== -1; }).length;
+              var b = document.createElement('button');
+              b.type = 'button';
+              b.className = 'cat-btn';
+              b.textContent = cat + ' (' + count + ')';
+              b.addEventListener('click', function () {
+                chipsContainer.querySelectorAll('.cat-btn').forEach(function (btn) { btn.classList.remove('active'); });
+                b.classList.add('active');
+                state.settingsCurrentCat = cat;
+                renderSettingsEngineCards();
+              });
+              chipsContainer.appendChild(b);
+            });
+
+            renderSettingsEngineCards();
+          })
+          .catch(function (err) {
+            grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:2rem;color:var(--danger);">⚠️ エンジン設定の取得に失敗しました: ' + escapeHtml(err) + '</div>';
+          });
+      }
+
+      // Settings subtab switching
+      document.getElementById('subtab-engines-btn').addEventListener('click', function () {
+        this.classList.add('active');
+        document.getElementById('subtab-general-btn').classList.remove('active');
+        document.getElementById('section-settings-engines').style.display = 'block';
+        document.getElementById('section-settings-general').style.display = 'none';
+      });
+      document.getElementById('subtab-general-btn').addEventListener('click', function () {
+        this.classList.add('active');
+        document.getElementById('subtab-engines-btn').classList.remove('active');
+        document.getElementById('section-settings-engines').style.display = 'none';
+        document.getElementById('section-settings-general').style.display = 'block';
+      });
+
+      // Filter input
+      document.getElementById('engine-search-input').addEventListener('input', function () {
+        state.settingsSearch = this.value;
+        renderSettingsEngineCards();
+      });
+
+      // Bulk actions
+      document.getElementById('btn-enable-all-cat').addEventListener('click', function () {
+        var cat = state.settingsCurrentCat;
+        state.settingsEngines.forEach(function (e) {
+          if (!cat || (e.categories && e.categories.indexOf(cat) !== -1)) {
+            e.enabled = true;
+            e.status = 'online';
+          }
+        });
+        updateOverviewStats();
+        renderSettingsEngineCards();
+        showToast('カテゴリー内をすべて有効化しました（保存を押して反映）');
+      });
+
+      document.getElementById('btn-disable-all-cat').addEventListener('click', function () {
+        var cat = state.settingsCurrentCat;
+        state.settingsEngines.forEach(function (e) {
+          if (!cat || (e.categories && e.categories.indexOf(cat) !== -1)) {
+            e.enabled = false;
+            e.status = 'disabled';
+          }
+        });
+        updateOverviewStats();
+        renderSettingsEngineCards();
+        showToast('カテゴリー内をすべて無効化しました（保存を押して反映）');
+      });
+
+      document.getElementById('btn-reset-engines-def').addEventListener('click', function () {
+        state.settingsEngines.forEach(function (e) {
+          e.enabled = !!e.default_enabled;
+          e.status = e.enabled ? 'online' : 'disabled';
+        });
+        updateOverviewStats();
+        renderSettingsEngineCards();
+        showToast('デフォルトのエンジン構成に復元しました（保存を押して反映）');
+      });
+
+      // Save engines settings
+      document.getElementById('btn-save-settings-engines').addEventListener('click', function () {
+        var disabled = [];
+        var enabled = [];
+        state.settingsEngines.forEach(function (e) {
+          if (e.enabled) enabled.push(e.name);
+          else disabled.push(e.name);
+        });
+
+        fetch('/api/settings/engines', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ disabled_engines: disabled, enabled_engines: enabled })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function () {
+            showToast('✅ 検索エンジンの構成を保存しました');
+            state.togglesModified = false;
+          })
+          .catch(function () {
+            showToast('⚠️ 保存に失敗しました');
+          });
+      });
+
+      // Save general preferences
+      document.getElementById('btn-save-general-prefs').addEventListener('click', function () {
+        var mode = document.getElementById('pref-default-mode').value;
+        var ss = document.getElementById('pref-safesearch').value;
+        var count = document.getElementById('pref-default-count').value;
+        var tok = document.getElementById('pref-default-tokens').value;
+
+        localStorage.setItem('sxng_pref_mode', mode);
+        localStorage.setItem('sxng_pref_safesearch', ss);
+        localStorage.setItem('sxng_pref_count', count);
+        localStorage.setItem('sxng_pref_tokens', tok);
+
+        fetch('/api/settings/engines', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ safesearch: ss, default_mode: mode })
+        }).finally(function () {
+          showToast('✅ 一般設定を保存しました');
+        });
+      });
+
+      document.getElementById('btn-reset-general-prefs').addEventListener('click', function () {
+        document.getElementById('pref-default-mode').value = 'deep';
+        document.getElementById('pref-safesearch').value = '1';
+        document.getElementById('pref-default-count').value = '10';
+        document.getElementById('pref-default-tokens').value = '3000';
+        showToast('初期設定を復元しました');
+      });
+
       function loadAgentHub() {
         var container = document.getElementById('hub-cards-container');
         if (container.dataset.loaded === '1') return;
@@ -2496,12 +3718,12 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
               {
                 title: '⚡ GenAI Retrieval API (/api/retrieval)',
                 desc: 'GenAIモデル・自律エージェント向けの構造化グラウンディングAPI (schema_version: 1.0)。根拠パッセージ・検証メタデータ・BM25スコアを返します。',
-                code: info.snippets.curl_retrieval + '\\n\\n# PowerShell:\\n' + info.snippets.pwsh_retrieval
+                code: info.snippets.curl_retrieval + '\n\n# PowerShell:\n' + info.snippets.pwsh_retrieval
               },
               {
                 title: '⚡ HTTP Deep Search API (/deep_search)',
                 desc: '1回のHTTPリクエストで検索・並列スクレイピング・BM25ハイライト抽出を実行し、MarkdownまたはJSONを返します。',
-                code: info.snippets.curl_deep_md + '\\n\\n# PowerShell:\\n' + info.snippets.pwsh_deep
+                code: info.snippets.curl_deep_md + '\n\n# PowerShell:\n' + info.snippets.pwsh_deep
               },
               {
                 title: '🤖 Claude Code (MCP 登録コマンド)',
@@ -2562,15 +3784,13 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         var qVal = document.getElementById('q').value.trim();
         if (!qVal) return;
 
-        var classicLink = document.getElementById('classic-ui-link');
-        if (classicLink && !isUrlText(qVal)) {
-          classicLink.href = '/search?q=' + encodeURIComponent(qVal);
-        }
-
         // Auto-detect URL in search bar if user pastes http(s)://...
-        if (state.mode === 'scrape' || isUrlText(qVal)) {
+        if (isUrlText(qVal)) {
           syncInputOptionsVisibility();
           runScrapeMode(qVal);
+        } else if (state.mode === 'classic') {
+          syncInputOptionsVisibility();
+          runClassicSearch(qVal, 1);
         } else {
           syncInputOptionsVisibility();
           runUnifiedSearch(qVal);
@@ -2585,6 +3805,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       // Global keyboard shortcuts
       document.addEventListener('keydown', function (e) {
         var active = document.activeElement;
+        var qInput = document.getElementById('q');
         var isEditing = active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable);
         if ((e.key === '/' && active !== qInput && !isEditing) ||
             ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) {
@@ -2594,40 +3815,125 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         }
       });
 
-      // Parse initial URL parameters (?q=...&mode=...&depth=...)
+      // Restore user preferences from localStorage
+      var savedMode = localStorage.getItem('sxng_pref_mode');
+      if (savedMode && ['deep', 'classic', 'balanced'].indexOf(savedMode) !== -1) {
+        document.getElementById('pref-default-mode').value = savedMode;
+        if (!window.location.search) {
+          setMode(savedMode === 'balanced' ? 'deep' : savedMode);
+        }
+      }
+      var savedCount = localStorage.getItem('sxng_pref_count');
+      if (savedCount) {
+        document.getElementById('pref-default-count').value = savedCount;
+        document.getElementById('classic-count').value = savedCount;
+      }
+      var savedTok = localStorage.getItem('sxng_pref_tokens');
+      if (savedTok) {
+        document.getElementById('pref-default-tokens').value = savedTok;
+        document.getElementById('opt-tokens').value = savedTok;
+      }
+
+      // Parse initial URL parameters (?q=...&mode=...&depth=...&category=...&page=...)
       var urlParams = new URLSearchParams(window.location.search);
       var initMode = urlParams.get('mode');
       var initDepth = urlParams.get('depth');
+      var initCat = urlParams.get('category') || urlParams.get('categories');
+      var initPage = parseInt(urlParams.get('page') || urlParams.get('pageno'), 10) || 1;
       var initQ = urlParams.get('q') || urlParams.get('url');
+
       if (initDepth && ['advanced', 'code', 'basic', 'fast'].indexOf(initDepth) !== -1) {
         document.getElementById('opt-depth').value = initDepth;
       }
-      if (initMode && ['deep', 'fast', 'scrape', 'agent'].indexOf(initMode) !== -1) {
+      if (initCat) {
+        state.classicCategory = initCat;
+        document.querySelectorAll('#classic-cat-chips .cat-btn').forEach(function (b) {
+          b.classList.toggle('active', b.dataset.cat === initCat);
+        });
+      }
+      if (initMode && ['deep', 'classic', 'agent', 'settings'].indexOf(initMode) !== -1) {
         setMode(initMode);
       }
       if (initQ) {
         document.getElementById('q').value = initQ;
         syncInputOptionsVisibility();
-        var classicLink = document.getElementById('classic-ui-link');
-        if (classicLink && !isUrlText(initQ)) {
-          classicLink.href = '/search?q=' + encodeURIComponent(initQ);
-        }
         executeCurrentAction();
       }
     })();
   </script>
 </body>
 </html>
+
 """
 
 
 def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
     """Register SearXNG Next AI-First WebUI and API routes onto the Flask app idempotently."""
     # Guard against duplicate registration
-    if "ai_workspace" in getattr(app, "view_functions", {}):
+    if getattr(app, "_sxng_next_registered", False):
         return
+    setattr(app, "_sxng_next_registered", True)
 
-    from flask import Response, jsonify, request
+    from flask import Response, jsonify, redirect, request
+
+    # --- Tier A: app.before_request hook (Earliest Interception) ---
+    @app.before_request
+    def sxng_ui_unification_guard() -> Any:
+        path = getattr(request, "path", "")
+        if request.method == "GET":
+            # 1. Root / -> immediately serve AI-First Studio
+            if path == "/":
+                return Response(AI_WORKSPACE_HTML, mimetype="text/html")
+            # 2. Browser /search -> 302 redirect to /?q=... unless data format requested
+            if path == "/search":
+                out_fmt = (request.args.get("format") or "").strip().lower()
+                accept = request.headers.get("Accept") or ""
+                if not out_fmt and "application/json" not in accept and "text/json" not in accept:
+                    params = dict(request.args)
+                    qs = urllib.parse.urlencode(params)
+                    return redirect(f"/?{qs}" if qs else "/", code=302)
+            # 3. Browser /preferences -> redirect to Settings tab
+            if path == "/preferences":
+                out_fmt = (request.args.get("format") or "").strip().lower()
+                accept = request.headers.get("Accept") or ""
+                if not out_fmt and "application/json" not in accept:
+                    return redirect("/?mode=settings", code=302)
+            # 4. Browser /about -> redirect to Agent Hub
+            if path == "/about":
+                return redirect("/?mode=agent", code=302)
+        return None
+
+    # --- Tier B: app.view_functions replacement ---
+    orig_search = app.view_functions.get("search")
+    orig_preferences = app.view_functions.get("preferences")
+    orig_about = app.view_functions.get("about")
+
+    def unified_index_view() -> Any:
+        return Response(AI_WORKSPACE_HTML, mimetype="text/html")
+
+    def unified_search_view() -> Any:
+        out_fmt = (request.values.get("format") or "").strip().lower()
+        accept = request.headers.get("Accept") or ""
+        if out_fmt in ("json", "json_lite", "csv", "rss") or "application/json" in accept or "text/json" in accept:
+            if orig_search:
+                return orig_search()
+        params = dict(request.args)
+        qs = urllib.parse.urlencode(params)
+        return redirect(f"/?{qs}" if qs else "/", code=302)
+
+    def unified_preferences_view() -> Any:
+        if request.method == "POST":
+            if orig_preferences:
+                return orig_preferences()
+        return redirect("/?mode=settings", code=302)
+
+    app.view_functions["index"] = unified_index_view
+    if orig_search is not None:
+        app.view_functions["search"] = unified_search_view
+    if orig_preferences is not None:
+        app.view_functions["preferences"] = unified_preferences_view
+    if orig_about is not None:
+        app.view_functions["about"] = lambda: redirect("/?mode=agent", code=302)
 
     @app.route("/ai", methods=["GET"])
     @app.route("/next", methods=["GET"])
@@ -2658,6 +3964,21 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         """Return instance AI capabilities and ready-to-copy MCP/CLI configs."""
         host_url = request.host_url.rstrip("/") if getattr(request, "host_url", None) else "http://127.0.0.1:8888"
         return jsonify(get_ai_info(webapp_mod=webapp_mod, host_url=host_url))
+
+    @app.route("/api/settings/engines", methods=["GET", "POST"])
+    def settings_engines_route() -> Any:
+        """Endpoint to query and persist engine health, latency, reliability, and enablement."""
+        if request.method == "POST":
+            payload = request.get_json(silent=True) if request.is_json else None
+            payload = payload if isinstance(payload, dict) else {}
+            data = save_engines_settings_data(webapp_mod, payload)
+            resp = jsonify(data)
+            save_engines_settings_data(webapp_mod, payload, response=resp)
+            return resp
+
+        cookies = dict(request.cookies) if getattr(request, "cookies", None) else {}
+        data = get_engines_settings_data(webapp_mod=webapp_mod, request_cookies=cookies)
+        return jsonify(data)
 
     @app.route("/api/scrape_analyze", methods=["GET", "POST"])
     def scrape_analyze_route() -> Any:
@@ -2695,7 +4016,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
     @app.route("/deep_search", methods=["GET", "POST"])
     @app.route("/api/search", methods=["GET", "POST"])
     def deep_search_route() -> Any:
-        """Unified Search & Scrape HTTP endpoint (supports mode=auto|deep|fast|scrape)."""
+        """Unified Search & Scrape HTTP endpoint (supports mode=auto|deep|fast|classic|scrape)."""
         payload = request.get_json(silent=True) if request.is_json else None
         payload = payload if isinstance(payload, dict) else {}
 
@@ -2737,6 +4058,13 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         )
         max_results = _parse_int(raw_max_results, 5, 1, 50)
         max_tokens = _parse_int(request.values.get("max_tokens") or payload.get("max_tokens"), 3000, 500, 20000)
+        raw_page = (
+            request.values.get("page")
+            or request.values.get("pageno")
+            or payload.get("page")
+            or payload.get("pageno")
+        )
+        pageno = _parse_int(raw_page, 1, 1, 100)
         focus_query = (
             request.values.get("focus_query")
             or request.values.get("focus_q")
@@ -2804,6 +4132,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             mode=str(mode),
             focus_query=str(focus_query),
             max_scrape_length=max_scrape_length,
+            pageno=pageno,
         )
 
         if out_fmt in ("markdown", "md"):

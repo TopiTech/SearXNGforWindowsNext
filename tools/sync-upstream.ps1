@@ -285,6 +285,23 @@ synced_at=$(Get-Date -Format o)
     }
 
     Write-Host ""
+    Write-Host "Verifying AI-First UI and critical patch integrity..." -ForegroundColor Green
+    try {
+        & (Join-Path $repoRoot "python\python.exe") (Join-Path $repoRoot "tools\test_patches.py")
+        if ($LASTEXITCODE -ne 0) {
+            throw "Patch integrity tests exited with code $LASTEXITCODE"
+        }
+        Write-Host "  [OK] AI-First UI and patch integrity verified." -ForegroundColor Green
+    }
+    catch {
+        Write-Host ""
+        Write-Host "[ERROR] Upstream synchronization applied patches, but post-sync integrity verification failed!" -ForegroundColor Red
+        Write-Host "  AI-First UI integration or critical routes may have been broken by upstream changes." -ForegroundColor Red
+        Write-Host "  Run: .\python\python.exe tools\test_patches.py for full failure diagnostics." -ForegroundColor Yellow
+        throw
+    }
+
+    Write-Host ""
     Write-Host "[OK] Upstream synchronization complete!" -ForegroundColor Green
 }
 finally {
