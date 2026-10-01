@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import email.message
 import io
 import json
 import os
@@ -106,7 +107,7 @@ class TestSearXNGClient(unittest.TestCase):
             "http://127.0.0.1:8888/scrape?url=http://127.0.0.1",
             400,
             "Bad Request",
-            hdrs=None,  # type: ignore[arg-type]
+            hdrs=email.message.Message(),
             fp=io.BytesIO(b"Blocked"),
         )
         mock_urlopen.side_effect = err
@@ -191,6 +192,22 @@ class TestSearXNGClient(unittest.TestCase):
         self.assertIn("`[duckduckgo]`", md)
         self.assertIn("Free metasearch engine", md)
         self.assertIn("SearXNG is open source", md)
+
+    def test_format_search_markdown_escapes_brackets_and_parens(self) -> None:
+        data = {
+            "query": "C (programming language)",
+            "results": [
+                {
+                    "title": "[Solved] C (programming language) [Standard]",
+                    "url": "https://en.wikipedia.org/wiki/C_(programming_language)",
+                    "content": "C language overview",
+                    "source": "wikipedia",
+                }
+            ],
+        }
+        md = searxng_client.format_search_markdown(data)
+        self.assertIn("[\\[Solved\\] C (programming language) \\[Standard\\]]", md)
+        self.assertIn("(https://en.wikipedia.org/wiki/C_%28programming_language%29)", md)
 
     def test_format_scrape_markdown(self) -> None:
         data = {
@@ -593,9 +610,9 @@ class TestSearXNGCLI(unittest.TestCase):
 
         res = searxng_client.search(
             "test",
-            categories=None,  # type: ignore[arg-type]
-            engines=None,  # type: ignore[arg-type]
-            time_range=None,  # type: ignore[arg-type]
+            categories=None,
+            engines=None,
+            time_range=None,
         )
         self.assertNotIn("error", res)
         self.assertEqual(res["query"], "test")

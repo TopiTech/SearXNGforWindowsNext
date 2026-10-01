@@ -222,6 +222,13 @@ def compute_source_quality(
     return round(score, 2)
 
 
+def escape_markdown_link(title: str, url: str) -> tuple[str, str]:
+    """Escape brackets in Markdown title and parens in target URL."""
+    safe_title = (title or url or "").replace("[", "\\[").replace("]", "\\]")
+    safe_url = (url or "").replace("(", "%28").replace(")", "%29")
+    return safe_title, safe_url
+
+
 @dataclass
 class QueryInfo:
     """Simplified query info matching GenAI query schema."""
@@ -379,9 +386,10 @@ class RetrievalResponse:
             return "\n".join(lines)
 
         for item in self.results:
+            safe_title, safe_url = escape_markdown_link(item.title, item.url)
             source_tag = f" `[{', '.join(item.engines)}]`" if item.engines else ""
             score_tag = f" `[score: {item.score:.2f}]`" if item.score > 0 else ""
-            item_header = f"### [{item.id}] [{item.title}]({item.url}){source_tag}{score_tag}\n"
+            item_header = f"### [{item.id}] [{safe_title}]({safe_url}){source_tag}{score_tag}\n"
             lines.append(item_header)
 
             if item.evidence:
@@ -396,7 +404,8 @@ class RetrievalResponse:
 
         lines.append("---\n**Citations & Sources:**")
         for item in self.results:
+            safe_title, safe_url = escape_markdown_link(item.title, item.url)
             dup_suffix = f" *(+ {len(item.duplicate_urls)} duplicates)*" if item.duplicate_urls else ""
-            lines.append(f"- [{item.id}] [{item.title}]({item.url}) ({item.domain}){dup_suffix}")
+            lines.append(f"- [{item.id}] [{safe_title}]({safe_url}) ({item.domain}){dup_suffix}")
 
         return "\n".join(lines).strip()

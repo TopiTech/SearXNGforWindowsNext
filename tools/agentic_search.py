@@ -750,12 +750,18 @@ class SpeculativeFetcher:
                 if fut.cancelled():
                     return
                 try:
-                    fut.set_result(_do_scrape(target_url))
+                    res = _do_scrape(target_url)
+                    if not fut.cancelled():
+                        try:
+                            fut.set_result(res)
+                        except (concurrent.futures.InvalidStateError, RuntimeError):
+                            pass
                 except BaseException as exc:  # noqa: BLE001 - mirror Future.result() semantics
-                    try:
-                        fut.set_exception(exc)
-                    except concurrent.futures.InvalidStateError:
-                        pass
+                    if not fut.cancelled():
+                        try:
+                            fut.set_exception(exc)
+                        except (concurrent.futures.InvalidStateError, RuntimeError):
+                            pass
 
         future_to_item: dict[Future, SearchResultItem] = {}
         for it in to_fetch:
@@ -830,7 +836,8 @@ class TokenBudgeter:
         clean_url = (url or "").strip()
         dom = extract_domain(clean_url)
         orig_len = original_length or len(content or "")
-        md_lines = [f"## 抽出本文: [{dom or clean_url}]({clean_url})\n"]
+        safe_dom, safe_clean_url = retrieval_models.escape_markdown_link(dom or clean_url, clean_url)
+        md_lines = [f"## 抽出本文: [{safe_dom}]({safe_clean_url})\n"]
         if not content or not content.strip():
             md_lines.append("抽出可能な本文が見つかりませんでした。")
             return "\n".join(md_lines).strip()
@@ -881,10 +888,11 @@ class TokenBudgeter:
         for i, item in enumerate(items, 1):
             title = item.title or "Untitled"
             url = item.url
+            safe_title, safe_url = retrieval_models.escape_markdown_link(title, url)
             source_tag = f" `[{item.source}]`" if item.source else ""
             score_str = f" `[relevance: {item.score:.2f}]`" if item.score > 0 else ""
 
-            item_header = f"### [{i}] [{title}]({url}){source_tag}{score_str}\n"
+            item_header = f"### [{i}] [{safe_title}]({safe_url}){source_tag}{score_str}\n"
 
             body_chunks: list[str] = []
             if item.highlights:
@@ -904,10 +912,10 @@ class TokenBudgeter:
             if current_tokens + item_tokens <= max_tokens or i == 1:
                 lines.append(rendered_item)
                 current_tokens += item_tokens
-                sources_summary.append(f"- [{i}] [{title}]({url}) ({item.domain})")
+                sources_summary.append(f"- [{i}] [{safe_title}]({safe_url}) ({item.domain})")
             else:
                 # Add as reference-only if budget is exhausted
-                sources_summary.append(f"- [{i}] [{title}]({url}) *(omitted due to token budget)*")
+                sources_summary.append(f"- [{i}] [{safe_title}]({safe_url}) *(omitted due to token budget)*")
 
         lines.append("\n---\n**Citations & Sources:**")
         lines.extend(sources_summary)

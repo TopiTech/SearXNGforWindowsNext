@@ -97,9 +97,9 @@ def check_health(base_url: str | None = None, timeout: float | None = None) -> t
 def search(
     query: str,
     count: int | str = 5,
-    categories: str = "",
-    engines: str = "",
-    time_range: str = "",
+    categories: str | None = "",
+    engines: str | None = "",
+    time_range: str | None = "",
     base_url: str | None = None,
     timeout: float | None = None,
 ) -> dict[str, Any]:
@@ -310,6 +310,13 @@ def scrape(
         }
 
 
+def _escape_markdown_link(title: str, url: str) -> tuple[str, str]:
+    """Escape brackets in Markdown title and parens in target URL."""
+    safe_title = (title or url or "").replace("[", "\\[").replace("]", "\\]")
+    safe_url = (url or "").replace("(", "%28").replace(")", "%29")
+    return safe_title, safe_url
+
+
 def format_search_markdown(search_data: dict[str, Any]) -> str:
     """Format search results into clean, AI-friendly Markdown."""
     error = search_data.get("error")
@@ -338,8 +345,9 @@ def format_search_markdown(search_data: dict[str, Any]) -> str:
         content = item.get("content", "").strip()
         source = item.get("source", "").strip()
 
+        safe_title, safe_url = _escape_markdown_link(title, url)
         source_tag = f" `[{source}]`" if source else ""
-        lines.append(f"### {i}. [{title}]({url}){source_tag}")
+        lines.append(f"### {i}. [{safe_title}]({safe_url}){source_tag}")
         if content:
             lines.append(f"{content}\n")
         else:

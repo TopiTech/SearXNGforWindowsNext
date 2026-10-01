@@ -147,12 +147,17 @@ class RetrievalService:
                             res = self._scrape_page(url, **kwargs)
                     else:
                         res = self._scrape_page(url, **kwargs)
-                    fut.set_result(res)
+                    if not fut.cancelled():
+                        try:
+                            fut.set_result(res)
+                        except (concurrent.futures.InvalidStateError, RuntimeError):
+                            pass
                 except BaseException as exc:  # noqa: BLE001
-                    try:
-                        fut.set_exception(exc)
-                    except concurrent.futures.InvalidStateError:
-                        pass
+                    if not fut.cancelled():
+                        try:
+                            fut.set_exception(exc)
+                        except (concurrent.futures.InvalidStateError, RuntimeError):
+                            pass
 
         fut_map: dict[Future, dict[str, Any]] = {}
         for it in to_scrape:

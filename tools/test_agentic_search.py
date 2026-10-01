@@ -706,6 +706,46 @@ class TestRegressionHardening(unittest.TestCase):
         self.assertAlmostEqual(scored[1].score, 1.0 - (1 / 3) * 0.7)
         self.assertAlmostEqual(scored[2].score, 1.0 - (2 / 3) * 0.7)
 
+    def test_pack_markdown_escapes_brackets_and_parens(self) -> None:
+        """Verify pack_markdown and pack_scrape_markdown sanitize markdown links."""
+        item = agentic_search.SearchResultItem(
+            title="[RFC 123] Protocol (Draft)",
+            url="https://example.com/spec(v2)",
+            domain="example.com",
+            content="Summary content",
+            source="duckduckgo",
+        )
+        md = agentic_search.TokenBudgeter.pack_markdown(
+            query="protocol",
+            items=[item],
+        )
+        self.assertIn("[\\[RFC 123\\] Protocol (Draft)](https://example.com/spec%28v2%29)", md)
+
+        scrape_md = agentic_search.TokenBudgeter.pack_scrape_markdown(
+            url="https://example.com/spec(v2)",
+            content="Full document text",
+        )
+        self.assertIn("(https://example.com/spec%28v2%29)", scrape_md)
+
+    def test_speculative_scraper_cancelled_future_resilience(self) -> None:
+        """Verify SpeculativeFetcher daemon workers do not crash when futures are cancelled."""
+
+        def slow_scrape(url: str, **kwargs):
+            return {"content": "page text", "url": url, "error": None}
+
+        scraper = agentic_search.SpeculativeFetcher(scrape_func=slow_scrape)
+        items = [
+            agentic_search.SearchResultItem(
+                title="Page 1",
+                url="https://example.com/page1",
+                domain="example.com",
+                content="Page 1 content",
+            )
+        ]
+        # Scrape with extremely short timeout to trigger future cancellation and test daemon resilience
+        res = scraper.fetch_pages(items, max_fetch=1, timeout=0.01)
+        self.assertEqual(len(res), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

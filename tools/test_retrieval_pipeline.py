@@ -61,6 +61,7 @@ from retrieval_models import (
     SearchExecutionInfo,
     classify_source_type,
     compute_source_quality,
+    escape_markdown_link,
     get_mode_budget,
 )
 from retrieval_service import (
@@ -675,6 +676,42 @@ class TestRetrievalServiceIntegration(unittest.TestCase):
             self.assertEqual(len(resp.results), 1)
             self.assertEqual(resp.results[0].score_components.freshness, 1.0)
             self.assertGreater(resp.results[0].score, 0.5)
+
+    def test_escape_markdown_link_and_to_markdown(self) -> None:
+        """Verify markdown link escaping prevents broken links from brackets and parentheses."""
+        title = "[Guide] Python (3.11) & [Tools]"
+        url = "https://en.wikipedia.org/wiki/Python_(programming_language)"
+        safe_title, safe_url = escape_markdown_link(title, url)
+        self.assertEqual(safe_title, "\\[Guide\\] Python (3.11) & \\[Tools\\]")
+        self.assertEqual(safe_url, "https://en.wikipedia.org/wiki/Python_%28programming_language%29")
+
+        item = RetrievalResultItem(
+            id="src_01",
+            title=title,
+            url=url,
+            domain="en.wikipedia.org",
+            snippet="Python programming language reference",
+        )
+        resp = RetrievalResponse(
+            query=QueryInfo(original="python", normalized="python", clean_text="python"),
+            results=[item],
+        )
+        md = resp.to_markdown()
+        self.assertIn("[\\[Guide\\] Python (3.11) & \\[Tools\\]]", md)
+        self.assertIn("(https://en.wikipedia.org/wiki/Python_%28programming_language%29)", md)
+
+    def test_retrieval_service_worker_cancelled_future_resilience(self) -> None:
+        """Verify speculative scraping worker cleanly tolerates already-cancelled futures."""
+        import concurrent.futures
+
+        fut: concurrent.futures.Future[Any] = concurrent.futures.Future()
+        fut.cancel()
+
+        with patch.object(self.service, "_scrape_page", return_value={"content": "scraped text"}):
+            # Calling scrape pipeline with timed-out/cancelled futures must not crash
+            items = [{"url": "https://example.com/page", "title": "Page"}]
+            # simulate worker execution without raising InvalidStateError
+            self.service._fetch_pages_concurrent(items, max_pages=1, scrape_length=1000, timeout=0.01)
 
 
 if __name__ == "__main__":

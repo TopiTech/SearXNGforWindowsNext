@@ -1518,9 +1518,9 @@ def scrape():
                         raise
                     except Exception:
                         pass
-                if host_clean.startswith(('0x', '0X')):
+                if host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B')):
                     try:
-                        ip_int = int(host_clean, 16)
+                        ip_int = int(host_clean, 0)
                         if 0 <= ip_int <= 0xFFFFFFFF:
                             v4 = ipaddress.IPv4Address(ip_int)
                             if _is_ip_blocked(v4):

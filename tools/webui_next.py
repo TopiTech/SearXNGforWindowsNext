@@ -1595,6 +1595,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
     }
     .btn:focus-visible,
     .nav-tab:focus-visible,
+    .settings-subtab:focus-visible,
     .chip:focus-visible,
     .cat-btn:focus-visible,
     .ctx-tab:focus-visible,
@@ -2173,6 +2174,10 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       transform: translateX(18px);
       background-color: #ffffff;
     }
+    .switch-label input:focus-visible + .switch-slider {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     /* General Settings Form */
     .general-settings-card {
       background: var(--bg-surface);
@@ -2537,13 +2542,13 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       </div>
 
       <!-- Settings Subtabs -->
-      <div class="settings-subtabs" role="tablist">
-        <button type="button" class="settings-subtab active" data-subtab="engines" id="subtab-engines-btn">🔌 検索エンジン管理</button>
-        <button type="button" class="settings-subtab" data-subtab="general" id="subtab-general-btn">⚙️ 一般設定</button>
+      <div class="settings-subtabs" role="tablist" aria-label="設定カテゴリ">
+        <button type="button" class="settings-subtab active" role="tab" aria-selected="true" aria-controls="section-settings-engines" data-subtab="engines" id="subtab-engines-btn">🔌 検索エンジン管理</button>
+        <button type="button" class="settings-subtab" role="tab" aria-selected="false" aria-controls="section-settings-general" data-subtab="general" id="subtab-general-btn">⚙️ 一般設定</button>
       </div>
 
       <!-- Section: Search Engines -->
-      <div id="section-settings-engines">
+      <div id="section-settings-engines" role="tabpanel" aria-labelledby="subtab-engines-btn">
         <div class="engine-toolbar">
           <div class="engine-search-wrap">
             <input type="text" id="engine-search-input" class="engine-search-input" placeholder="エンジン名やカテゴリーで絞り込み..." aria-label="検索エンジンの絞り込み">
@@ -2561,7 +2566,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       </div>
 
       <!-- Section: General Preferences -->
-      <div id="section-settings-general" style="display:none;">
+      <div id="section-settings-general" role="tabpanel" aria-labelledby="subtab-general-btn" style="display:none;">
         <div class="general-settings-card">
           <div class="settings-row">
             <div class="settings-label-wrap">
@@ -2948,7 +2953,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           if (h.indexOf('```') === 0) {
             var pre = document.createElement('pre');
             pre.className = 'highlight-code';
-            pre.textContent = h.replace(/^```[a-zA-Z0-9_-]*\\\\n?/, '').replace(/```$/, '');
+            pre.textContent = h.replace(/^```[a-zA-Z0-9_-]*\\n?/, '').replace(/```$/, '');
             container.appendChild(pre);
           } else {
             var div = document.createElement('div');
@@ -3076,8 +3081,10 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           copyItemBtn.className = 'btn btn-sm';
           copyItemBtn.innerHTML = '📋 この結果を引用コピー';
           copyItemBtn.addEventListener('click', function () {
-            var hText = (item.highlights && item.highlights.length) ? item.highlights.join('\\\\n\\\\n') : (item.content || '');
-            var citeMd = '### [' + (idx + 1) + '] [' + (item.title || item.url) + '](' + item.url + ')\\\\n> ' + hText.replace(/\\\\n/g, '\\\\n> ');
+            var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
+            var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
+            var hText = (item.highlights && item.highlights.length) ? item.highlights.join('\\n\\n') : (item.content || '');
+            var citeMd = '### [' + (idx + 1) + '] [' + safeTitle + '](' + safeUrl + ')\\n> ' + hText.replace(/\\n/g, '\\n> ');
             copyWithFeedback(citeMd, copyItemBtn, '✅ コピー完了');
           });
 
@@ -3253,7 +3260,9 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           copyBtn.className = 'btn btn-sm';
           copyBtn.innerHTML = '📋 引用コピー';
           copyBtn.addEventListener('click', function () {
-            var citeText = '### [' + (item.title || item.url) + '](' + item.url + ')\\\\n> ' + (item.content || '').replace(/\\\\n/g, '\\\\n> ');
+            var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
+            var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
+            var citeText = '### [' + safeTitle + '](' + safeUrl + ')\\n> ' + (item.content || '').replace(/\\n/g, '\\n> ');
             copyWithFeedback(citeText, copyBtn, '✅ コピー済');
           });
 
@@ -3365,7 +3374,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
               return;
             }
             state.markdown = res.markdown || res.content || '';
-            state.prompt = res.rag_prompt || ('以下のWebページ抽出本文を根拠として要点を解説してください。\\\\n\\\\nURL: ' + targetUrl + '\\\\n\\\\n' + state.markdown);
+            state.prompt = res.rag_prompt || ('以下のWebページ抽出本文を根拠として要点を解説してください。\\n\\nURL: ' + targetUrl + '\\n\\n' + state.markdown);
             state.jsonStr = JSON.stringify(res, null, 2);
 
             var telBar = document.getElementById('telemetry-bar');
@@ -3596,18 +3605,51 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           });
       }
 
-      // Settings subtab switching
+      // Settings subtab switching with ARIA state updates & keyboard navigation
+      function selectSettingsSubtab(name) {
+        var engBtn = document.getElementById('subtab-engines-btn');
+        var genBtn = document.getElementById('subtab-general-btn');
+        var engSec = document.getElementById('section-settings-engines');
+        var genSec = document.getElementById('section-settings-general');
+        if (name === 'engines') {
+          engBtn.classList.add('active');
+          engBtn.setAttribute('aria-selected', 'true');
+          genBtn.classList.remove('active');
+          genBtn.setAttribute('aria-selected', 'false');
+          engSec.style.display = 'block';
+          genSec.style.display = 'none';
+        } else if (name === 'general') {
+          genBtn.classList.add('active');
+          genBtn.setAttribute('aria-selected', 'true');
+          engBtn.classList.remove('active');
+          engBtn.setAttribute('aria-selected', 'false');
+          engSec.style.display = 'none';
+          genSec.style.display = 'block';
+        }
+      }
+
       document.getElementById('subtab-engines-btn').addEventListener('click', function () {
-        this.classList.add('active');
-        document.getElementById('subtab-general-btn').classList.remove('active');
-        document.getElementById('section-settings-engines').style.display = 'block';
-        document.getElementById('section-settings-general').style.display = 'none';
+        selectSettingsSubtab('engines');
       });
       document.getElementById('subtab-general-btn').addEventListener('click', function () {
-        this.classList.add('active');
-        document.getElementById('subtab-engines-btn').classList.remove('active');
-        document.getElementById('section-settings-engines').style.display = 'none';
-        document.getElementById('section-settings-general').style.display = 'block';
+        selectSettingsSubtab('general');
+      });
+
+      var subtabBtns = [document.getElementById('subtab-engines-btn'), document.getElementById('subtab-general-btn')];
+      subtabBtns.forEach(function (btn, idx) {
+        btn.addEventListener('keydown', function (e) {
+          if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            var next = subtabBtns[(idx + 1) % subtabBtns.length];
+            next.focus();
+            selectSettingsSubtab(next.getAttribute('data-subtab'));
+          } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            var prev = subtabBtns[(idx - 1 + subtabBtns.length) % subtabBtns.length];
+            prev.focus();
+            selectSettingsSubtab(prev.getAttribute('data-subtab'));
+          }
+        });
       });
 
       // Filter input
@@ -3720,12 +3762,12 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
               {
                 title: '⚡ GenAI Retrieval API (/api/retrieval)',
                 desc: 'GenAIモデル・自律エージェント向けの構造化グラウンディングAPI (schema_version: 1.0)。根拠パッセージ・検証メタデータ・BM25スコアを返します。',
-                code: info.snippets.curl_retrieval + '\\\\n\\\\n# PowerShell:\\\\n' + info.snippets.pwsh_retrieval
+                code: info.snippets.curl_retrieval + '\\n\\n# PowerShell:\\n' + info.snippets.pwsh_retrieval
               },
               {
                 title: '⚡ HTTP Deep Search API (/deep_search)',
                 desc: '1回のHTTPリクエストで検索・並列スクレイピング・BM25ハイライト抽出を実行し、MarkdownまたはJSONを返します。',
-                code: info.snippets.curl_deep_md + '\\\\n\\\\n# PowerShell:\\\\n' + info.snippets.pwsh_deep
+                code: info.snippets.curl_deep_md + '\\n\\n# PowerShell:\\n' + info.snippets.pwsh_deep
               },
               {
                 title: '🤖 Claude Code (MCP 登録コマンド)',
@@ -3807,6 +3849,16 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
       // Global keyboard shortcuts
       document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+          var toast = document.getElementById('toast');
+          if (toast && toast.classList.contains('show')) {
+            toast.classList.remove('show');
+          }
+          document.querySelectorAll('.inline-scrape-drawer').forEach(function (d) {
+            d.style.display = 'none';
+          });
+          return;
+        }
         var active = document.activeElement;
         var qInput = document.getElementById('q');
         var isEditing = active && (['INPUT', 'TEXTAREA', 'SELECT'].indexOf(active.tagName) !== -1 || active.isContentEditable);

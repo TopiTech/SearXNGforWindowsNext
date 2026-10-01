@@ -649,8 +649,8 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         res = self.fn(content, "webapp.py")
         self.assertIn(r"re.sub(r'\s+', ' ', raw_text).strip()", res)
         self.assertNotIn(r"re.sub(r'\\s+'", res)
-        self.assertIn("host_clean.startswith(('0x', '0X'))", res)
-        self.assertIn("ip_int = int(host_clean, 16)", res)
+        self.assertIn("host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B'))", res)
+        self.assertIn("ip_int = int(host_clean, 0)", res)
         self.assertIn("v4_ips = [ip for ip in valid_ips if ':' not in ip]", res)
         self.assertIn("ordered_ips = v4_ips + v6_ips", res)
         self.assertIn("with pinned_dns(original_host, safe_ips, port):", res)
@@ -2444,6 +2444,12 @@ class TestAiWebuiPatches(unittest.TestCase):
         # Accessibility & shell injection hardening
         self.assertIn("active.isContentEditable", html_doc)
         self.assertIn("function (ch) { return", html_doc)
+        self.assertIn(".settings-subtab:focus-visible", html_doc)
+        self.assertIn(".switch-label input:focus-visible + .switch-slider", html_doc)
+        self.assertIn('aria-controls="section-settings-engines"', html_doc)
+        self.assertIn('role="tabpanel" aria-labelledby="subtab-engines-btn"', html_doc)
+        self.assertIn("e.key === 'Escape'", html_doc)
+        self.assertIn("split('[').join('\\[').split(']').join('\\]')", html_doc)
 
     def test_webui_next_javascript_syntax_validity(self):
         """Regression: ensure delivered JavaScript (AI_WORKSPACE_HTML and SIMPLE_EMBED_JS)
