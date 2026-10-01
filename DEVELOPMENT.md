@@ -59,27 +59,36 @@ workspace/
 This project **stays synchronized with upstream SearXNG** while maintaining Windows compatibility and AI-first unification via **idempotent patches**. Patches are applied after every upstream sync and are safe to run multiple times.
 The `webapp_ai_webui` patch is elevated to `CRITICAL` severity to guarantee that any upstream modification that breaks UI unification halts the sync process immediately rather than silently reviving the legacy Jinja2 UI.
 
-### Patch Targets (16 Patch Steps across Target Files)
+### Patch Targets (26 Patch Specs across Target Files)
 
-| # | File | Patch | Severity | Purpose |
-|---|------|-------|:---:|---------|
-| 1 | `valkeydb.py` | Windows `pwd` module fallback | CRITICAL | Cache system compatibility |
-| 2 | `settings_defaults.py` | Register `json_lite` format | FEATURE | Output format registration |
-| 3 | `webutils.py` | `get_json_lite_response()` function | FEATURE | Lightweight GenAI-friendly responses |
-| 3b | `webutils.py` | Normalize Windows paths for URL lookups | CRITICAL | Static assets and result templates |
-| 3c | `templates/simple/{search,simple_search}.html` | Localized accessible name for search input | OPTIONAL | Keyboard/screen-reader usability |
-| 4 | `webapp.py` (pt 1) | `json_lite` handler + `WindowsSelectorEventLoopPolicy` | CRITICAL | Route handler, SSRF libs, curl_cffi compatibility |
-| 5 | `webapp.py` (pt 2) | `/scrape` endpoint (SSRF-protected, streaming timeout) | FEATURE | Content extraction API (blocks 6to4/Teredo, slowloris defense) |
-| 5b | `webapp.py` (pt 3) | `webapp_ai_webui` (AI Studio unification & API routing) | CRITICAL | Dedicated AI Studio, Classic search mode, Settings API, legacy UI abolition |
-| 6 | `engines/__init__.py` | Remove legacy `disabled` short-circuit | OPTIONAL | Preserve SearXNG preference semantics |
-| 6b | `engines/__init__.py` | Fast-path skip inactive & unconfigured onion engines | FEATURE | Accelerate startup & suppress false errors |
-| 7 | `search/processors/__init__.py` | Remove legacy `disabled` processor skip | OPTIONAL | Allow manual activation from Preferences |
-| 8 | `engines/google.py` | CAPTCHA false-positive fix | OPTIONAL | Reduce spurious suspensions |
-| 9 | `engines/sogou.py` | Robust CAPTCHA detection | OPTIONAL | Reduce spurious suspensions |
-| 10 | `search/processors/abstract.py` | Remove legacy global suspension cap | OPTIONAL | Honor `search.suspended_times` |
-| 11 | `search/processors/online.py` | Retry-After + CAPTCHA logging | FEATURE | Respect retry hints |
-| 11b | `exceptions.py` | Attach HTTP response to `SearxEngineCaptchaException` | FEATURE | Preserve headers (e.g. Retry-After) for CAPTCHA handling |
-| 12 | `settings.yml` + `config/settings.yml` | Reduce suspended_times defaults | OPTIONAL | Auto-recovery on single-user instance |
+| # | File | Patch Spec | Severity | Purpose |
+|---|------|------------|:---:|---------|
+| 1 | `valkeydb.py` | `valkeydb_compat` | CRITICAL | Windows `pwd` module fallback & Valkey DB initialization |
+| 2 | `webutils.py` | `webutils_windows_paths` | CRITICAL | Normalize Windows paths to forward slashes for static/template lookups |
+| 3 | `webapp.py` | `webapp_json_handler` | CRITICAL | Register `json_lite` handler & enforce `WindowsSelectorEventLoopPolicy` |
+| 4 | `settings_defaults.py` | `settings_defaults_json_lite` | FEATURE | Register `json_lite` format in `OUTPUT_FORMATS` |
+| 5 | `webutils.py` | `webutils_json_lite` | FEATURE | Lightweight GenAI-friendly response serializer (`get_json_lite_response`) |
+| 6 | `webapp.py` | `webapp_scrape_route` | FEATURE | `/scrape` endpoint with SSRF guard, streaming size/duration caps |
+| 7 | `webapp.py` | `webapp_ai_webui` | CRITICAL | Dedicated AI Studio, Classic search mode, Settings API, legacy UI abolition |
+| 8 | `search/processors/online.py` | `online_captcha` | FEATURE | Respect HTTP Retry-After hints & CAPTCHA logging |
+| 9 | `network/raise_for_httperror.py` | `raise_for_httperror` | FEATURE | Attach HTTP response to `SearxEngineCaptchaException` for header inspection |
+| 10 | `templates/simple/search.html` | `search_html_accessibility` | OPTIONAL | Accessible search input `aria-label` |
+| 11 | `templates/simple/simple_search.html` | `simple_search_html_accessibility` | OPTIONAL | Accessible search input `aria-label` |
+| 12 | `templates/simple/preferences/cookies.html` | `cookies_html_accessibility` | OPTIONAL | Accessible cookie hash input `aria-label` |
+| 13 | `templates/simple/base.html` | `simple_base_ai_webui` | FEATURE | AI Workspace navigation link & embed assets |
+| 14 | `templates/simple/index.html` | `simple_index_ai_webui` | FEATURE | AI Quick Actions bar injection |
+| 15 | `templates/simple/results.html` | `simple_results_ai_webui` | FEATURE | AI Agent Toolkit bar injection |
+| 16 | `engines/__init__.py` | `engines_init` | OPTIONAL | Remove legacy `disabled` engine short-circuit |
+| 17 | `engines/__init__.py` | `engines_fast_load` | FEATURE | Fast-path skip inactive & unconfigured onion engines |
+| 18 | `search/processors/__init__.py` | `processors_init` | OPTIONAL | Remove legacy `disabled` processor skip |
+| 19 | `engines/google.py` | `google_captcha` | OPTIONAL | Reduce spurious CAPTCHA suspensions on Google |
+| 20 | `engines/sogou.py` | `sogou_captcha` | OPTIONAL | Robust Sogou antispider/captcha detection |
+| 21 | `search/processors/abstract.py` | `abstract_suspend` | OPTIONAL | Remove legacy global suspension cap, honoring `suspended_times` |
+| 22 | `searx/settings.yml` | `settings_yml_suspended_times` | OPTIONAL | Reduce engine suspended_times defaults for single-user instance |
+| 23 | `config/settings.yml` | `config_settings_yml_suspended_times` | OPTIONAL | Reduce engine suspended_times while preserving custom user overrides |
+| 24 | `preferences.py` | `preferences_validation` | CRITICAL | Safe category validation & graceful non-fatal `parse_dict` handling |
+| 25 | `webadapter.py` | `webadapter_categories` | CRITICAL | Safe categories lookup using `.get()` to prevent KeyError |
+| 26 | `webapp.py` | `webapp_preferences_validation` | CRITICAL | Tab categories in Preferences & safe pre_request validation handling |
 
 ### Patch Execution Flow
 
@@ -91,22 +100,32 @@ sync-upstream.ps1
   ├─ Copy requirements.txt, setup.py, LICENSE
   ├─ Update UPSTREAM_VERSION.txt (metadata)
   ├─ apply-patches.py (idempotent, halts on CRITICAL failure)
-  │    ├─ Patch 1: valkeydb.py [CRITICAL] ✓
-  │    ├─ Patch 2: settings_defaults.py [FEATURE] ✓
-  │    ├─ Patch 3: webutils.py [FEATURE] ✓
-  │    ├─ Patch 3b: webutils.py (Windows path normalization) [CRITICAL] ✓
-  │    ├─ Patch 3c: simple search templates (accessible input name) [OPTIONAL] ✓
-  │    ├─ Patch 4a: webapp.py (json_lite handler + loop policy) [CRITICAL] ✓
-  │    ├─ Patch 4b: webapp.py (/scrape route + SSRF guard) [FEATURE] ✓
-  │    ├─ Patch 5b: webapp.py (AI Studio unification & /deep_search) [CRITICAL] ✓
-  │    ├─ Patch 6: engines/__init__.py [OPTIONAL] ✓
-  │    ├─ Patch 7: search/processors/__init__.py [OPTIONAL] ✓
-  │    ├─ Patch 8: engines/google.py [OPTIONAL] ✓
-  │    ├─ Patch 9: engines/sogou.py [OPTIONAL] ✓
-  │    ├─ Patch 10: search/processors/abstract.py [OPTIONAL] ✓
-  │    ├─ Patch 11: search/processors/online.py [FEATURE] ✓
-  │    ├─ Patch 11b: exceptions.py [FEATURE] ✓
-  │    └─ Patch 12: settings.yml + config/settings.yml [OPTIONAL] ✓
+  │    ├─ Patch 1: valkeydb_compat (valkeydb.py) [CRITICAL] ✓
+  │    ├─ Patch 2: webutils_windows_paths (webutils.py) [CRITICAL] ✓
+  │    ├─ Patch 3: webapp_json_handler (webapp.py) [CRITICAL] ✓
+  │    ├─ Patch 4: settings_defaults_json_lite (settings_defaults.py) [FEATURE] ✓
+  │    ├─ Patch 5: webutils_json_lite (webutils.py) [FEATURE] ✓
+  │    ├─ Patch 6: webapp_scrape_route (webapp.py) [FEATURE] ✓
+  │    ├─ Patch 7: webapp_ai_webui (webapp.py) [CRITICAL] ✓
+  │    ├─ Patch 8: online_captcha (search/processors/online.py) [FEATURE] ✓
+  │    ├─ Patch 9: raise_for_httperror (network/raise_for_httperror.py) [FEATURE] ✓
+  │    ├─ Patch 10: search_html_accessibility (templates/simple/search.html) [OPTIONAL] ✓
+  │    ├─ Patch 11: simple_search_html_accessibility (templates/simple/simple_search.html) [OPTIONAL] ✓
+  │    ├─ Patch 12: cookies_html_accessibility (templates/simple/preferences/cookies.html) [OPTIONAL] ✓
+  │    ├─ Patch 13: simple_base_ai_webui (templates/simple/base.html) [FEATURE] ✓
+  │    ├─ Patch 14: simple_index_ai_webui (templates/simple/index.html) [FEATURE] ✓
+  │    ├─ Patch 15: simple_results_ai_webui (templates/simple/results.html) [FEATURE] ✓
+  │    ├─ Patch 16: engines_init (engines/__init__.py) [OPTIONAL] ✓
+  │    ├─ Patch 17: engines_fast_load (engines/__init__.py) [FEATURE] ✓
+  │    ├─ Patch 18: processors_init (search/processors/__init__.py) [OPTIONAL] ✓
+  │    ├─ Patch 19: google_captcha (engines/google.py) [OPTIONAL] ✓
+  │    ├─ Patch 20: sogou_captcha (engines/sogou.py) [OPTIONAL] ✓
+  │    ├─ Patch 21: abstract_suspend (search/processors/abstract.py) [OPTIONAL] ✓
+  │    ├─ Patch 22: settings_yml_suspended_times (searx/settings.yml) [OPTIONAL] ✓
+  │    ├─ Patch 23: config_settings_yml_suspended_times (config/settings.yml) [OPTIONAL] ✓
+  │    ├─ Patch 24: preferences_validation (preferences.py) [CRITICAL] ✓
+  │    ├─ Patch 25: webadapter_categories (webadapter.py) [CRITICAL] ✓
+  │    └─ Patch 26: webapp_preferences_validation (webapp.py) [CRITICAL] ✓
   └─ Post-Sync Verification (tools/test_patches.py)
        └─ Validates root AI Studio, legacy redirects, API passthrough, and Settings API
 ```

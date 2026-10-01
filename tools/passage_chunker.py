@@ -9,6 +9,7 @@ ranks passages via BM25, and flags prompt injection risks.
 from __future__ import annotations
 
 import re
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -199,9 +200,12 @@ class HTMLMetadataExtractor:
                 # Published date
                 pub_meta = (
                     tree.xpath("//meta[@property='article:published_time']/@content")
+                    or tree.xpath("//meta[@property='og:published_time']/@content")
                     or tree.xpath("//meta[@name='publication_date']/@content")
+                    or tree.xpath("//meta[@name='pubdate']/@content")
                     or tree.xpath("//meta[@name='date']/@content")
                     or tree.xpath("//time[@pubdate]/@datetime")
+                    or tree.xpath("//time/@datetime")
                 )
                 if pub_meta:
                     out["published_at"] = str(pub_meta[0]).strip()
@@ -227,6 +231,11 @@ class HTMLMetadataExtractor:
                         out["title"] = str(t_el[0]).strip()
             except (AttributeError, KeyError, TypeError, ValueError, IndexError):
                 pass
+
+        if out["canonical_url"] and fallback_url:
+            out["canonical_url"] = urllib.parse.urljoin(fallback_url, out["canonical_url"])
+        elif not out["canonical_url"] and fallback_url:
+            out["canonical_url"] = fallback_url
 
         return out
 

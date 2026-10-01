@@ -386,7 +386,7 @@ def is_safe_retrieval_url(url: str) -> bool:
         except (ValueError, ipaddress.AddressValueError):
             return False
 
-    if host.startswith(("0x", "0X", "0o", "0O")):
+    if host.startswith(("0x", "0X", "0o", "0O", "0b", "0B")):
         try:
             ip_int = int(host, 0)
             if 0 <= ip_int <= 0xFFFFFFFF:

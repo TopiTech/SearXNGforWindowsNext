@@ -344,8 +344,13 @@ class RetrievalService:
 
             # Freshness score if query indicates freshness or published date is recent
             fresh_score = 0.0
-            if processed_q.freshness and item.get("published_date"):
-                fresh_score = 0.8
+            pub_date = item.get("published_date") or item.get("published_at")
+            if processed_q.freshness and pub_date:
+                pub_date_str = str(pub_date)
+                if processed_q.freshness.isdigit() and processed_q.freshness in pub_date_str:
+                    fresh_score = 1.0
+                else:
+                    fresh_score = 0.8
             comps.freshness = fresh_score
 
             # Composite weighted score:
@@ -477,13 +482,16 @@ def get_retrieval_service(
     search_func: Callable[..., dict[str, Any]] | None = None,
     scrape_func: Callable[..., dict[str, Any]] | None = None,
 ) -> RetrievalService:
-    """Get or create singleton RetrievalService instance."""
+    """Get or create RetrievalService instance.
+
+    If custom callables (search_func or scrape_func) are provided, a fresh
+    thread-safe RetrievalService instance is returned to avoid cross-thread
+    state mutation in multithreaded web environments. Otherwise, a shared
+    singleton instance is returned.
+    """
     global _RETRIEVAL_SERVICE_SINGLETON
+    if search_func is not None or scrape_func is not None:
+        return RetrievalService(search_func=search_func, scrape_func=scrape_func)
     if _RETRIEVAL_SERVICE_SINGLETON is None:
-        _RETRIEVAL_SERVICE_SINGLETON = RetrievalService(search_func=search_func, scrape_func=scrape_func)
-    else:
-        if search_func is not None:
-            _RETRIEVAL_SERVICE_SINGLETON.search_func = search_func
-        if scrape_func is not None:
-            _RETRIEVAL_SERVICE_SINGLETON.scrape_func = scrape_func
+        _RETRIEVAL_SERVICE_SINGLETON = RetrievalService()
     return _RETRIEVAL_SERVICE_SINGLETON

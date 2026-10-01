@@ -263,22 +263,39 @@ class QueryProcessor:
         # 2. Extract exact phrase quotes: "exact phrase"
         exact_phrases = re.findall(r'"([^"]+)"', norm)
 
-        # 3. Extract operators: site:..., -site:..., filetype:...
+        # 3. Extract operators: site:..., +site:..., -site:..., filetype:...
         tokens = norm.split()
         clean_tokens: list[str] = []
         inc_domains: list[str] = []
         exc_domains: list[str] = []
         filetype = ""
 
+        def _clean_operator_domain(raw_dom: str) -> str:
+            return (
+                raw_dom.strip()
+                .strip("\"'")
+                .lower()
+                .removeprefix("https://")
+                .removeprefix("http://")
+                .split("/")[0]
+                .split(":")[0]
+                .removeprefix("www.")
+                .strip(".")
+            )
+
         for t in tokens:
             t_low = t.lower()
             if t_low.startswith("site:") and len(t) > 5:
-                dom = t[5:].strip().strip("\"'").lower().removeprefix("www.")
-                if dom:
+                dom = _clean_operator_domain(t[5:])
+                if dom and dom not in inc_domains:
+                    inc_domains.append(dom)
+            elif t_low.startswith("+site:") and len(t) > 6:
+                dom = _clean_operator_domain(t[6:])
+                if dom and dom not in inc_domains:
                     inc_domains.append(dom)
             elif t_low.startswith("-site:") and len(t) > 6:
-                dom = t[6:].strip().strip("\"'").lower().removeprefix("www.")
-                if dom:
+                dom = _clean_operator_domain(t[6:])
+                if dom and dom not in exc_domains:
                     exc_domains.append(dom)
             elif t_low.startswith("filetype:") and len(t) > 9:
                 filetype = t[9:].strip().lower()

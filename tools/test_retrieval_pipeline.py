@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+from typing import Any
 from unittest.mock import patch
 
 # Ensure tools directory is in sys.path
@@ -35,12 +36,14 @@ from lexical_rerank import (
 )
 from passage_chunker import (
     HeadingPassageSplitter,
+    HTMLMetadataExtractor,
     PassageChunk,
     PassageChunkerConfig,
     SecurityScanner,
 )
 from query_pipeline import (
     DeterministicQueryPipeline,
+    QueryProcessor,
     classify_intent,
     normalize_query,
 )
@@ -62,6 +65,7 @@ from retrieval_models import (
 )
 from retrieval_service import (
     RetrievalService,
+    get_retrieval_service,
 )
 from url_normalizer import (
     extract_domain,
@@ -364,10 +368,27 @@ class TestPassageChunkerAndSecurity(unittest.TestCase):
         self.assertFalse(is_safe_retrieval_url("http://localhost:8080/admin"))
         self.assertFalse(is_safe_retrieval_url("http://[::1]:80/status"))
 
-        # Obfuscated integer/hex/octal representations
+        # Obfuscated integer/hex/octal/binary representations
         self.assertFalse(is_safe_retrieval_url("http://2130706433/"))
         self.assertFalse(is_safe_retrieval_url("http://0x7f000001/"))
         self.assertFalse(is_safe_retrieval_url("http://0177.0.0.1/"))
+        self.assertFalse(is_safe_retrieval_url("http://0b01111111000000000000000000000001/"))
+
+    def test_html_metadata_extractor_relative_canonical_url(self) -> None:
+        html = (
+            "<html><head>"
+            '<link rel="canonical" href="/blog/post-1">'
+            '<meta name="pubdate" content="2026-05-01">'
+            "</head><body><p>Text</p></body></html>"
+        )
+        meta = HTMLMetadataExtractor.extract_metadata(html, fallback_url="https://example.com/section/")
+        self.assertEqual(meta["canonical_url"], "https://example.com/blog/post-1")
+        self.assertEqual(meta["published_at"], "2026-05-01")
+
+        # Fallback URL when canonical is absent
+        html_no_canon = "<html><head><title>Test Title</title></head><body><p>Text</p></body></html>"
+        meta_no_canon = HTMLMetadataExtractor.extract_metadata(html_no_canon, fallback_url="https://example.com/page")
+        self.assertEqual(meta_no_canon["canonical_url"], "https://example.com/page")
 
         # IPv6 transition and mapped loopback/private
         self.assertFalse(is_safe_retrieval_url("http://[::ffff:127.0.0.1]/"))
@@ -441,6 +462,15 @@ class TestDeterministicQueryPipeline(unittest.TestCase):
         # deep mode: up to 2 expansions
         ctx_deep = pipeline.process("Python asyncio tutorial", mode="deep")
         self.assertLessEqual(len(ctx_deep.expanded_queries), 2)
+
+    def test_query_pipeline_site_operator_and_plus_site(self) -> None:
+        raw = "python asyncio +site:https://docs.python.org/3/ -site:http://bad.com:8080/path site:www.github.com"
+        proc = QueryProcessor.parse_and_normalize(raw)
+        self.assertIn("docs.python.org", proc.include_domains)
+        self.assertIn("github.com", proc.include_domains)
+        self.assertIn("bad.com", proc.exclude_domains)
+        self.assertNotIn("https://", proc.include_domains)
+        self.assertNotIn(":8080", proc.exclude_domains)
 
 
 class TestRetrievalModelsAndBudget(unittest.TestCase):
@@ -613,6 +643,38 @@ class TestRetrievalServiceIntegration(unittest.TestCase):
             self.assertEqual(len(resp.results), 1)
             self.assertEqual(len(resp.results[0].evidence), 0)
             self.assertEqual(resp.results[0].snippet, "Snippet text here")
+
+    def test_retrieval_service_concurrency_safety(self) -> None:
+        def custom_search_1(q: str, **kwargs: Any) -> dict[str, Any]:
+            return {"results": [{"url": "https://a.com", "title": "A"}]}
+
+        def custom_search_2(q: str, **kwargs: Any) -> dict[str, Any]:
+            return {"results": [{"url": "https://b.com", "title": "B"}]}
+
+        svc1 = get_retrieval_service(search_func=custom_search_1)
+        svc2 = get_retrieval_service(search_func=custom_search_2)
+
+        # svc1 and svc2 must be independent instances with uncorrupted search_funcs
+        self.assertIsNot(svc1, svc2)
+        self.assertEqual(svc1.search_func, custom_search_1)
+        self.assertEqual(svc2.search_func, custom_search_2)
+
+    def test_freshness_scoring_with_published_at(self) -> None:
+        mock_raw_results = [
+            {
+                "url": "https://example.com/2026-report",
+                "title": "2026 Annual Report",
+                "content": "Summary of events in 2026.",
+                "published_at": "2026-01-15T00:00:00Z",
+                "engine": "google",
+                "score": 0.8,
+            }
+        ]
+        with patch.object(self.service, "_fetch_query_results", return_value=mock_raw_results):
+            resp = self.service.execute_retrieval(query="2026 report", mode="fast")
+            self.assertEqual(len(resp.results), 1)
+            self.assertEqual(resp.results[0].score_components.freshness, 1.0)
+            self.assertGreater(resp.results[0].score, 0.5)
 
 
 if __name__ == "__main__":

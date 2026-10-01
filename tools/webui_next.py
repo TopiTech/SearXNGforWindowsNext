@@ -267,6 +267,7 @@ def _scrape_url_direct(
         return {
             "url": clean_url,
             "content": content_text,
+            "raw_html": downloaded,
             "is_truncated": is_truncated,
             "original_length": orig_len,
         }
@@ -1059,7 +1060,7 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
 
   function estimateTokens(text) {
     if (!text) return 0;
-    var cjk = (text.match(/[\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff]/g) || []).length;
+    var cjk = (text.match(/[\\u3000-\\u303f\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uff00-\\uffef]/g) || []).length;
     var other = text.length - cjk;
     return Math.round(cjk / 1.5 + other / 4.0);
   }
@@ -2545,7 +2546,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       <div id="section-settings-engines">
         <div class="engine-toolbar">
           <div class="engine-search-wrap">
-            <input type="text" id="engine-search-input" class="engine-search-input" placeholder="エンジン名やカテゴリーで絞り込み...">
+            <input type="text" id="engine-search-input" class="engine-search-input" placeholder="エンジン名やカテゴリーで絞り込み..." aria-label="検索エンジンの絞り込み">
           </div>
           <div class="engine-bulk-actions">
             <button type="button" class="btn btn-sm" id="btn-enable-all-cat">カテゴリー内を全有効化</button>
@@ -2732,7 +2733,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
       function estimateTokens(text) {
         if (!text) return 0;
-        var cjk = (text.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/g) || []).length;
+        var cjk = (text.match(/[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef]/g) || []).length;
         var other = text.length - cjk;
         return Math.round(cjk / 1.5 + other / 4.0);
       }
@@ -3484,6 +3485,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           var chk = document.createElement('input');
           chk.type = 'checkbox';
           chk.checked = !!e.enabled;
+          chk.setAttribute('aria-label', (e.name || '検索エンジン') + ' の有効化/無効化');
           chk.addEventListener('change', function () {
             e.enabled = chk.checked;
             e.status = e.enabled ? 'online' : 'disabled';
@@ -3755,6 +3757,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
               var copyBtn = document.createElement('button');
               copyBtn.type = 'button';
               copyBtn.className = 'btn btn-sm';
+              copyBtn.setAttribute('aria-label', it.title + ' の設定コードをコピー');
               copyBtn.innerHTML = '📋 コピー';
               copyBtn.addEventListener('click', function () {
                 copyWithFeedback(it.code, copyBtn, '✅ コピー済');
@@ -3806,7 +3809,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       document.addEventListener('keydown', function (e) {
         var active = document.activeElement;
         var qInput = document.getElementById('q');
-        var isEditing = active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable);
+        var isEditing = active && (['INPUT', 'TEXTAREA', 'SELECT'].indexOf(active.tagName) !== -1 || active.isContentEditable);
         if ((e.key === '/' && active !== qInput && !isEditing) ||
             ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) {
           e.preventDefault();
