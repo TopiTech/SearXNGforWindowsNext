@@ -63,7 +63,7 @@ class FusionConfig:
         k: float | None = None,
         consensus_weight: float | None = None,
     ) -> None:
-        object.__setattr__(self, "rrf_k", int(k) if k is not None else int(rrf_k))
+        object.__setattr__(self, "rrf_k", int(k) if k is not None else rrf_k)
         object.__setattr__(
             self,
             "consensus_bonus_per_engine",

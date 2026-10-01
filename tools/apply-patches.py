@@ -2570,7 +2570,7 @@ def run_all_patches(
                     name=spec.description,
                     target_path=spec.target_path,
                     severity=spec.severity,
-                    status=str(res),
+                    status=res,
                 )
             )
     return results

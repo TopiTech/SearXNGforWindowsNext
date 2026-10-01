@@ -941,7 +941,7 @@ def execute_scrape_pipeline(
     clean_url = (url or "").strip()
     clean_q = (focus_query or "").strip()
     try:
-        max_len = max(500, min(int(max_length), 50000))
+        max_len = max(500, min(max_length, 50000))
     except (ValueError, TypeError):
         max_len = 8000
 
@@ -1163,17 +1163,17 @@ def execute_unified_search(
         }
 
     try:
-        max_res = max(1, min(int(max_results), 50))
+        max_res = max(1, min(max_results, 50))
     except (ValueError, TypeError):
         max_res = 5
 
     try:
-        max_tok = max(500, min(int(max_tokens), 16000))
+        max_tok = max(500, min(max_tokens, 16000))
     except (ValueError, TypeError):
         max_tok = 3000
 
     try:
-        scrape_len = max(500, min(int(max_scrape_length), 50000))
+        scrape_len = max(500, min(max_scrape_length, 50000))
     except (ValueError, TypeError):
         scrape_len = 8000
 

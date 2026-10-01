@@ -172,7 +172,9 @@ def _scrape_url_direct(
             ip_raw = res[4][0]
             if webapp_mod._is_ip_blocked(ip_raw):
                 raise blocked_exc_cls(f"Blocked: {host} resolves to a private/reserved IP: {ip_raw}")
-            valid_ips.append(str(ip_raw))
+            ip_str = str(ip_raw)
+            if ip_str not in valid_ips:
+                valid_ips.append(ip_str)
         if not valid_ips:
             raise blocked_exc_cls(f"Could not find a global IP for {host}")
         v4_ips = [ip for ip in valid_ips if ":" not in ip]
@@ -300,12 +302,12 @@ def _search_in_process(
         }
 
     try:
-        count_int = max(1, min(int(count), 50))
+        count_int = max(1, min(count, 50))
     except (ValueError, TypeError):
         count_int = 5
 
     try:
-        page_int = max(1, min(int(pageno), 100))
+        page_int = max(1, min(pageno, 100))
     except (ValueError, TypeError):
         page_int = 1
 
@@ -648,10 +650,10 @@ def get_engines_settings_data(
 
     # Read cookies if available
     cookies = request_cookies or {}
-    cookie_disabled = str(cookies.get("disabled_engines", "")).strip()
+    cookie_disabled = (cookies.get("disabled_engines") or "").strip()
     if cookie_disabled:
         disabled_set.update(c.strip() for c in cookie_disabled.split(",") if c.strip())
-    cookie_enabled = str(cookies.get("enabled_engines", "")).strip()
+    cookie_enabled = (cookies.get("enabled_engines") or "").strip()
     if cookie_enabled:
         enabled_set.update(c.strip() for c in cookie_enabled.split(",") if c.strip())
 
@@ -728,7 +730,7 @@ def get_engines_settings_data(
         status = "suspended" if suspend_sec > 0 else ("online" if is_enabled else "disabled")
 
         med_ms = None
-        if histogram_func:
+        if histogram_func is not None:
             with contextlib.suppress(Exception):
                 h = histogram_func("engine", name, "time", "total")
                 if h is not None and getattr(h, "count", 0) > 0 and hasattr(h, "percentage"):
@@ -811,8 +813,10 @@ def save_engines_settings_data(
         en_str = ",".join(clean_en)
 
     if response is not None and hasattr(response, "set_cookie"):
-        response.set_cookie("disabled_engines", dis_str, max_age=cookie_max_age, path="/")
-        response.set_cookie("enabled_engines", en_str, max_age=cookie_max_age, path="/")
+        if "disabled_engines" in payload:
+            response.set_cookie("disabled_engines", dis_str, max_age=cookie_max_age, path="/")
+        if "enabled_engines" in payload:
+            response.set_cookie("enabled_engines", en_str, max_age=cookie_max_age, path="/")
         if "safesearch" in payload:
             response.set_cookie("safesearch", str(payload["safesearch"]), max_age=cookie_max_age, path="/")
 
@@ -3745,6 +3749,10 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         document.getElementById('pref-safesearch').value = '1';
         document.getElementById('pref-default-count').value = '10';
         document.getElementById('pref-default-tokens').value = '3000';
+        localStorage.removeItem('sxng_pref_mode');
+        localStorage.removeItem('sxng_pref_safesearch');
+        localStorage.removeItem('sxng_pref_count');
+        localStorage.removeItem('sxng_pref_tokens');
         showToast('初期設定を復元しました');
       });
 
@@ -3850,7 +3858,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       // Global keyboard shortcuts
       document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
-          var toast = document.getElementById('toast');
+          var toast = document.getElementById('toast-notice');
           if (toast && toast.classList.contains('show')) {
             toast.classList.remove('show');
           }
@@ -4140,13 +4148,13 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         )
 
         inc_domains = _parse_domain_list(
-            request.args.getlist("site")
+            request.values.getlist("site")
             or request.values.get("include_domains")
             or payload.get("include_domains")
             or payload.get("site")
         )
         exc_domains = _parse_domain_list(
-            request.args.getlist("exclude_site")
+            request.values.getlist("exclude_site")
             or request.values.get("exclude_domains")
             or payload.get("exclude_domains")
             or payload.get("exclude_site")
@@ -4209,13 +4217,13 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         engines = request.values.get("engines") or payload.get("engines") or ""
         time_range = request.values.get("time_range") or payload.get("time_range") or ""
         inc_domains = _parse_domain_list(
-            request.args.getlist("site")
+            request.values.getlist("site")
             or request.values.get("include_domains")
             or payload.get("include_domains")
             or payload.get("site")
         )
         exc_domains = _parse_domain_list(
-            request.args.getlist("exclude_site")
+            request.values.getlist("exclude_site")
             or request.values.get("exclude_domains")
             or payload.get("exclude_domains")
             or payload.get("exclude_site")

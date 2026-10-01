@@ -149,17 +149,17 @@ class HTMLMetadataExtractor:
                 t_meta = trafilatura.extract_metadata(raw_html)
                 if t_meta:
                     if t_meta.url:
-                        out["canonical_url"] = str(t_meta.url).strip()
+                        out["canonical_url"] = t_meta.url.strip()
                     if t_meta.title:
-                        out["title"] = str(t_meta.title).strip()
+                        out["title"] = t_meta.title.strip()
                     if t_meta.author:
-                        out["author"] = str(t_meta.author).strip()
+                        out["author"] = t_meta.author.strip()
                     if t_meta.date:
-                        out["published_at"] = str(t_meta.date).strip()
+                        out["published_at"] = t_meta.date.strip()
                         out["date_source"] = "trafilatura"
                         out["date_confidence"] = "medium"
                     if getattr(t_meta, "language", None):
-                        out["language"] = str(t_meta.language).strip()
+                        out["language"] = t_meta.language.strip()
             except (AttributeError, KeyError, TypeError, ValueError, IndexError):
                 pass
 

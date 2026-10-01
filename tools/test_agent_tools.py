@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import unittest
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 # Ensure tools directory is in sys.path
@@ -809,6 +810,63 @@ class TestSearXNGCLI(unittest.TestCase):
         self.assertTrue(searxng_cli._is_url_arg("https://example.com/test"))
         self.assertFalse(searxng_cli._is_url_arg("https://example.com test query"))
         self.assertFalse(searxng_cli._is_url_arg("normal text"))
+
+
+class TestWebUINextRegression(unittest.TestCase):
+    """Regression tests for SearXNG Next WebUI fixes."""
+
+    def test_save_engines_settings_data_preserves_unspecified_cookies(self) -> None:
+        """Saving general preferences must not overwrite/clear disabled_engines or enabled_engines."""
+        import webui_next
+
+        class MockResponse:
+            def __init__(self) -> None:
+                self.cookies: dict[str, str] = {}
+
+            def set_cookie(self, key: str, value: str, **kwargs: Any) -> None:
+                self.cookies[key] = value
+
+        resp = MockResponse()
+        payload = {"safesearch": 2}
+        result = webui_next.save_engines_settings_data(None, payload, response=resp)
+
+        self.assertTrue(result["success"])
+        self.assertIn("safesearch", resp.cookies)
+        self.assertEqual(resp.cookies["safesearch"], "2")
+        self.assertNotIn("disabled_engines", resp.cookies)
+        self.assertNotIn("enabled_engines", resp.cookies)
+
+    def test_save_engines_settings_data_sets_specified_engine_cookies(self) -> None:
+        """Explicitly passed engine settings must set the corresponding cookies."""
+        import webui_next
+
+        class MockResponse:
+            def __init__(self) -> None:
+                self.cookies: dict[str, str] = {}
+
+            def set_cookie(self, key: str, value: str, **kwargs: Any) -> None:
+                self.cookies[key] = value
+
+        resp = MockResponse()
+        payload = {"disabled_engines": ["duckduckgo", "brave"], "enabled_engines": ["google"]}
+        result = webui_next.save_engines_settings_data(None, payload, response=resp)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(resp.cookies.get("disabled_engines"), "duckduckgo,brave")
+        self.assertEqual(resp.cookies.get("enabled_engines"), "google")
+
+    def test_ui_toast_and_preferences_script_integrity(self) -> None:
+        """Verify DOM IDs and JavaScript event bindings in WebUI Next HTML template."""
+        import webui_next
+
+        html = webui_next.AI_WORKSPACE_HTML
+        # 1. Toast notice DOM element exists
+        self.assertIn('id="toast-notice"', html)
+        # 2. Escape shortcut operates on toast-notice
+        self.assertIn("document.getElementById('toast-notice')", html)
+        # 3. Preferences reset handler cleans localStorage
+        self.assertIn("localStorage.removeItem('sxng_pref_mode')", html)
+        self.assertIn("localStorage.removeItem('sxng_pref_safesearch')", html)
 
 
 if __name__ == "__main__":

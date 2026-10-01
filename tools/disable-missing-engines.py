@@ -5,7 +5,7 @@ import tempfile
 import time
 
 try:
-    import yaml
+    import yaml  # type: ignore[untyped-import]
 except ImportError:
     yaml = None
 
