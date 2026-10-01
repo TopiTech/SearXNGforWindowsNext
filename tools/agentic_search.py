@@ -25,6 +25,11 @@ from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
+import deduplication
+import retrieval_models
+import retrieval_service
+import url_normalizer
+
 # High-authority primary domains (Documentation, Source Repositories, Standards)
 DEFAULT_BOOST_DOMAINS: dict[str, float] = {
     # Tech documentation
@@ -186,6 +191,13 @@ class SearchResultItem:
     full_content: str = ""
     scrape_error: str = ""
     is_scraped: bool = False
+    normalized_url: str = ""
+    canonical_url: str = ""
+    duplicate_urls: list[str] = field(default_factory=list)
+    source_type: str = "general"
+    score_components: dict[str, float] = field(default_factory=dict)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    security_flags: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert item to serializable dictionary."""
@@ -199,6 +211,20 @@ class SearchResultItem:
             "highlights": self.highlights,
             "is_scraped": self.is_scraped,
         }
+        if self.normalized_url:
+            data["normalized_url"] = self.normalized_url
+        if self.canonical_url:
+            data["canonical_url"] = self.canonical_url
+        if self.duplicate_urls:
+            data["duplicate_urls"] = self.duplicate_urls
+        if self.source_type:
+            data["source_type"] = self.source_type
+        if self.score_components:
+            data["score_components"] = self.score_components
+        if self.evidence:
+            data["evidence"] = self.evidence
+        if self.security_flags:
+            data["security_flags"] = self.security_flags
         if self.published_date:
             data["published_date"] = self.published_date
         if self.scrape_error:
@@ -1063,12 +1089,42 @@ def execute_unified_search(
             norm_mode = "scrape"
         elif norm_depth in ("fast", "json_lite"):
             norm_mode = "fast"
+        elif norm_depth in ("balanced", "retrieval"):
+            norm_mode = "balanced"
         else:
             norm_mode = "deep"
     elif norm_mode == "fast":
         norm_depth = "fast"
+    elif norm_mode in ("balanced", "retrieval"):
+        norm_mode = "balanced"
+        norm_depth = "balanced"
     elif norm_mode not in ("deep", "fast", "scrape"):
         norm_mode = "deep"
+
+    # Balanced Retrieval Pipeline
+    if norm_mode == "balanced":
+        retrieval_resp = execute_retrieval_search(
+            query=raw_input,
+            search_func=search_func,
+            scrape_func=scrape_func,
+            mode="balanced",
+            count=max_results,
+            categories=categories or "",
+            engines=engines or "",
+            time_range=time_range or "",
+            include_domains=include_domains,
+            exclude_domains=exclude_domains,
+            base_url=base_url,
+            timeout=timeout,
+        )
+        out = retrieval_resp.to_dict()
+        out["markdown"] = retrieval_resp.to_markdown()
+        out["rag_prompt"] = TokenBudgeter.build_rag_prompt(raw_input, out["markdown"])
+        out["mode"] = "balanced"
+        out["search_depth"] = norm_depth
+        out["results_count"] = len(out.get("results", []))
+        out["scraped_count"] = sum(1 for r in retrieval_resp.results if r.is_scraped)
+        return out
 
     # 1. URL Scrape Pipeline
     if norm_mode == "scrape":
@@ -1299,6 +1355,36 @@ def execute_deep_search(
         include_domains=include_domains,
         exclude_domains=exclude_domains,
         max_tokens=max_tokens,
+        base_url=base_url,
+        timeout=timeout,
+    )
+
+
+def execute_retrieval_search(
+    query: str,
+    search_func: Callable[..., dict[str, Any]],
+    scrape_func: Callable[..., dict[str, Any]] | None = None,
+    mode: str = "balanced",
+    count: int = 5,
+    categories: str = "",
+    engines: str = "",
+    time_range: str = "",
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+    base_url: str | None = None,
+    timeout: float | None = None,
+) -> retrieval_models.RetrievalResponse:
+    """Execute high-quality retrieval pipeline returning structured GenAI RetrievalResponse."""
+    svc = retrieval_service.RetrievalService(search_func=search_func, scrape_func=scrape_func)
+    return svc.search(
+        query=query,
+        mode=mode,
+        count=count,
+        categories=categories,
+        engines=engines,
+        time_range=time_range,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
         base_url=base_url,
         timeout=timeout,
     )

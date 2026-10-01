@@ -14,12 +14,13 @@
 
 ##  主な特徴
 
--  Windows Native: 組み込みPython環境により、DockerなしでWindows上で直接動作。
--  **AI-First WebUI (`/ai` & ネイティブ統合)**: 外部CDN・フレームワーク不要の超軽量「AI Search & Context Studio」と、既存の `simple` テーマ上でのインライン本文抽出・ワンクリックMarkdown/RAGコピー機能を搭載。
--  GenAI Optimized: LLMのトークン消費を抑える専用の `json_lite` フォーマットおよび HTTP `/deep_search` エンドポイントを搭載。
-- High-Quality Engines: Bing, DuckDuckGo, Mojeekなどの信頼性の高いエンジンを標準で最適化。
-- Auto-Sync Architecture: `searxng/searxng` 本家の最新コードを追従しつつ、Windows固有のパッチを自動適用。常に最新の状態に。
-- Secure & Local: ローカルホストでの動作に特化したセキュアなデフォルト設定。
+- ⚡ **Windows Native**: 組み込みPython環境により、DockerなしでWindows上で直接動作。
+- 🧠 **GenAI Retrieval API (`/api/retrieval` & `json_ai`)**: LLM や AI エージェントが根拠・引用として利用できる高品質な検索結果と見出し単位の根拠パッセージ（Evidence Passages）を提供する検索基盤。Reciprocal Rank Fusion、多言語 BM25 字句再ランキング、決定論的クエリ展開、SSRF 防御を統合。
+- 🎨 **AI-First WebUI (`/ai` & ネイティブ統合)**: 外部CDN・フレームワーク不要の超軽量「AI Search & Context Studio」と、既存の `simple` テーマ上でのインライン本文抽出・ワンクリックMarkdown/RAGコピー機能を搭載。
+- 📦 **GenAI Optimized**: LLMのトークン消費を抑える専用の `json_lite`、新世代 `json_ai` / `evidence_json` フォーマット、および HTTP `/deep_search` エンドポイントを搭載。
+- 🔍 **High-Quality Engines**: Bing, DuckDuckGo, Mojeekなどの信頼性の高いエンジンを標準で最適化。
+- 🔄 **Auto-Sync Architecture**: `searxng/searxng` 本家の最新コードを追従しつつ、Windows固有のパッチを自動適用。常に最新の状態に。
+- 🛡️ **Secure & Local**: ローカルホストでの動作に特化したセキュアなデフォルト設定。SSRF防御およびプロンプトインジェクション検知スキャナを内蔵。
 
 ---
 
@@ -43,13 +44,25 @@
 
 **PowerShell:**
 ```powershell
+# 1. 新世代 GenAI Retrieval API (根拠パッセージ付き)
+Invoke-RestMethod "http://127.0.0.1:8888/api/retrieval?q=SearXNG&mode=balanced" | ConvertTo-Json -Depth 6
+
+# 2. 軽量 json_lite 形式
 Invoke-RestMethod "http://127.0.0.1:8888/search?q=SearXNG&format=json_lite" | ConvertTo-Json -Depth 5
+
+# 3. Deep Search 形式
 Invoke-RestMethod "http://127.0.0.1:8888/deep_search?q=SearXNG&count=3" | ConvertTo-Json -Depth 5
 ```
 
 **curl:**
 ```bash
+# GenAI 向け構造化レスポンス (json_ai)
+curl -G "http://127.0.0.1:8888/api/retrieval" --data-urlencode "q=SearXNG" --data-urlencode "mode=balanced"
+
+# 既存 json_lite 形式 (完全後方互換)
 curl -G "http://127.0.0.1:8888/search" --data-urlencode "q=SearXNG" --data-urlencode "format=json_lite"
+
+# Markdown 形式
 curl -G "http://127.0.0.1:8888/deep_search" --data-urlencode "q=SearXNG" --data-urlencode "format=markdown"
 ```
 
@@ -58,6 +71,36 @@ curl -G "http://127.0.0.1:8888/deep_search" --data-urlencode "q=SearXNG" --data-
 ```powershell
 PowerShell -File .\tools\clean-cache.ps1
 ```
+
+---
+
+## 🧠 高品質 Retrieval API (GenAI / Agent / MCP 向け)
+
+SearXNG for Windows Next は、AI モデル自身が回答を生成するための **信頼性の高い検索結果と根拠パッセージ（Evidence Passages）** を提供する専用の検索基盤です。
+
+詳細なアーキテクチャや仕様は **[docs/RETRIEVAL_API.md](docs/RETRIEVAL_API.md)** をご覧ください。
+
+### 検索モード (`mode`)
+
+| モード | スクレイピング | 特徴・用途 |
+|---|:---:|---|
+| `fast` | なし (0件) | 低レイテンシ重視（スニペット・正規化・RRF・BM25 のみ） |
+| `balanced` (推奨) | 上位3件 | 速度と根拠パッセージのバランス。決定論的クエリ展開1件 |
+| `deep` | 上位6件 | 複数観点クエリ展開（最大2件）、複数ラウンド探索 |
+
+### CLI からの利用
+```powershell
+# 根拠パッセージ付き Retrieval
+.\python\python.exe tools\searxng_cli.py retrieval "FastAPI lifespan"
+
+# 高速モード (JSON 出力)
+.\python\python.exe tools\searxng_cli.py retrieval "python asyncio" --mode fast --json
+```
+
+### MCP (Model Context Protocol) ツール
+- `searxng_retrieval`: 構造化された根拠パッセージを返す推奨ツール
+- `searxng_search`: `mode="balanced"` に対応した汎用検索ツール
+- `searxng_scrape`: SSRF 保護付き本文抽出ツール
 
 ---
 

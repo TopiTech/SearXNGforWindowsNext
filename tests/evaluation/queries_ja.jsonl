@@ -1,0 +1,5 @@
+{"id": "ja_01", "query": "Python 3.12 新機能 asyncio", "intent": "research", "category": "tech"}
+{"id": "ja_02", "query": "FastAPI 使い方 チュートリアル", "intent": "howto", "category": "tech"}
+{"id": "ja_03", "query": "Vue vs React 比較 2026", "intent": "comparison", "category": "tech"}
+{"id": "ja_04", "query": "CVE-2024-38856 セキュリティアドバイザリ", "intent": "research", "category": "security"}
+{"id": "ja_05", "query": "SearXNG 公式 ドキュメント", "intent": "navigation", "category": "nav"}

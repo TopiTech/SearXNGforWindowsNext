@@ -1,0 +1,77 @@
+{
+  "ja_01": {
+    "relevant_domains": ["docs.python.org", "peps.python.org", "gihyo.jp", "qiita.com", "zenn.dev"],
+    "official_domains": ["docs.python.org", "peps.python.org"],
+    "expected_urls": [
+      "https://docs.python.org/3/library/asyncio.html",
+      "https://docs.python.org/ja/3/whatsnew/3.12.html"
+    ]
+  },
+  "ja_02": {
+    "relevant_domains": ["fastapi.tiangolo.com", "qiita.com", "zenn.dev"],
+    "official_domains": ["fastapi.tiangolo.com"],
+    "expected_urls": [
+      "https://fastapi.tiangolo.com/ja/tutorial/"
+    ]
+  },
+  "ja_03": {
+    "relevant_domains": ["react.dev", "vuejs.org", "zenn.dev", "qiita.com"],
+    "official_domains": ["react.dev", "vuejs.org"],
+    "expected_urls": [
+      "https://react.dev/",
+      "https://vuejs.org/guide/introduction.html"
+    ]
+  },
+  "ja_04": {
+    "relevant_domains": ["nvd.nist.gov", "cve.org", "jvn.jp", "github.com"],
+    "official_domains": ["nvd.nist.gov", "cve.org", "jvn.jp"],
+    "expected_urls": [
+      "https://nvd.nist.gov/vuln/detail/CVE-2024-38856"
+    ]
+  },
+  "ja_05": {
+    "relevant_domains": ["docs.searxng.org", "github.com"],
+    "official_domains": ["docs.searxng.org", "github.com"],
+    "expected_urls": [
+      "https://docs.searxng.org/"
+    ]
+  },
+  "en_01": {
+    "relevant_domains": ["docs.python.org", "github.com", "realpython.com"],
+    "official_domains": ["docs.python.org"],
+    "expected_urls": [
+      "https://docs.python.org/3/library/asyncio-eventloop.html",
+      "https://docs.python.org/3/library/asyncio.html"
+    ]
+  },
+  "en_02": {
+    "relevant_domains": ["nginx.org", "docs.nginx.com", "digitalocean.com"],
+    "official_domains": ["nginx.org", "docs.nginx.com"],
+    "expected_urls": [
+      "https://nginx.org/en/docs/http/ngx_http_proxy_module.html"
+    ]
+  },
+  "en_03": {
+    "relevant_domains": ["react.dev", "vuejs.org", "github.com"],
+    "official_domains": ["react.dev", "vuejs.org"],
+    "expected_urls": [
+      "https://react.dev",
+      "https://vuejs.org"
+    ]
+  },
+  "en_04": {
+    "relevant_domains": ["nvd.nist.gov", "cve.org", "github.com", "openwall.com"],
+    "official_domains": ["nvd.nist.gov", "cve.org", "github.com"],
+    "expected_urls": [
+      "https://nvd.nist.gov/vuln/detail/CVE-2024-21626"
+    ]
+  },
+  "en_05": {
+    "relevant_domains": ["docs.searxng.org", "github.com"],
+    "official_domains": ["docs.searxng.org", "github.com"],
+    "expected_urls": [
+      "https://docs.searxng.org/dev/architecture.html",
+      "https://docs.searxng.org/"
+    ]
+  }
+}

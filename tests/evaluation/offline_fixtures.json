@@ -1,0 +1,225 @@
+{
+  "ja_01": {
+    "search_results": [
+      {
+        "url": "https://docs.python.org/ja/3/whatsnew/3.12.html?utm_source=twitter",
+        "title": "Python 3.12 の新機能 — Python 3.12 ドキュメント",
+        "content": "Python 3.12 では asyncio のパフォーマンス改善、タスク監視の効率化、および新しい型パラメータ構文が導入されました。",
+        "engine": "google"
+      },
+      {
+        "url": "https://docs.python.org/3/library/asyncio.html",
+        "title": "asyncio — Asynchronous I/O — Python Documentation",
+        "content": "asyncio is a library to write concurrent code using the async/await syntax in Python 3.12.",
+        "engine": "duckduckgo"
+      },
+      {
+        "url": "https://qiita.com/items/python312-asyncio",
+        "title": "【最新】Python 3.12で新しくなったasyncioのポイントまとめ - Qiita",
+        "content": "Python 3.12における非同期処理の改善点を詳しく解説します。",
+        "engine": "google"
+      },
+      {
+        "url": "https://docs.python.org/ja/3/whatsnew/3.12.html?utm_medium=social",
+        "title": "Python 3.12 の新機能 — Python 3.12 ドキュメント",
+        "content": "Python 3.12 では asyncio のパフォーマンス改善が導入されました。",
+        "engine": "bing"
+      }
+    ],
+    "scraped_pages": {
+      "https://docs.python.org/ja/3/whatsnew/3.12.html": "# Python 3.12 の新機能\n\n## asyncioの改良\nasyncio モジュールのパフォーマンスが大幅に改善され、イベントループのオーバーヘッドが低減されました。\n\n## 新しい型機能\nPEP 695 による型パラメータ構文が導入されました。",
+      "https://docs.python.org/3/library/asyncio.html": "# asyncio — Asynchronous I/O\n\n## Overview\nasyncio is a library to write concurrent code using the async/await syntax.\n\n## Runners\nasyncio.run() executes the passed coroutine."
+    }
+  },
+  "ja_02": {
+    "search_results": [
+      {
+        "url": "https://fastapi.tiangolo.com/ja/tutorial/",
+        "title": "チュートリアル - ユーザーガイド - FastAPI",
+        "content": "FastAPI の基本的な使い方を順を追って学ぶチュートリアルです。型ヒントを用いたAPI開発を体験できます。",
+        "engine": "google"
+      },
+      {
+        "url": "https://fastapi.tiangolo.com/ja/tutorial/first-steps/",
+        "title": "最初のステップ - FastAPI",
+        "content": "最もシンプルなFastAPIファイルの作成方法とサーバーの起動手順を解説します。",
+        "engine": "duckduckgo"
+      },
+      {
+        "url": "https://zenn.dev/articles/fastapi-beginner",
+        "title": "FastAPI入門：Pythonで爆速API開発チュートリアル - Zenn",
+        "content": "初心者向けにFastAPIのルーティングとバリデーションをわかりやすく説明します。",
+        "engine": "google"
+      }
+    ],
+    "scraped_pages": {
+      "https://fastapi.tiangolo.com/ja/tutorial/": "# FastAPI チュートリアル\n\n## はじめに\nFastAPI は現代的で高速な Web フレームワークです。\n\n## インストール\npip install fastapi uvicorn で導入可能です。"
+    }
+  },
+  "ja_03": {
+    "search_results": [
+      {
+        "url": "https://react.dev/",
+        "title": "React – A library for web and user interfaces",
+        "content": "The library for web and native user interfaces. Build user interfaces out of individual pieces called components.",
+        "engine": "google"
+      },
+      {
+        "url": "https://vuejs.org/guide/introduction.html",
+        "title": "Introduction | Vue.js",
+        "content": "Vue is a progressive framework for building user interfaces. Building on standard HTML, CSS, and JavaScript.",
+        "engine": "duckduckgo"
+      },
+      {
+        "url": "https://zenn.dev/topics/react-vs-vue",
+        "title": "React と Vue の違いと選び方徹底比較 2026年版 - Zenn",
+        "content": "コンポーネント設計、状態管理、学習コスト、エコシステムの観点から両者を比較します。",
+        "engine": "google"
+      }
+    ],
+    "scraped_pages": {
+      "https://react.dev/": "# React\n\n## Component-Based\nBuild encapsulated components that manage their own state, then compose them to make complex UIs.",
+      "https://vuejs.org/guide/introduction.html": "# Introduction to Vue\n\n## Progressive Framework\nVue is designed from the ground up to be incrementally adoptable."
+    }
+  },
+  "ja_04": {
+    "search_results": [
+      {
+        "url": "https://nvd.nist.gov/vuln/detail/CVE-2024-38856",
+        "title": "CVE-2024-38856 Detail - NIST NVD",
+        "content": "Apache OFBiz contains an unauthenticated Remote Code Execution vulnerability due to flawed path authorization.",
+        "engine": "google"
+      },
+      {
+        "url": "https://jvn.jp/vu/JVNVU9123456/",
+        "title": "JVNVU#9123456: Apache OFBizにおけるリモートコード実行の脆弱性 (CVE-2024-38856)",
+        "content": "認証なしで任意のコードが実行可能な深刻な脆弱性が報告されています。",
+        "engine": "duckduckgo"
+      }
+    ],
+    "scraped_pages": {
+      "https://nvd.nist.gov/vuln/detail/CVE-2024-38856": "# CVE-2024-38856\n\n## Vulnerability Overview\nFlawed override view functionality in Apache OFBiz allows unauthenticated users to execute arbitrary code."
+    }
+  },
+  "ja_05": {
+    "search_results": [
+      {
+        "url": "https://docs.searxng.org/",
+        "title": "SearXNG Documentation — SearXNG documentation",
+        "content": "SearXNG is a free internet metasearch engine which aggregates results from various search services and databases.",
+        "engine": "google"
+      },
+      {
+        "url": "https://github.com/searxng/searxng",
+        "title": "GitHub - searxng/searxng: SearXNG is a free internet metasearch engine",
+        "content": "SearXNG metasearch engine source repository and issue tracker.",
+        "engine": "duckduckgo"
+      }
+    ],
+    "scraped_pages": {
+      "https://docs.searxng.org/": "# SearXNG Documentation\n\n## Overview\nSearXNG is a privacy-respecting, hackable metasearch engine."
+    }
+  },
+  "en_01": {
+    "search_results": [
+      {
+        "url": "https://docs.python.org/3/library/asyncio-eventloop.html",
+        "title": "Event Loop — Python Documentation",
+        "content": "The event loop is the core of every asyncio application. It runs asynchronous tasks and callbacks.",
+        "engine": "google"
+      },
+      {
+        "url": "https://docs.python.org/3/library/asyncio.html",
+        "title": "asyncio — Asynchronous I/O — Python Documentation",
+        "content": "asyncio is a library to write concurrent code using the async/await syntax.",
+        "engine": "duckduckgo"
+      },
+      {
+        "url": "https://realpython.com/async-io-python/",
+        "title": "Async IO in Python: A Complete Walkthrough – Real Python",
+        "content": "A comprehensive guide to understanding async IO and the asyncio event loop in Python.",
+        "engine": "bing"
+      }
+    ],
+    "scraped_pages": {
+      "https://docs.python.org/3/library/asyncio-eventloop.html": "# Event Loop\n\n## Core Concepts\nThe event loop is the central execution mechanism of asyncio."
+    }
+  },
+  "en_02": {
+    "search_results": [
+      {
+        "url": "https://nginx.org/en/docs/http/ngx_http_proxy_module.html",
+        "title": "Module ngx_http_proxy_module - NGINX Documentation",
+        "content": "The ngx_http_proxy_module module allows passing requests to another server using the proxy_pass directive.",
+        "engine": "google"
+      },
+      {
+        "url": "https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/",
+        "title": "NGINX Reverse Proxy Guide - F5 NGINX",
+        "content": "Configure NGINX as an HTTP reverse proxy and load balancer for upstream servers.",
+        "engine": "duckduckgo"
+      }
+    ],
+    "scraped_pages": {
+      "https://nginx.org/en/docs/http/ngx_http_proxy_module.html": "# ngx_http_proxy_module\n\n## proxy_pass Directive\nSets the protocol and address of the proxied server and an optional URI to which the location should be mapped."
+    }
+  },
+  "en_03": {
+    "search_results": [
+      {
+        "url": "https://react.dev",
+        "title": "React – The library for web and native user interfaces",
+        "content": "React lets you build user interfaces out of individual pieces called components.",
+        "engine": "google"
+      },
+      {
+        "url": "https://vuejs.org",
+        "title": "Vue.js - The Progressive JavaScript Framework",
+        "content": "An approachable, performant and versatile framework for building web user interfaces.",
+        "engine": "duckduckgo"
+      }
+    ],
+    "scraped_pages": {
+      "https://react.dev": "# React Documentation\n\n## Virtual DOM and Performance\nReact optimizes rendering through efficient reconciliation.",
+      "https://vuejs.org": "# Vue.js Documentation\n\n## Reactive System\nVue provides compile-time optimized reactive state tracking."
+    }
+  },
+  "en_04": {
+    "search_results": [
+      {
+        "url": "https://nvd.nist.gov/vuln/detail/CVE-2024-21626",
+        "title": "CVE-2024-21626 Detail - NIST NVD",
+        "content": "runc internal file descriptor leakage enables container breakout and host filesystem access.",
+        "engine": "google"
+      },
+      {
+        "url": "https://github.com/opencontainers/runc/security/advisories/GHSA-xr7r-f8xq-vfvv",
+        "title": "Security Advisory: runc Leaky file descriptors - GitHub",
+        "content": "Official upstream advisory for container escape flaw in runc versions <= 1.1.11.",
+        "engine": "duckduckgo"
+      }
+    ],
+    "scraped_pages": {
+      "https://nvd.nist.gov/vuln/detail/CVE-2024-21626": "# CVE-2024-21626\n\n## Description\nIn runc 1.1.11 and earlier, internal file descriptors are leaked into container init processes."
+    }
+  },
+  "en_05": {
+    "search_results": [
+      {
+        "url": "https://docs.searxng.org/dev/architecture.html",
+        "title": "Architecture — SearXNG documentation",
+        "content": "Technical architecture, query processing pipeline, and engine aggregation design in SearXNG.",
+        "engine": "google"
+      },
+      {
+        "url": "https://github.com/searxng/searxng",
+        "title": "GitHub - searxng/searxng: SearXNG metasearch engine",
+        "content": "SearXNG metasearch engine source code repository.",
+        "engine": "duckduckgo"
+      }
+    ],
+    "scraped_pages": {
+      "https://docs.searxng.org/dev/architecture.html": "# SearXNG Architecture\n\n## Engine Dispatcher\nEngines execute asynchronously using HTTP connection pools."
+    }
+  }
+}

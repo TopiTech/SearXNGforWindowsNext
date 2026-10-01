@@ -420,14 +420,53 @@ catch {
 
 ---
 
+## Retrieval API & Quality Evaluation Framework
+
+### Modular Service Architecture
+
+The Retrieval API is implemented as standalone, testable Python modules inside `tools/`:
+
+- **`tools/url_normalizer.py`**: Deterministic URL normalization, tracking parameter stripping (preserving signed URLs), and SSRF validation.
+- **`tools/deduplication.py`**: 6-phase progressive deduplication (exact URL, canonical, title, fuzzy title, snippet similarity, mirror clustering).
+- **`tools/rank_fusion.py`**: Reciprocal Rank Fusion (RRF `1/(k+rank)`) with consensus and multi-query bonuses.
+- **`tools/lexical_rerank.py`**: Multilingual BM25 reranking with English word tokens and Japanese/CJK character 2/3-grams.
+- **`tools/passage_chunker.py`**: Heading-aware article chunking, metadata extraction (via `lxml` + `trafilatura`), and adversarial prompt injection scanning.
+- **`tools/query_pipeline.py`**: Deterministic NFKC query normalization, 8-class intent classification, and budget-governed query expansion.
+- **`tools/retrieval_models.py`**: GenAI schema serialization (`schema_version: "1.0"`), mode budget specifications (`fast`, `balanced`, `deep`), and citation quality scoring.
+- **`tools/retrieval_service.py`**: Unified orchestrator unifying HTTP (`/api/retrieval`), WebUI (`/deep_search`), MCP (`searxng_retrieval`), and CLI.
+
+### Running Quality Benchmarks
+
+The benchmark suite in `tests/evaluation/` provides deterministic offline quality evaluation and optional live instance benchmarking:
+
+```powershell
+# Run benchmark across all modes (fast, balanced, deep)
+.\python\python.exe tests\evaluation\run_benchmark.py --json
+
+# Run unit and integration tests
+.\python\python.exe tools\test_retrieval_pipeline.py
+```
+
+Benchmark output metrics include:
+- **Precision@5**, **Recall@10**, **MRR**, **nDCG@10**
+- **Deduplication Rate** in Top 10
+- **Official Source Presence** in top results
+- **Citable Evidence Passage Rate**
+- **Content Extraction Success Rate**
+- **Latency (Mean & p95)**
+- **Payload Character Count**
+- **Partial Failure Rate**
+
+---
+
 ## Summary: Why This Design?
 
 ✅ **Pros:**
 - Stays synchronized with upstream bug fixes & security updates
 - Idempotent patches safe for automation
 - Windows-native (no Docker, WSL, or system dependencies)
-- GenAI-optimized (token-efficient responses)
-- SSRF-protected content extraction
+- GenAI-optimized (token-efficient responses, structured evidence passages)
+- SSRF-protected content extraction with prompt injection defense
 - Clear separation: tools/ for automation, patches never in sync scope
 
 ✅ **Not suitable for:**

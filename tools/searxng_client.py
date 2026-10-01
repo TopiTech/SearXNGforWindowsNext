@@ -476,6 +476,55 @@ def search_deep(
     )
 
 
+def retrieval_search(
+    query: str,
+    mode: str = "balanced",
+    count: int = 5,
+    categories: str = "",
+    engines: str = "",
+    time_range: str = "",
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+    base_url: str | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Execute high-quality retrieval pipeline returning structured GenAI schema dict.
+
+    Args:
+        query: Search keywords or research question.
+        mode: Search mode: 'fast' (no scrape), 'balanced' (top pages scraped + passages), 'deep' (full deep search).
+        count: Number of top results to return (default 5).
+        categories: Optional category filter (e.g. 'it', 'general').
+        engines: Optional engine filter (e.g. 'bing,duckduckgo').
+        time_range: Optional time range ('day', 'week', 'month', 'year').
+        include_domains: Optional list of domains to restrict to.
+        exclude_domains: Optional list of domains to exclude.
+        base_url: Optional base URL override.
+        timeout: Optional request timeout in seconds.
+
+    Returns:
+        dict: Conforming to schema_version 1.0 with attached 'markdown'.
+    """
+    agentic_mod = _load_agentic_search()
+    resp = agentic_mod.execute_retrieval_search(
+        query=query,
+        search_func=search,
+        scrape_func=scrape,
+        mode=mode,
+        count=count,
+        categories=categories,
+        engines=engines,
+        time_range=time_range,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
+        base_url=base_url,
+        timeout=timeout,
+    )
+    data = resp.to_dict()
+    data["markdown"] = resp.to_markdown()
+    return data
+
+
 def format_deep_search_markdown(deep_data: dict[str, Any]) -> str:
     """Format deep search results into high-density Markdown for AI agents."""
     error = deep_data.get("error")
@@ -492,7 +541,13 @@ def format_deep_search_markdown(deep_data: dict[str, Any]) -> str:
 
 
 def format_markdown(data: dict[str, Any]) -> str:
-    """Unified Markdown formatter handling `deep`, `fast` (`json_lite`), and `scrape` results."""
+    """Unified Markdown formatter handling `retrieval`, `deep`, `fast` (`json_lite`), and `scrape` results."""
+    # Check if this is a structured retrieval schema response
+    if "schema_version" in data and "results" in data:
+        md = data.get("markdown")
+        if md:
+            return str(md)
+
     mode = str(data.get("mode", "")).lower()
     if mode == "scrape" or ("url" in data and "results" not in data):
         md = data.get("markdown")
@@ -504,7 +559,7 @@ def format_markdown(data: dict[str, Any]) -> str:
     if md and not data.get("error"):
         return str(md)
 
-    if mode == "deep":
+    if mode in ("deep", "balanced"):
         return format_deep_search_markdown(data)
 
     return format_search_markdown(data)

@@ -1,0 +1,5 @@
+{"id": "en_01", "query": "python asyncio event loop documentation", "intent": "code", "category": "tech"}
+{"id": "en_02", "query": "how to configure reverse proxy nginx", "intent": "howto", "category": "sysadmin"}
+{"id": "en_03", "query": "react vs vue comparison performance", "intent": "comparison", "category": "tech"}
+{"id": "en_04", "query": "CVE-2024-21626 runc container breakout advisory", "intent": "research", "category": "security"}
+{"id": "en_05", "query": "SearXNG architecture overview", "intent": "research", "category": "tech"}

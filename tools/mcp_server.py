@@ -53,8 +53,8 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                 },
                 "mode": {
                     "type": "string",
-                    "description": "Optional execution mode: 'auto' (default), 'fast' (json_lite), 'deep' (BM25 + scrape), or 'scrape'.",
-                    "enum": ["auto", "fast", "deep", "scrape"],
+                    "description": "Optional execution mode: 'auto' (default), 'fast' (json_lite), 'balanced' (top passages), 'deep' (BM25 + scrape), or 'scrape'.",
+                    "enum": ["auto", "fast", "balanced", "deep", "scrape"],
                     "default": "auto",
                 },
                 "search_depth": {
@@ -179,6 +179,65 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                     "default": 3000,
                     "minimum": 500,
                     "maximum": 16000,
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "searxng_retrieval",
+        "description": (
+            "High-quality retrieval API for AI agents and LLMs. Returns structured evidence "
+            "passages with stable source IDs, heading context, relevance scores, and prompt injection defense."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query or research question.",
+                },
+                "mode": {
+                    "type": "string",
+                    "description": "Retrieval mode: 'fast' (no scrape), 'balanced' (top pages scraped + passages), 'deep' (full multi-query deep search).",
+                    "enum": ["fast", "balanced", "deep"],
+                    "default": "balanced",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "Number of top results to return (default 5, min 1, max 20).",
+                    "default": 5,
+                    "minimum": 1,
+                    "maximum": 20,
+                },
+                "categories": {
+                    "type": "string",
+                    "description": "Optional search category filter (e.g. 'it', 'general').",
+                },
+                "engines": {
+                    "type": "string",
+                    "description": "Optional comma-separated engine list (e.g. 'bing,duckduckgo').",
+                },
+                "time_range": {
+                    "type": "string",
+                    "description": "Optional time filter.",
+                    "enum": ["day", "week", "month", "year"],
+                },
+                "include_domains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of domains to restrict to.",
+                },
+                "exclude_domains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of domains to exclude.",
+                },
+                "format": {
+                    "type": "string",
+                    "description": "Output format: 'markdown' (default) or 'json_ai' (structured schema).",
+                    "enum": ["markdown", "json_ai"],
+                    "default": "markdown",
                 },
             },
             "required": ["query"],
@@ -319,14 +378,27 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         exclude_domains = [str(d) for d in raw_exc] if isinstance(raw_exc, list) else None
 
         use_unified = (
-            mode in ("fast", "deep", "scrape")
+            mode in ("fast", "balanced", "deep", "scrape")
             or search_depth is not None
             or bool(include_domains)
             or bool(exclude_domains)
             or (mode == "auto" and _is_url_query(query))
         )
 
-        if use_unified:
+        if mode == "balanced":
+            data = searxng_client.retrieval_search(
+                query=query,
+                mode="balanced",
+                count=count,
+                categories=categories,
+                engines=engines,
+                time_range=time_range,
+                include_domains=include_domains,
+                exclude_domains=exclude_domains,
+            )
+            is_error = bool(data.get("error"))
+            formatted_text = searxng_client.format_markdown(data)
+        elif use_unified:
             try:
                 max_tokens = int(arguments.get("max_tokens", 3000))
             except (ValueError, TypeError):
@@ -357,6 +429,49 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
             )
             is_error = bool(data.get("error"))
             formatted_text = searxng_client.format_search_markdown(data)
+
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "content": [{"type": "text", "text": formatted_text}],
+                "isError": is_error,
+            },
+        }
+
+    elif tool_name == "searxng_retrieval":
+        query = str(arguments.get("query") or "")
+        ret_mode = str(arguments.get("mode") or "balanced").strip().lower()
+        if ret_mode not in ("fast", "balanced", "deep"):
+            ret_mode = "balanced"
+        try:
+            count = int(arguments.get("count", 5))
+        except (ValueError, TypeError):
+            count = 5
+        categories = str(arguments.get("categories") or "")
+        engines = str(arguments.get("engines") or "")
+        time_range = str(arguments.get("time_range") or "")
+        raw_inc = arguments.get("include_domains")
+        include_domains = [str(d) for d in raw_inc] if isinstance(raw_inc, list) else None
+        raw_exc = arguments.get("exclude_domains")
+        exclude_domains = [str(d) for d in raw_exc] if isinstance(raw_exc, list) else None
+        out_format = str(arguments.get("format") or "markdown").strip().lower()
+
+        data = searxng_client.retrieval_search(
+            query=query,
+            mode=ret_mode,
+            count=count,
+            categories=categories,
+            engines=engines,
+            time_range=time_range,
+            include_domains=include_domains,
+            exclude_domains=exclude_domains,
+        )
+        is_error = bool(data.get("error"))
+        if out_format == "json_ai":
+            formatted_text = json.dumps(data, ensure_ascii=False, indent=2)
+        else:
+            formatted_text = searxng_client.format_markdown(data)
 
         return {
             "jsonrpc": "2.0",

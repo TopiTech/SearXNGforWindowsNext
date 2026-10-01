@@ -36,6 +36,8 @@ if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
 
 import agentic_search
+import retrieval_models
+import retrieval_service
 import searxng_client
 
 
@@ -443,6 +445,72 @@ def execute_server_deep_search(
         base_url=base_url,
         timeout=timeout,
     )
+
+
+def execute_server_retrieval_search(
+    query: str,
+    webapp_mod: Any = None,
+    mode: str = "balanced",
+    count: int = 5,
+    categories: str = "",
+    engines: str = "",
+    time_range: str = "",
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+    base_url: str | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Execute high-quality retrieval pipeline in-process, returning GenAI Structured Schema dict."""
+    count_int = _parse_int(count, default=5, minimum=1, maximum=50)
+
+    def _s_func(
+        query: str,
+        count: int = 15,
+        categories: str = "",
+        engines: str = "",
+        time_range: str = "",
+        base_url: str | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        return _search_in_process(
+            webapp_mod=webapp_mod,
+            query=query,
+            count=count,
+            categories=categories,
+            engines=engines,
+            time_range=time_range,
+            base_url=base_url,
+            timeout=timeout,
+        )
+
+    def _sc_func(
+        url: str,
+        max_length: int = 12000,
+        timeout: float = 6.0,
+    ) -> dict[str, Any]:
+        return _scrape_url_direct(
+            webapp_mod=webapp_mod,
+            url=url,
+            max_length=max_length,
+            timeout=timeout,
+        )
+
+    svc = retrieval_service.RetrievalService(search_func=_s_func, scrape_func=_sc_func)
+    resp = svc.search(
+        query=query,
+        mode=mode,
+        count=count_int,
+        categories=categories,
+        engines=engines,
+        time_range=time_range,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
+        base_url=base_url,
+        timeout=timeout,
+    )
+    data = resp.to_dict()
+    data["markdown"] = resp.to_markdown()
+    return data
 
 
 def execute_scrape_analyze(
@@ -2677,6 +2745,23 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             or payload.get("exclude_site")
         )
 
+        if out_fmt in ("json_ai", "evidence_json", "ai") or mode in ("balanced", "retrieval"):
+            ret_mode = "balanced" if mode in ("balanced", "retrieval", "auto") else str(mode)
+            res = execute_server_retrieval_search(
+                query=query.strip(),
+                webapp_mod=webapp_mod,
+                mode=ret_mode,
+                count=max_results,
+                categories=str(categories),
+                engines=str(engines),
+                time_range=str(time_range),
+                include_domains=inc_domains or None,
+                exclude_domains=exc_domains or None,
+            )
+            if out_fmt in ("markdown", "md"):
+                return Response(res.get("markdown", ""), status=200, mimetype="text/markdown")
+            return jsonify(res), 200
+
         res = execute_server_deep_search(
             query=query.strip(),
             webapp_mod=webapp_mod,
@@ -2692,6 +2777,59 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             mode=str(mode),
             focus_query=str(focus_query),
             max_scrape_length=max_scrape_length,
+        )
+
+        if out_fmt in ("markdown", "md"):
+            return Response(res.get("markdown", ""), status=200, mimetype="text/markdown")
+
+        return jsonify(res), 200
+
+    @app.route("/api/retrieval", methods=["GET", "POST"])
+    def retrieval_api_route() -> Any:
+        """Dedicated GenAI Retrieval API endpoint returning schema_version 1.0 JSON."""
+        payload = request.get_json(silent=True) if request.is_json else None
+        payload = payload if isinstance(payload, dict) else {}
+
+        query = (
+            request.values.get("q")
+            or request.values.get("query")
+            or payload.get("q")
+            or payload.get("query")
+            or ""
+        )
+        if not isinstance(query, str) or not query.strip():
+            return jsonify({"error": "No query", "schema_version": "1.0", "results": []}), 400
+
+        mode = request.values.get("mode") or payload.get("mode") or "balanced"
+        raw_count = request.values.get("count") or request.values.get("n") or payload.get("count")
+        count = _parse_int(raw_count, 5, 1, 50)
+        categories = request.values.get("categories") or payload.get("categories") or ""
+        engines = request.values.get("engines") or payload.get("engines") or ""
+        time_range = request.values.get("time_range") or payload.get("time_range") or ""
+        inc_domains = _parse_domain_list(
+            request.args.getlist("site")
+            or request.values.get("include_domains")
+            or payload.get("include_domains")
+            or payload.get("site")
+        )
+        exc_domains = _parse_domain_list(
+            request.args.getlist("exclude_site")
+            or request.values.get("exclude_domains")
+            or payload.get("exclude_domains")
+            or payload.get("exclude_site")
+        )
+        out_fmt = str(request.values.get("format") or payload.get("format") or "json").strip().lower()
+
+        res = execute_server_retrieval_search(
+            query=query.strip(),
+            webapp_mod=webapp_mod,
+            mode=str(mode),
+            count=count,
+            categories=str(categories),
+            engines=str(engines),
+            time_range=str(time_range),
+            include_domains=inc_domains or None,
+            exclude_domains=exc_domains or None,
         )
 
         if out_fmt in ("markdown", "md"):

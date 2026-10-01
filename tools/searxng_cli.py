@@ -64,9 +64,9 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument(
         "--mode",
         dest="mode",
-        choices=["auto", "fast", "deep", "scrape"],
+        choices=["auto", "fast", "balanced", "deep", "scrape"],
         default="auto",
-        help="Execution mode: 'auto' (URL->scrape, keyword->fast/deep), 'fast' (json_lite), 'deep' (BM25+scrape), 'scrape'",
+        help="Execution mode: 'auto' (URL->scrape, keyword->fast/deep), 'fast' (json_lite), 'balanced' (top passages), 'deep' (BM25+scrape), 'scrape'",
     )
     search_parser.add_argument(
         "-d",
@@ -138,6 +138,63 @@ def build_parser() -> argparse.ArgumentParser:
         dest="as_json",
         action="store_true",
         help="Output raw JSON instead of Markdown",
+    )
+    search_parser.add_argument(
+        "--ai",
+        dest="as_ai",
+        action="store_true",
+        help="Output structured GenAI Retrieval API JSON",
+    )
+
+    # Subcommand: retrieval (GenAI Retrieval API)
+    retrieval_parser = subparsers.add_parser(
+        "retrieval",
+        help="Execute high-quality AI retrieval returning cited evidence passages & GenAI schema",
+    )
+    retrieval_parser.add_argument("query", help="Search keyword(s) or question")
+    retrieval_parser.add_argument(
+        "-n",
+        "--count",
+        type=int,
+        default=5,
+        help="Number of results to return (default: 5)",
+    )
+    retrieval_parser.add_argument(
+        "--mode",
+        dest="mode",
+        choices=["fast", "balanced", "deep"],
+        default="balanced",
+        help="Retrieval mode: 'fast' (no scrape), 'balanced' (top passages), 'deep' (full multi-query passages)",
+    )
+    retrieval_parser.add_argument("-c", "--category", dest="category", default="", help="Category filter")
+    retrieval_parser.add_argument("-e", "--engines", dest="engines", default="", help="Comma-separated engine list")
+    retrieval_parser.add_argument(
+        "-t",
+        "--time-range",
+        dest="time_range",
+        choices=["day", "week", "month", "year"],
+        default="",
+        help="Time range filter",
+    )
+    retrieval_parser.add_argument(
+        "--site",
+        dest="include_domains",
+        action="append",
+        default=[],
+        help="Restrict search to specific domain(s)",
+    )
+    retrieval_parser.add_argument(
+        "--exclude-site",
+        dest="exclude_domains",
+        action="append",
+        default=[],
+        help="Exclude specific domain(s)",
+    )
+    retrieval_parser.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Output GenAI schema JSON (schema_version 1.0)",
     )
 
     # Subcommand: scrape
@@ -277,6 +334,26 @@ def cmd_search(args: argparse.Namespace) -> int:
         or (mode == "auto" and _is_url_arg(args.query))
     )
 
+    if mode == "balanced" or getattr(args, "as_ai", False):
+        ret_mode = mode if mode in ("fast", "balanced", "deep") else "balanced"
+        res = searxng_client.retrieval_search(
+            query=args.query,
+            mode=ret_mode,
+            count=args.count,
+            categories=args.category,
+            engines=args.engines,
+            time_range=args.time_range,
+            include_domains=inc_domains or None,
+            exclude_domains=exc_domains or None,
+            base_url=args.base_url,
+            timeout=args.timeout,
+        )
+        if args.as_json or getattr(args, "as_ai", False):
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+        else:
+            print(searxng_client.format_markdown(res))
+        return 1 if res.get("error") else 0
+
     if use_unified:
         effective_mode = _resolve_effective_mode(mode, depth, args.query)
         res = searxng_client.unified_search(
@@ -371,6 +448,28 @@ def cmd_deep(args: argparse.Namespace) -> int:
     return 1 if res.get("error") else 0
 
 
+def cmd_retrieval(args: argparse.Namespace) -> int:
+    """Handle 'retrieval' subcommand."""
+    res = searxng_client.retrieval_search(
+        query=args.query,
+        mode=args.mode,
+        count=args.count,
+        categories=args.category,
+        engines=args.engines,
+        time_range=args.time_range,
+        include_domains=args.include_domains if args.include_domains else None,
+        exclude_domains=args.exclude_domains if args.exclude_domains else None,
+        base_url=args.base_url,
+        timeout=args.timeout,
+    )
+    if args.as_json:
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+    else:
+        print(searxng_client.format_markdown(res))
+
+    return 1 if res.get("error") else 0
+
+
 def cmd_health(args: argparse.Namespace) -> int:
     """Handle 'health' subcommand."""
     is_healthy, status_msg = searxng_client.check_health(
@@ -405,6 +504,8 @@ def main() -> None:
     exit_code = 0
     if args.command == "search":
         exit_code = cmd_search(args)
+    elif args.command == "retrieval":
+        exit_code = cmd_retrieval(args)
     elif args.command == "deep":
         exit_code = cmd_deep(args)
     elif args.command == "scrape":

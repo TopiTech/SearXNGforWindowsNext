@@ -93,6 +93,10 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Unit tests in tools\test_agentic_search.py failed with exit code $LASTEXITCODE"
     }
+    & ".\python\python.exe" "tools\test_retrieval_pipeline.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unit tests in tools\test_retrieval_pipeline.py failed with exit code $LASTEXITCODE"
+    }
     Write-Host "  -> Running static type check (Pyrefly)..." -ForegroundColor Green
     & ".\python\python.exe" "-m" "pyrefly" "check"
     if ($LASTEXITCODE -ne 0) {
