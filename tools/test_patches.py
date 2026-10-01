@@ -2246,8 +2246,21 @@ class TestAiWebuiPatches(unittest.TestCase):
         )
         patched = apply_patches.patch_simple_index_ai_webui(sample, "index.html")
         self.assertIn('class="sxng-next-badge"', patched)
+        self.assertIn('class="sxng-next-badge-wrap"', patched)
         self.assertIn('class="sxng-ai-home-bar"', patched)
+        self.assertNotIn('<h1>SearXNG</h1><span class="sxng-next-badge"', patched)
         self.assertEqual(apply_patches.patch_simple_index_ai_webui(patched, "index.html"), "ALREADY_APPLIED")
+
+        # Test legacy migration where badge was inside .title
+        legacy_sample = (
+            '<div class="index">\n'
+            '    <div class="title"><h1>SearXNG</h1><span class="sxng-next-badge">Next · AI-First Edition</span></div>\n'
+            "    {% include 'simple/simple_search.html' %}\n"
+            "</div>\n"
+        )
+        migrated = apply_patches.patch_simple_index_ai_webui(legacy_sample, "index.html")
+        self.assertIn('class="sxng-next-badge-wrap"', migrated)
+        self.assertNotIn('<h1>SearXNG</h1><span class="sxng-next-badge"', migrated)
 
     def test_patch_simple_results_ai_webui_injects_and_is_idempotent(self):
         sample = '<div id="results" class="{{ only_template }}">\n    <div id="urls" role="main"></div>\n</div>\n'

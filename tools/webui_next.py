@@ -665,10 +665,20 @@ html.theme-dark {
   transform: translateY(-1px);
   background: rgba(79, 70, 229, 0.2);
 }
+.index .title {
+  margin: 3.5rem auto 0.6rem !important;
+}
+.sxng-next-badge-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 0 auto 1.6rem;
+}
 .sxng-next-badge {
-  display: inline-block;
-  margin-top: 0.25rem;
-  padding: 0.18rem 0.65rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.75rem;
   font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.03em;
@@ -676,6 +686,16 @@ html.theme-dark {
   background: var(--sxng-ai-accent-soft);
   color: var(--sxng-ai-accent);
   border: 1px solid var(--sxng-ai-border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+/* Fallback: If badge happens to be directly inside .title (legacy markup), prevent overlap */
+.index .title > .sxng-next-badge {
+  display: inline-block;
+  margin-top: 2.2rem;
+  position: relative;
+  z-index: 10;
 }
 .sxng-ai-home-bar {
   display: flex;

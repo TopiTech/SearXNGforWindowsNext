@@ -2115,18 +2115,36 @@ def patch_simple_index_ai_webui(content, path):
     required_anchors = (
         'class="sxng-ai-home-bar"',
         'class="sxng-next-badge"',
+        'class="sxng-next-badge-wrap"',
         "⚡ AI Search &amp; Scrape Studio",
     )
     if all(anchor in content for anchor in required_anchors):
         return "ALREADY_APPLIED"
 
     patched = content
-    if 'class="sxng-next-badge"' not in patched and "<h1>SearXNG</h1>" in patched:
+
+    # Migrate legacy patch where badge was placed directly inside .title (which overlaps with background logo)
+    if '<h1>SearXNG</h1><span class="sxng-next-badge">Next · AI-First Edition</span>' in patched:
         patched = patched.replace(
-            "<h1>SearXNG</h1>",
             '<h1>SearXNG</h1><span class="sxng-next-badge">Next · AI-First Edition</span>',
+            '<h1>SearXNG</h1>',
             1,
         )
+
+    badge_wrap = '    <div class="sxng-next-badge-wrap"><span class="sxng-next-badge">Next · AI-First Edition</span></div>\n'
+    if 'class="sxng-next-badge-wrap"' not in patched:
+        if '<div class="title"><h1>SearXNG</h1></div>' in patched:
+            patched = patched.replace(
+                '<div class="title"><h1>SearXNG</h1></div>',
+                '<div class="title"><h1>SearXNG</h1></div>\n' + badge_wrap.rstrip(),
+                1,
+            )
+        elif '<h1>SearXNG</h1>' in patched:
+            patched = patched.replace(
+                '<h1>SearXNG</h1>',
+                '<h1>SearXNG</h1>\n' + badge_wrap.rstrip(),
+                1,
+            )
 
     new_home_bar = (
         '    <div class="sxng-ai-home-bar" role="region" aria-label="AI Search Actions">\n'
