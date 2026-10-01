@@ -21,12 +21,11 @@ from typing import Any
 from cross_encoder_rerank import CrossEncoderReranker
 from deduplication import ResultDeduplicator
 from lexical_rerank import LexicalReranker
-from passage_chunker import HTMLMetadataExtractor, HeadingPassageChunker, SecurityScanner
-from query_pipeline import ProcessedQuery, QueryProcessor
+from passage_chunker import HeadingPassageChunker, HTMLMetadataExtractor, SecurityScanner
+from query_pipeline import QueryProcessor
 from rank_fusion import ReciprocalRankFusion, ScoreComponents
 from retrieval_models import (
     BUDGETS,
-    ModeBudget,
     RetrievalResponse,
     RetrievalResultItem,
     classify_source_type,
@@ -452,4 +451,3 @@ def get_retrieval_service(
     if _RETRIEVAL_SERVICE_SINGLETON is None or search_func is not None:
         _RETRIEVAL_SERVICE_SINGLETON = RetrievalService(search_func=search_func, scrape_func=scrape_func)
     return _RETRIEVAL_SERVICE_SINGLETON
-

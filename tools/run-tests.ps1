@@ -97,12 +97,29 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Unit tests in tools\test_retrieval_pipeline.py failed with exit code $LASTEXITCODE"
     }
+    Write-Host "  -> Running evaluation benchmark..." -ForegroundColor Green
+    & ".\python\python.exe" "tests\evaluation\run_benchmark.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Benchmark evaluation failed with exit code $LASTEXITCODE"
+    }
     Write-Host "  -> Running static type check (Pyrefly)..." -ForegroundColor Green
     & ".\python\python.exe" "-m" "pyrefly" "check"
     if ($LASTEXITCODE -ne 0) {
         throw "Pyrefly type checker failed with exit code $LASTEXITCODE"
     }
-    Write-Host "  [OK] Unit tests and Pyrefly type check passed!" -ForegroundColor Green
+    $ruffCmd = Get-Command "ruff" -ErrorAction SilentlyContinue
+    if ($ruffCmd) {
+        Write-Host "  -> Running linter & code format check (Ruff)..." -ForegroundColor Green
+        & $ruffCmd.Source "check" "."
+        if ($LASTEXITCODE -ne 0) {
+            throw "Ruff linter failed with exit code $LASTEXITCODE"
+        }
+        & $ruffCmd.Source "format" "--check" "."
+        if ($LASTEXITCODE -ne 0) {
+            throw "Ruff format check failed with exit code $LASTEXITCODE"
+        }
+    }
+    Write-Host "  [OK] Unit tests, benchmark, and static checks passed!" -ForegroundColor Green
 
     # 5. Start SearXNG server in the background
     Write-Host "[5/6] Starting SearXNG server in background..." -ForegroundColor Green

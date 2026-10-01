@@ -245,9 +245,7 @@ Configuration in code:
 ```python
 from cross_encoder_rerank import CrossEncoderConfig, CrossEncoderReranker
 
-reranker = CrossEncoderReranker(
-    CrossEncoderConfig(enabled=True, model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
-)
+reranker = CrossEncoderReranker(CrossEncoderConfig(enabled=True, model_name="cross-encoder/ms-marco-MiniLM-L-6-v2"))
 ```
 
 - If `sentence-transformers` is absent or the model download fails, the system automatically falls back to multilingual BM25 lexical reranking with zero disruption or error.

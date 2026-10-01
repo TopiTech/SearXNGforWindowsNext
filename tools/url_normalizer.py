@@ -148,7 +148,7 @@ class URLNormalizer:
         # Handle IDN (Internationalized Domain Names): encode to punycode
         try:
             h_clean = h_clean.encode("idna").decode("ascii").lower()
-        except Exception:
+        except (UnicodeError, ValueError):
             pass
 
         return f"{h_clean}{port_suffix}"
@@ -234,7 +234,7 @@ class URLNormalizer:
             path = parsed.path.rstrip("/")
             query = f"?{parsed.query}" if parsed.query else ""
             return f"{netloc}{path}{query}"
-        except Exception:
+        except ValueError:
             return norm.lower()
 
     @classmethod
@@ -244,7 +244,7 @@ class URLNormalizer:
             parsed = urllib.parse.urlsplit(url.strip())
             netloc = (parsed.hostname or "").lower()
             return netloc.removeprefix("www.")
-        except Exception:
+        except ValueError:
             return ""
 
 
@@ -263,14 +263,76 @@ def extract_domain(url: str) -> str:
     return URLNormalizer.extract_domain(url)
 
 
+RESERVED_TLDS: tuple[str, ...] = (
+    ".localhost",
+    ".local",
+    ".internal",
+    ".lan",
+    ".home.arpa",
+    ".invalid",
+    ".test",
+    ".example",
+    ".onion",
+    ".corp",
+    ".home",
+    ".localdomain",
+    ".intranet",
+    ".private",
+    ".arpa",
+)
+
+
+def _is_reserved_scrape_host(host: str) -> bool:
+    """Check if host is a local or reserved domain name."""
+    h = (host or "").strip().rstrip(".").lower()
+    if not h or h in ("localhost", "ip6-localhost", "ip6-loopback"):
+        return True
+    for tld in RESERVED_TLDS:
+        bare = tld.lstrip(".")
+        if h == bare or h.endswith(tld):
+            return True
+    return False
+
+
+def _is_ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address | str) -> bool:
+    """Validate if an IP address is blocked (private, loopback, multicast, reserved, etc.)."""
+    if not isinstance(ip, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
+        try:
+            ip = ipaddress.ip_address(ip)
+        except ValueError:
+            return True
+
+    if (
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or not ip.is_global
+    ):
+        return True
+
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None and _is_ip_blocked(mapped):
+        return True
+    s6to4 = getattr(ip, "sixtofour", None)
+    if s6to4 is not None and _is_ip_blocked(s6to4):
+        return True
+    teredo = getattr(ip, "teredo", None)
+    return bool(teredo is not None and (_is_ip_blocked(teredo[0]) or _is_ip_blocked(teredo[1])))
+
+
 def is_safe_retrieval_url(url: str) -> bool:
     """Validate that a URL is safe for external retrieval and scraping (SSRF protection).
 
     Enforces:
     - Only 'http' and 'https' schemes
+    - Valid port (1-65535, rejects port 0)
     - No credentials (user:pass@host)
-    - Rejects localhost, loopback, private, link-local, multicast IPv4 and IPv6
+    - Rejects localhost, loopback, private, link-local, multicast, transition IPv4 and IPv6
     - Rejects hex/octal/decimal obfuscated IP formats
+    - Rejects reserved TLDs and bare intranet hostnames
     """
     if not url or not isinstance(url, str):
         return False
@@ -278,10 +340,17 @@ def is_safe_retrieval_url(url: str) -> bool:
     clean_url = url.strip()
     try:
         parsed = urllib.parse.urlsplit(clean_url)
-    except Exception:
+    except ValueError:
         return False
 
     if parsed.scheme.lower() not in ("http", "https"):
+        return False
+
+    try:
+        port = parsed.port
+        if port is not None and (port <= 0 or port > 65535):
+            return False
+    except ValueError:
         return False
 
     # Block credentials in URL
@@ -289,13 +358,7 @@ def is_safe_retrieval_url(url: str) -> bool:
         return False
 
     host = (parsed.hostname or "").strip().rstrip(".").lower()
-    if not host:
-        return False
-
-    # Reserved local hostnames
-    if host in ("localhost", "ip6-localhost", "ip6-loopback") or host.endswith(
-        (".localhost", ".local", ".internal", ".localdomain", ".lan")
-    ):
+    if not host or _is_reserved_scrape_host(host):
         return False
 
     # Remove IPv6 zone index if present
@@ -305,14 +368,7 @@ def is_safe_retrieval_url(url: str) -> bool:
     # Check direct IP addresses
     try:
         ip = ipaddress.ip_address(host)
-        return not (
-            ip.is_loopback
-            or ip.is_private
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_unspecified
-            or ip.is_reserved
-        )
+        return not _is_ip_blocked(ip)
     except ValueError:
         pass
 
@@ -322,15 +378,8 @@ def is_safe_retrieval_url(url: str) -> bool:
             ip_int = int(host)
             if 0 <= ip_int <= 0xFFFFFFFF:
                 ip_v4 = ipaddress.IPv4Address(ip_int)
-                return not (
-                    ip_v4.is_loopback
-                    or ip_v4.is_private
-                    or ip_v4.is_link_local
-                    or ip_v4.is_multicast
-                    or ip_v4.is_unspecified
-                    or ip_v4.is_reserved
-                )
-        except Exception:
+                return not _is_ip_blocked(ip_v4)
+        except (ValueError, ipaddress.AddressValueError):
             return False
 
     if host.startswith(("0x", "0X", "0o", "0O")):
@@ -338,31 +387,16 @@ def is_safe_retrieval_url(url: str) -> bool:
             ip_int = int(host, 0)
             if 0 <= ip_int <= 0xFFFFFFFF:
                 ip_v4 = ipaddress.IPv4Address(ip_int)
-                return not (
-                    ip_v4.is_loopback
-                    or ip_v4.is_private
-                    or ip_v4.is_link_local
-                    or ip_v4.is_multicast
-                    or ip_v4.is_unspecified
-                    or ip_v4.is_reserved
-                )
-        except Exception:
+                return not _is_ip_blocked(ip_v4)
+        except (ValueError, ipaddress.AddressValueError):
             return False
 
     if ":" not in host and "." in host and any(part.isdigit() for part in host.split(".")):
         try:
             packed = socket.inet_aton(host)
             ip_v4 = ipaddress.IPv4Address(packed)
-            return not (
-                ip_v4.is_loopback
-                or ip_v4.is_private
-                or ip_v4.is_link_local
-                or ip_v4.is_multicast
-                or ip_v4.is_unspecified
-                or ip_v4.is_reserved
-            )
-        except (OSError, ValueError):
+            return not _is_ip_blocked(ip_v4)
+        except (OSError, ValueError, ipaddress.AddressValueError):
             pass
 
     return True
-

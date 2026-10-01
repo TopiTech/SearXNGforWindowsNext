@@ -16,7 +16,7 @@ from typing import Any
 from passage_chunker import EvidencePassage
 from query_pipeline import ProcessedQuery
 from rank_fusion import ScoreComponents
-from url_normalizer import extract_domain, normalize_url
+from url_normalizer import extract_domain
 
 
 @dataclass(frozen=True)
@@ -362,10 +362,12 @@ class RetrievalResponse:
 
     def to_markdown(self) -> str:
         """Format the retrieval response into rich, citation-dense Markdown."""
-        q_text = getattr(self.query, "clean_text", "") or getattr(self.query, "normalized", "") or getattr(self.query, "original", "")
-        lines: list[str] = [
-            f"## Search Retrieval: `{q_text}` (Mode: `{self.mode}`, Intent: `{self.query.intent}`)\n"
-        ]
+        q_text = (
+            getattr(self.query, "clean_text", "")
+            or getattr(self.query, "normalized", "")
+            or getattr(self.query, "original", "")
+        )
+        lines: list[str] = [f"## Search Retrieval: `{q_text}` (Mode: `{self.mode}`, Intent: `{self.query.intent}`)\n"]
 
         if self.answers:
             for ans in self.answers:

@@ -8,11 +8,9 @@ ranks passages via BM25, and flags prompt injection risks.
 
 from __future__ import annotations
 
-import html
 import re
-import unicodedata
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from lexical_rerank import MultilingualTokenizer
 
@@ -100,7 +98,7 @@ class EvidencePassage:
 class SecurityScanner:
     """Scans untrusted web text for adversarial prompt injection patterns."""
 
-    INJECTION_PATTERNS: list[re.Pattern] = [
+    INJECTION_PATTERNS: ClassVar[tuple[re.Pattern, ...]] = (
         re.compile(r"ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|directives|rules)", re.IGNORECASE),
         re.compile(r"disregard\s+(all\s+)?(previous|prior|above)\s+(instructions|directives)", re.IGNORECASE),
         re.compile(r"(system\s+prompt|initial\s+prompt|developer\s+mode)", re.IGNORECASE),
@@ -109,7 +107,7 @@ class SecurityScanner:
         re.compile(r"((システムプロンプト|機密情報|環境変数)を(開示|送信|表示|出力))", re.IGNORECASE),
         re.compile(r"(You are now in developer mode|DAN mode)", re.IGNORECASE),
         re.compile(r"(exfiltrate\s+to|curl\s+-X\s+POST\s+http)", re.IGNORECASE),
-    ]
+    )
 
     @classmethod
     def scan_for_injection(cls, text: str) -> list[str]:
@@ -161,7 +159,7 @@ class HTMLMetadataExtractor:
                         out["date_confidence"] = "medium"
                     if getattr(t_meta, "language", None):
                         out["language"] = str(t_meta.language).strip()
-            except Exception:
+            except (AttributeError, KeyError, TypeError, ValueError, IndexError):
                 pass
 
         # 2. Precise lxml parsing for meta tags, canonical, and dates
@@ -171,14 +169,20 @@ class HTMLMetadataExtractor:
 
                 # Language
                 if not out["language"]:
-                    html_lang = tree.get("lang") or tree.xpath("//html/@lang") or tree.xpath("//meta[@http-equiv='content-language']/@content")
+                    html_lang = (
+                        tree.get("lang")
+                        or tree.xpath("//html/@lang")
+                        or tree.xpath("//meta[@http-equiv='content-language']/@content")
+                    )
                     if html_lang:
                         lang_val = html_lang[0] if isinstance(html_lang, list) else str(html_lang)
                         out["language"] = lang_val.split("-")[0].strip().lower()
 
                 # Canonical URL
                 if not out["canonical_url"]:
-                    canonical_href = tree.xpath("//link[@rel='canonical']/@href") or tree.xpath("//meta[@property='og:url']/@content")
+                    canonical_href = tree.xpath("//link[@rel='canonical']/@href") or tree.xpath(
+                        "//meta[@property='og:url']/@content"
+                    )
                     if canonical_href:
                         out["canonical_url"] = str(canonical_href[0]).strip()
 
@@ -221,7 +225,7 @@ class HTMLMetadataExtractor:
                     t_el = tree.xpath("//title/text()") or tree.xpath("//meta[@property='og:title']/@content")
                     if t_el:
                         out["title"] = str(t_el[0]).strip()
-            except Exception:
+            except (AttributeError, KeyError, TypeError, ValueError, IndexError):
                 pass
 
         return out
@@ -258,12 +262,9 @@ class HeadingPassageChunker:
         for line in lines:
             line_str = line.strip()
             # Detect heading lines
-            if line_str.startswith(("# ", "## ", "### ", "#### ", "##### ", "###### ")):
-                if current_lines:
-                    sections.append((current_heading, current_lines))
-                    current_lines = []
-                current_heading = self._clean_heading(line_str)
-            elif re.match(r"^<h[1-6][^>]*>.*?</h[1-6]>$", line_str, re.IGNORECASE):
+            if line_str.startswith(("# ", "## ", "### ", "#### ", "##### ", "###### ")) or re.match(
+                r"^<h[1-6][^>]*>.*?</h[1-6]>$", line_str, re.IGNORECASE
+            ):
                 if current_lines:
                     sections.append((current_heading, current_lines))
                     current_lines = []
@@ -385,7 +386,11 @@ class HeadingPassageChunker:
 
         if not all_candidates:
             # Fallback for short texts: use the first meaningful section heading
-            first_heading = sections[0][0] if (sections and sections[0][0] != self.config.default_heading) else self.config.default_heading
+            first_heading = (
+                sections[0][0]
+                if (sections and sections[0][0] != self.config.default_heading)
+                else self.config.default_heading
+            )
             text_clean = content.strip()[: self.config.max_chunk_chars]
             if text_clean:
                 flags = SecurityScanner.scan_for_injection(text_clean)
@@ -450,7 +455,11 @@ class HeadingPassageChunker:
             char_offset += len(body) + 2
 
         if not all_candidates:
-            first_heading = sections[0][0] if (sections and sections[0][0] != self.config.default_heading) else self.config.default_heading
+            first_heading = (
+                sections[0][0]
+                if (sections and sections[0][0] != self.config.default_heading)
+                else self.config.default_heading
+            )
             text_clean = content.strip()[: self.config.max_chunk_chars]
             if text_clean:
                 flags = SecurityScanner.scan_for_injection(text_clean)
@@ -506,4 +515,3 @@ MetadataExtractor = HTMLMetadataExtractor
 def extract_metadata_and_headings(url: str, html_content: str) -> dict[str, Any]:
     """Helper to extract metadata and headings from HTML."""
     return HTMLMetadataExtractor.extract_metadata(raw_html=html_content, fallback_url=url)
-

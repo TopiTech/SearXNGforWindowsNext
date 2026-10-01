@@ -18,6 +18,7 @@ python-version = "3.11"
 python-platform = "windows"
 project-includes = [
     "tools/**/*.py",
+    "tests/**/*.py",
 ]
 search-path = [
     "tools",

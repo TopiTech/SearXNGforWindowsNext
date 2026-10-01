@@ -303,6 +303,16 @@ try {
     Write-Host "  [OK] /api/scrape_analyze extracted $($scrapeAnalyze.char_count) chars (~$($scrapeAnalyze.estimated_tokens) tokens)" -ForegroundColor Green
     Write-Host ""
 
+    # Test 40: /api/retrieval endpoint (GenAI Structured Schema)
+    Write-Host "Test 40: /api/retrieval endpoint..." -ForegroundColor Cyan
+    Assert-HttpStatusCode -Uri "$base/api/retrieval?q=" -ExpectedStatusCode 400 -Label "/api/retrieval rejects empty query"
+    $retResp = Invoke-RestMethod -Method Get -Uri "$base/api/retrieval?q=SearXNG&mode=fast&count=2" -ErrorAction Stop
+    Assert-JsonProperty -Value $retResp -PropertyName "schema_version" -Label "/api/retrieval"
+    Assert-JsonProperty -Value $retResp -PropertyName "query" -Label "/api/retrieval"
+    Assert-JsonProperty -Value $retResp -PropertyName "results" -Label "/api/retrieval"
+    Write-Host "  [OK] /api/retrieval returned $(@($retResp.results).Count) result(s) (schema_version: $($retResp.schema_version))" -ForegroundColor Green
+    Write-Host ""
+
     Write-Host "=====================================" -ForegroundColor Green
     Write-Host "[OK] All smoke tests PASSED" -ForegroundColor Green
     Write-Host "=====================================" -ForegroundColor Green

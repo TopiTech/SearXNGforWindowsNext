@@ -2127,11 +2127,13 @@ def patch_simple_index_ai_webui(content, path):
     if '<h1>SearXNG</h1><span class="sxng-next-badge">Next · AI-First Edition</span>' in patched:
         patched = patched.replace(
             '<h1>SearXNG</h1><span class="sxng-next-badge">Next · AI-First Edition</span>',
-            '<h1>SearXNG</h1>',
+            "<h1>SearXNG</h1>",
             1,
         )
 
-    badge_wrap = '    <div class="sxng-next-badge-wrap"><span class="sxng-next-badge">Next · AI-First Edition</span></div>\n'
+    badge_wrap = (
+        '    <div class="sxng-next-badge-wrap"><span class="sxng-next-badge">Next · AI-First Edition</span></div>\n'
+    )
     if 'class="sxng-next-badge-wrap"' not in patched:
         if '<div class="title"><h1>SearXNG</h1></div>' in patched:
             patched = patched.replace(
@@ -2139,10 +2141,10 @@ def patch_simple_index_ai_webui(content, path):
                 '<div class="title"><h1>SearXNG</h1></div>\n' + badge_wrap.rstrip(),
                 1,
             )
-        elif '<h1>SearXNG</h1>' in patched:
+        elif "<h1>SearXNG</h1>" in patched:
             patched = patched.replace(
-                '<h1>SearXNG</h1>',
-                '<h1>SearXNG</h1>\n' + badge_wrap.rstrip(),
+                "<h1>SearXNG</h1>",
+                "<h1>SearXNG</h1>\n" + badge_wrap.rstrip(),
                 1,
             )
 

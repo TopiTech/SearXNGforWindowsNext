@@ -252,7 +252,7 @@ class QueryProcessor:
         # 1. Unicode NFKC normalization
         norm = unicodedata.normalize("NFKC", orig)
         # Normalize double quotes
-        norm = re.sub(r'[\u201c\u201d\u201e\u201f\u2033\u2036\uff02«»“”″]', '"', norm)
+        norm = re.sub(r"[\u201c\u201d\u201e\u201f\u2033\u2036\uff02«»“”″]", '"', norm)
         # Normalize single quotes
         norm = re.sub(r"[\u2018\u2019\u201a\u201b\u2032\u2035\uff07‘’′]", "'", norm)
         # Normalize dashes/hyphens
@@ -360,10 +360,8 @@ class QueryProcessor:
                 else:
                     expansions.append(f"{base} tutorial")
 
-        elif processed.intent == "research":
-            if mode == "deep":
-                if "architecture" not in base.lower():
-                    expansions.append(f"{base} architecture")
+        elif processed.intent == "research" and mode == "deep" and "architecture" not in base.lower():
+            expansions.append(f"{base} architecture")
 
         # Cap according to mode
         max_exp = 1 if mode == "balanced" else 2
@@ -396,4 +394,3 @@ class DeterministicQueryPipeline:
 
 
 QueryContext = ProcessedQuery
-

@@ -36,7 +36,6 @@ if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
 
 import agentic_search
-import retrieval_models
 import retrieval_service
 import searxng_client
 
@@ -599,6 +598,7 @@ def get_ai_info(webapp_mod: Any = None, host_url: str = "http://127.0.0.1:8888")
         "endpoints": {
             "ai_workspace": "/ai",
             "deep_search": "/deep_search",
+            "retrieval": "/api/retrieval",
             "json_lite": "/search?format=json_lite",
             "scrape": "/scrape",
             "scrape_analyze": "/api/scrape_analyze",
@@ -610,7 +610,9 @@ def get_ai_info(webapp_mod: Any = None, host_url: str = "http://127.0.0.1:8888")
             "opencode_json": opencode_mcp,
             "cli_deep": f'"{python_exe}" "{cli_py}" deep "FastAPI lifespan context manager" -n 5',
             "curl_deep_md": f'curl -sG "{base}/deep_search" --data-urlencode "q=FastAPI lifespan" --data-urlencode "format=markdown"',
+            "curl_retrieval": f'curl -sG "{base}/api/retrieval" --data-urlencode "q=FastAPI lifespan" --data-urlencode "mode=balanced"',
             "pwsh_deep": f'Invoke-RestMethod "{base}/deep_search?q=FastAPI+lifespan&depth=advanced&max_results=5"',
+            "pwsh_retrieval": f'Invoke-RestMethod "{base}/api/retrieval?q=FastAPI+lifespan&mode=balanced&count=5"',
         },
     }
 
@@ -2492,6 +2494,11 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
             container.innerHTML = '';
             var items = [
               {
+                title: '⚡ GenAI Retrieval API (/api/retrieval)',
+                desc: 'GenAIモデル・自律エージェント向けの構造化グラウンディングAPI (schema_version: 1.0)。根拠パッセージ・検証メタデータ・BM25スコアを返します。',
+                code: info.snippets.curl_retrieval + '\\n\\n# PowerShell:\\n' + info.snippets.pwsh_retrieval
+              },
+              {
                 title: '⚡ HTTP Deep Search API (/deep_search)',
                 desc: '1回のHTTPリクエストで検索・並列スクレイピング・BM25ハイライト抽出を実行し、MarkdownまたはJSONを返します。',
                 code: info.snippets.curl_deep_md + '\\n\\n# PowerShell:\\n' + info.snippets.pwsh_deep
@@ -2810,13 +2817,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         payload = request.get_json(silent=True) if request.is_json else None
         payload = payload if isinstance(payload, dict) else {}
 
-        query = (
-            request.values.get("q")
-            or request.values.get("query")
-            or payload.get("q")
-            or payload.get("query")
-            or ""
-        )
+        query = request.values.get("q") or request.values.get("query") or payload.get("q") or payload.get("query") or ""
         if not isinstance(query, str) or not query.strip():
             return jsonify({"error": "No query", "schema_version": "1.0", "results": []}), 400
 

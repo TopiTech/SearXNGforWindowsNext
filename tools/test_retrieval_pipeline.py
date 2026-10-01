@@ -13,11 +13,10 @@ Tests:
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # Ensure tools directory is in sys.path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,14 +24,12 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from deduplication import (
-    DedupConfig,
     deduplicate_results,
     is_near_duplicate_title,
     normalize_title,
 )
 from lexical_rerank import (
     BM25Reranker,
-    CJKTokenizer,
     compute_field_lexical_score,
     tokenize_for_bm25,
 )
@@ -41,11 +38,9 @@ from passage_chunker import (
     PassageChunk,
     PassageChunkerConfig,
     SecurityScanner,
-    extract_metadata_and_headings,
 )
 from query_pipeline import (
     DeterministicQueryPipeline,
-    QueryContext,
     classify_intent,
     normalize_query,
 )
@@ -56,7 +51,6 @@ from rank_fusion import (
 )
 from retrieval_models import (
     EvidencePassage,
-    ModeBudget,
     QueryInfo,
     RetrievalResponse,
     RetrievalResultItem,
@@ -68,7 +62,6 @@ from retrieval_models import (
 )
 from retrieval_service import (
     RetrievalService,
-    get_retrieval_service,
 )
 from url_normalizer import (
     extract_domain,
@@ -82,7 +75,9 @@ class TestURLNormalizer(unittest.TestCase):
     """Test URL normalization, tracking parameter stripping, and safety checks."""
 
     def test_strip_tracking_parameters(self) -> None:
-        url = "https://example.com/article?utm_source=twitter&utm_medium=social&utm_campaign=launch&id=123&fbclid=IwAR123"
+        url = (
+            "https://example.com/article?utm_source=twitter&utm_medium=social&utm_campaign=launch&id=123&fbclid=IwAR123"
+        )
         normalized = normalize_url(url)
         self.assertNotIn("utm_source", normalized)
         self.assertNotIn("utm_medium", normalized)
@@ -130,7 +125,10 @@ class TestURLNormalizer(unittest.TestCase):
 
     def test_ipv4_and_ipv6_urls(self) -> None:
         self.assertEqual(normalize_url("http://93.184.216.34:80/"), "http://93.184.216.34/")
-        self.assertEqual(normalize_url("http://[2606:2800:220:1:248:1893:25c8:1946]:80/"), "http://[2606:2800:220:1:248:1893:25c8:1946]/")
+        self.assertEqual(
+            normalize_url("http://[2606:2800:220:1:248:1893:25c8:1946]:80/"),
+            "http://[2606:2800:220:1:248:1893:25c8:1946]/",
+        )
 
     def test_malformed_url_fallback(self) -> None:
         bad_url = "not a valid url at all"
@@ -162,8 +160,16 @@ class TestDeduplication(unittest.TestCase):
 
     def test_canonical_url_deduplication(self) -> None:
         results = [
-            {"url": "https://example.com/amp/article", "canonical_url": "https://example.com/article", "title": "Mobile Article"},
-            {"url": "https://example.com/article", "canonical_url": "https://example.com/article", "title": "Desktop Article"},
+            {
+                "url": "https://example.com/amp/article",
+                "canonical_url": "https://example.com/article",
+                "title": "Mobile Article",
+            },
+            {
+                "url": "https://example.com/article",
+                "canonical_url": "https://example.com/article",
+                "title": "Desktop Article",
+            },
         ]
         deduped = deduplicate_results(results)
         self.assertEqual(len(deduped), 1)
@@ -358,6 +364,24 @@ class TestPassageChunkerAndSecurity(unittest.TestCase):
         self.assertFalse(is_safe_retrieval_url("http://localhost:8080/admin"))
         self.assertFalse(is_safe_retrieval_url("http://[::1]:80/status"))
 
+        # Obfuscated integer/hex/octal representations
+        self.assertFalse(is_safe_retrieval_url("http://2130706433/"))
+        self.assertFalse(is_safe_retrieval_url("http://0x7f000001/"))
+        self.assertFalse(is_safe_retrieval_url("http://0177.0.0.1/"))
+
+        # IPv6 transition and mapped loopback/private
+        self.assertFalse(is_safe_retrieval_url("http://[::ffff:127.0.0.1]/"))
+        self.assertFalse(is_safe_retrieval_url("http://[2002:7f00:1::]/"))
+
+        # Reserved TLDs and bare intranet hostnames
+        self.assertFalse(is_safe_retrieval_url("http://server.localdomain/"))
+        self.assertFalse(is_safe_retrieval_url("http://service.intranet/"))
+        self.assertFalse(is_safe_retrieval_url("http://device.private/"))
+        self.assertFalse(is_safe_retrieval_url("http://router.arpa/"))
+        self.assertFalse(is_safe_retrieval_url("http://box.lan/"))
+        self.assertFalse(is_safe_retrieval_url("http://local/"))
+        self.assertFalse(is_safe_retrieval_url("http://internal/"))
+
         # Private IPv4 ranges must be rejected
         self.assertFalse(is_safe_retrieval_url("http://192.168.1.10/router"))
         self.assertFalse(is_safe_retrieval_url("http://10.0.0.5/api"))
@@ -366,10 +390,12 @@ class TestPassageChunkerAndSecurity(unittest.TestCase):
         # Link-local and cloud metadata must be rejected
         self.assertFalse(is_safe_retrieval_url("http://169.254.169.254/latest/meta-data/"))
 
-        # Non-HTTP/HTTPS schemes must be rejected
+        # Non-HTTP/HTTPS schemes and credentials must be rejected
         self.assertFalse(is_safe_retrieval_url("file:///C:/Windows/System32/drivers/etc/hosts"))
         self.assertFalse(is_safe_retrieval_url("ftp://ftp.example.com/file"))
         self.assertFalse(is_safe_retrieval_url("gopher://example.com/"))
+        self.assertFalse(is_safe_retrieval_url("http://user:pass@example.com/"))
+        self.assertFalse(is_safe_retrieval_url("http://example.com:0/"))
 
         # Legitimate public web URLs must be accepted
         self.assertTrue(is_safe_retrieval_url("https://docs.python.org/3/"))
@@ -470,7 +496,13 @@ class TestRetrievalModelsAndBudget(unittest.TestCase):
         resp = RetrievalResponse(
             schema_version="1.0",
             query=QueryInfo(original="python asyncio", normalized="python asyncio", intent="research", language="en"),
-            search=SearchExecutionInfo(mode="balanced", expanded_queries=["python asyncio documentation"], engines_used=["google", "duckduckgo"], partial=False, elapsed_ms=45),
+            search=SearchExecutionInfo(
+                mode="balanced",
+                expanded_queries=["python asyncio documentation"],
+                engines_used=["google", "duckduckgo"],
+                partial=False,
+                elapsed_ms=45,
+            ),
             results=[item],
             warnings=[],
         )
@@ -546,9 +578,10 @@ class TestRetrievalServiceIntegration(unittest.TestCase):
             ),
         }
 
-        with patch.object(self.service, "_fetch_query_results", return_value=mock_raw_results), \
-             patch.object(self.service, "_scrape_page", return_value=mock_scrape_res):
-
+        with (
+            patch.object(self.service, "_fetch_query_results", return_value=mock_raw_results),
+            patch.object(self.service, "_scrape_page", return_value=mock_scrape_res),
+        ):
             resp = self.service.execute_retrieval(query="python asyncio", mode="balanced")
 
             self.assertEqual(resp.search.mode, "balanced")
@@ -570,9 +603,10 @@ class TestRetrievalServiceIntegration(unittest.TestCase):
             }
         ]
 
-        with patch.object(self.service, "_fetch_query_results", return_value=mock_raw_results), \
-             patch.object(self.service, "_scrape_page", return_value={"success": False, "error": "timeout"}):
-
+        with (
+            patch.object(self.service, "_fetch_query_results", return_value=mock_raw_results),
+            patch.object(self.service, "_scrape_page", return_value={"success": False, "error": "timeout"}),
+        ):
             resp = self.service.execute_retrieval(query="example", mode="balanced")
 
             # Must not crash; returns results with snippet fallback and no evidence

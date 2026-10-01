@@ -25,10 +25,8 @@ from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
-import deduplication
 import retrieval_models
 import retrieval_service
-import url_normalizer
 
 # High-authority primary domains (Documentation, Source Repositories, Standards)
 DEFAULT_BOOST_DOMAINS: dict[str, float] = {

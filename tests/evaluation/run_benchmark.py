@@ -20,7 +20,7 @@ import math
 import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 # Ensure workspace tools directory is in sys.path
@@ -106,13 +106,13 @@ class OfflineRetrievalEvaluator:
             off_domains = set(expected_info.get("official_domains", []))
 
             # Build mock retrieval service functions
-            def mock_search_func(**kwargs: Any) -> dict[str, Any]:
-                return {"results": list(raw_search_results)}
+            def mock_search_func(_raw=raw_search_results, **kwargs: Any) -> dict[str, Any]:
+                return {"results": list(_raw)}
 
-            def mock_scrape_func(url: str, **kwargs: Any) -> dict[str, Any]:
+            def mock_scrape_func(url: str, _pages=scraped_pages_map, **kwargs: Any) -> dict[str, Any]:
                 norm = normalize_url(url)
                 # Check exact or prefix in scraped_pages_map
-                for k, v in scraped_pages_map.items():
+                for k, v in _pages.items():
                     if normalize_url(k) == norm or norm.startswith(normalize_url(k)):
                         return {"success": True, "url": url, "content": v}
                 return {"success": False, "url": url, "error": "not in fixtures"}
@@ -151,9 +151,7 @@ class OfflineRetrievalEvaluator:
                 if relevance_list
                 else 0.0
             )
-            recall_at_10 = (
-                sum(1.0 for s in relevance_list[:10] if s > 0) / max(len(rel_domains), 1)
-            )
+            recall_at_10 = sum(1.0 for s in relevance_list[:10] if s > 0) / max(len(rel_domains), 1)
             mrr = 1.0 / mrr_rank if mrr_rank > 0 else 0.0
             ndcg_10 = calculate_ndcg(relevance_list, 10)
 
@@ -203,7 +201,7 @@ def percentile(data: list[float], pct: float) -> float:
     if not data:
         return 0.0
     sorted_d = sorted(data)
-    idx = int(math.ceil((pct / 100.0) * len(sorted_d))) - 1
+    idx = math.ceil((pct / 100.0) * len(sorted_d)) - 1
     return sorted_d[max(0, min(idx, len(sorted_d) - 1))]
 
 

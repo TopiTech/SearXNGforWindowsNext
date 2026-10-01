@@ -57,13 +57,13 @@ class CrossEncoderReranker:
         self._load_attempted = True
         try:
             mod = importlib.import_module("sentence_transformers")
-            cross_encoder_cls = getattr(mod, "CrossEncoder")
+            cross_encoder_cls = mod.CrossEncoder
             self._model = cross_encoder_cls(
                 self.config.model_name,
                 max_length=self.config.max_length,
             )
             return self._model
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - graceful fallback if PyTorch or weights fail to load
             logger.debug("CrossEncoder could not be initialized (%s); using lexical ranking only.", exc)
             self._model = None
             return None
@@ -99,6 +99,6 @@ class CrossEncoderReranker:
                 candidates[idx]["cross_encoder_score"] = float(sc)
             candidates.sort(key=lambda x: float(x.get("cross_encoder_score") or 0.0), reverse=True)
             return candidates + items[k:]
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - graceful fallback to standard scores on model inference errors
             logger.debug("CrossEncoder prediction failed: %s; falling back to standard scores.", exc)
             return items
