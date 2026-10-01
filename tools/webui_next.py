@@ -2686,7 +2686,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
       function escapeShellDoubleQuoted(str) {
         return String(str == null ? '' : str)
-          .replace(/[\\$"\\`!]/g, function (ch) { return '\\' + ch; });
+          .replace(/[\\\\$"\\`!]/g, function (ch) { return String.fromCharCode(92) + ch; });
       }
 
       function showToast(msg) {
@@ -2948,7 +2948,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           if (h.indexOf('```') === 0) {
             var pre = document.createElement('pre');
             pre.className = 'highlight-code';
-            pre.textContent = h.replace(/^```[a-zA-Z0-9_-]*\n?/, '').replace(/```$/, '');
+            pre.textContent = h.replace(/^```[a-zA-Z0-9_-]*\\\\n?/, '').replace(/```$/, '');
             container.appendChild(pre);
           } else {
             var div = document.createElement('div');
@@ -3076,8 +3076,8 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           copyItemBtn.className = 'btn btn-sm';
           copyItemBtn.innerHTML = '📋 この結果を引用コピー';
           copyItemBtn.addEventListener('click', function () {
-            var hText = (item.highlights && item.highlights.length) ? item.highlights.join('\n\n') : (item.content || '');
-            var citeMd = '### [' + (idx + 1) + '] [' + (item.title || item.url) + '](' + item.url + ')\n> ' + hText.replace(/\n/g, '\n> ');
+            var hText = (item.highlights && item.highlights.length) ? item.highlights.join('\\\\n\\\\n') : (item.content || '');
+            var citeMd = '### [' + (idx + 1) + '] [' + (item.title || item.url) + '](' + item.url + ')\\\\n> ' + hText.replace(/\\\\n/g, '\\\\n> ');
             copyWithFeedback(citeMd, copyItemBtn, '✅ コピー完了');
           });
 
@@ -3253,7 +3253,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           copyBtn.className = 'btn btn-sm';
           copyBtn.innerHTML = '📋 引用コピー';
           copyBtn.addEventListener('click', function () {
-            var citeText = '### [' + (item.title || item.url) + '](' + item.url + ')\n> ' + (item.content || '').replace(/\n/g, '\n> ');
+            var citeText = '### [' + (item.title || item.url) + '](' + item.url + ')\\\\n> ' + (item.content || '').replace(/\\\\n/g, '\\\\n> ');
             copyWithFeedback(citeText, copyBtn, '✅ コピー済');
           });
 
@@ -3365,7 +3365,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
               return;
             }
             state.markdown = res.markdown || res.content || '';
-            state.prompt = res.rag_prompt || ('以下のWebページ抽出本文を根拠として要点を解説してください。\n\nURL: ' + targetUrl + '\n\n' + state.markdown);
+            state.prompt = res.rag_prompt || ('以下のWebページ抽出本文を根拠として要点を解説してください。\\\\n\\\\nURL: ' + targetUrl + '\\\\n\\\\n' + state.markdown);
             state.jsonStr = JSON.stringify(res, null, 2);
 
             var telBar = document.getElementById('telemetry-bar');
@@ -3720,12 +3720,12 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
               {
                 title: '⚡ GenAI Retrieval API (/api/retrieval)',
                 desc: 'GenAIモデル・自律エージェント向けの構造化グラウンディングAPI (schema_version: 1.0)。根拠パッセージ・検証メタデータ・BM25スコアを返します。',
-                code: info.snippets.curl_retrieval + '\n\n# PowerShell:\n' + info.snippets.pwsh_retrieval
+                code: info.snippets.curl_retrieval + '\\\\n\\\\n# PowerShell:\\\\n' + info.snippets.pwsh_retrieval
               },
               {
                 title: '⚡ HTTP Deep Search API (/deep_search)',
                 desc: '1回のHTTPリクエストで検索・並列スクレイピング・BM25ハイライト抽出を実行し、MarkdownまたはJSONを返します。',
-                code: info.snippets.curl_deep_md + '\n\n# PowerShell:\n' + info.snippets.pwsh_deep
+                code: info.snippets.curl_deep_md + '\\\\n\\\\n# PowerShell:\\\\n' + info.snippets.pwsh_deep
               },
               {
                 title: '🤖 Claude Code (MCP 登録コマンド)',

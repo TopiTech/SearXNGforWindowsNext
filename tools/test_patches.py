@@ -2445,6 +2445,43 @@ class TestAiWebuiPatches(unittest.TestCase):
         self.assertIn("active.isContentEditable", html_doc)
         self.assertIn("function (ch) { return", html_doc)
 
+    def test_webui_next_javascript_syntax_validity(self):
+        """Regression: ensure delivered JavaScript (AI_WORKSPACE_HTML and SIMPLE_EMBED_JS)
+        has zero syntax errors, unclosed strings, or broken tokens.
+        """
+        import re
+        import shutil
+        import subprocess
+        import tempfile
+
+        import webui_next
+
+        html_doc = webui_next.AI_WORKSPACE_HTML
+        embed_js = webui_next.SIMPLE_EMBED_JS
+
+        # Static guards: ensure no broken template strings or unescaped newlines in JS strings
+        self.assertNotIn("return '\\' + ch;", html_doc)
+        self.assertNotIn("join('\n", html_doc)
+        self.assertNotIn("replace(/\n", html_doc)
+
+        node_bin = shutil.which("node")
+        if node_bin:
+            scripts = re.findall(r"<script(?:\s+[^>]*)?>(.*?)</script>", html_doc, re.DOTALL | re.IGNORECASE)
+            self.assertTrue(len(scripts) >= 1)
+            with tempfile.TemporaryDirectory() as td:
+                for idx, sc in enumerate(scripts):
+                    sc_path = os.path.join(td, f"script_{idx}.js")
+                    with open(sc_path, "w", encoding="utf-8") as f:
+                        f.write(sc)
+                    p = subprocess.run([node_bin, "--check", sc_path], capture_output=True, text=True, check=False)
+                    self.assertEqual(p.returncode, 0, f"AI_WORKSPACE_HTML script {idx} syntax error:\n{p.stderr}")
+
+                embed_path = os.path.join(td, "embed.js")
+                with open(embed_path, "w", encoding="utf-8") as f:
+                    f.write(embed_js)
+                p2 = subprocess.run([node_bin, "--check", embed_path], capture_output=True, text=True, check=False)
+                self.assertEqual(p2.returncode, 0, f"SIMPLE_EMBED_JS syntax error:\n{p2.stderr}")
+
     def test_webui_next_health_dot_reflects_real_status(self):
         """Regression: the /ai header status-dot used to hard-code aria-label="Server Online"
         without ever contacting /healthz, asserting a false status to screen readers.
