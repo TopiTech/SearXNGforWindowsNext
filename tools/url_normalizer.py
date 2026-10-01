@@ -7,6 +7,7 @@ canonicalization, and citation formatting.
 
 from __future__ import annotations
 
+import functools
 import ipaddress
 import re
 import socket
@@ -248,16 +249,19 @@ class URLNormalizer:
             return ""
 
 
+@functools.lru_cache(maxsize=2048)
 def normalize_url(url: str, strip_tracking: bool = True) -> str:
     """Convenience wrapper for URL normalizer."""
     return URLNormalizer.normalize_url(url, strip_tracking=strip_tracking)
 
 
+@functools.lru_cache(maxsize=2048)
 def get_dedup_key(url: str) -> str:
     """Convenience wrapper for dedup key extraction."""
     return URLNormalizer.get_dedup_key(url)
 
 
+@functools.lru_cache(maxsize=2048)
 def extract_domain(url: str) -> str:
     """Convenience wrapper for domain extraction."""
     return URLNormalizer.extract_domain(url)

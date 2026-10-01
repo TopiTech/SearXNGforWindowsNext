@@ -72,6 +72,7 @@ The `webapp_ai_webui` patch is elevated to `CRITICAL` severity to guarantee that
 | 5 | `webapp.py` (pt 2) | `/scrape` endpoint (SSRF-protected, streaming timeout) | FEATURE | Content extraction API (blocks 6to4/Teredo, slowloris defense) |
 | 5b | `webapp.py` (pt 3) | `webapp_ai_webui` (AI Studio unification & API routing) | CRITICAL | Dedicated AI Studio, Classic search mode, Settings API, legacy UI abolition |
 | 6 | `engines/__init__.py` | Remove legacy `disabled` short-circuit | OPTIONAL | Preserve SearXNG preference semantics |
+| 6b | `engines/__init__.py` | Fast-path skip inactive & unconfigured onion engines | FEATURE | Accelerate startup & suppress false errors |
 | 7 | `search/processors/__init__.py` | Remove legacy `disabled` processor skip | OPTIONAL | Allow manual activation from Preferences |
 | 8 | `engines/google.py` | CAPTCHA false-positive fix | OPTIONAL | Reduce spurious suspensions |
 | 9 | `engines/sogou.py` | Robust CAPTCHA detection | OPTIONAL | Reduce spurious suspensions |

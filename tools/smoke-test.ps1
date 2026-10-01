@@ -211,11 +211,11 @@ try {
     Write-Host "  [OK] /healthz returned OK" -ForegroundColor Green
     Write-Host ""
 
-    # Test 32: Preferences page
-    Write-Host "Test 32: Preferences page..." -ForegroundColor Cyan
+    # Test 32: Preferences page (Settings integration)
+    Write-Host "Test 32: Preferences page (Settings integration)..." -ForegroundColor Cyan
     $prefResponse = Invoke-WebRequest -Uri "$base/preferences" -UseBasicParsing -ErrorAction Stop
-    if ($prefResponse.StatusCode -eq 200 -and $prefResponse.Content -match 'id="pref-hash-input"') {
-        Write-Host "  [OK] /preferences returned 200 with preferences input" -ForegroundColor Green
+    if ($prefResponse.StatusCode -eq 200 -and ($prefResponse.Content -match 'id="tab-settings"' -or $prefResponse.Content -match 'id="pref-hash-input"')) {
+        Write-Host "  [OK] /preferences returned 200 with Settings integration" -ForegroundColor Green
     } else {
         throw "[FAIL] /preferences returned unexpected response"
     }

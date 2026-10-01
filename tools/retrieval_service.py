@@ -39,6 +39,21 @@ logger = logging.getLogger(__name__)
 class RetrievalService:
     """Unified service orchestrating high-quality retrieval for AI agents and LLMs."""
 
+    # Class-level shared stateless components to prevent GC pressure and re-allocation
+    _shared_query_processor: QueryProcessor | None = None
+    _shared_deduplicator: ResultDeduplicator | None = None
+    _shared_rank_fusion: ReciprocalRankFusion | None = None
+    _shared_lexical_reranker: LexicalReranker | None = None
+    _shared_passage_chunker: HeadingPassageChunker | None = None
+    _shared_cross_encoder: CrossEncoderReranker | None = None
+
+    query_processor: QueryProcessor
+    deduplicator: ResultDeduplicator
+    rank_fusion: ReciprocalRankFusion
+    lexical_reranker: LexicalReranker
+    passage_chunker: HeadingPassageChunker
+    cross_encoder: CrossEncoderReranker
+
     def __init__(
         self,
         search_func: Callable[..., dict[str, Any]] | None = None,
@@ -47,12 +62,28 @@ class RetrievalService:
     ) -> None:
         self.search_func = search_func or (lambda **kwargs: {"results": []})
         self.scrape_func = scrape_func
-        self.query_processor = QueryProcessor()
-        self.deduplicator = ResultDeduplicator()
-        self.rank_fusion = ReciprocalRankFusion()
-        self.lexical_reranker = LexicalReranker()
-        self.passage_chunker = HeadingPassageChunker()
-        self.cross_encoder = cross_encoder or CrossEncoderReranker()
+
+        if RetrievalService._shared_query_processor is None:
+            RetrievalService._shared_query_processor = QueryProcessor()
+            RetrievalService._shared_deduplicator = ResultDeduplicator()
+            RetrievalService._shared_rank_fusion = ReciprocalRankFusion()
+            RetrievalService._shared_lexical_reranker = LexicalReranker()
+            RetrievalService._shared_passage_chunker = HeadingPassageChunker()
+            RetrievalService._shared_cross_encoder = CrossEncoderReranker()
+
+        assert RetrievalService._shared_query_processor is not None
+        assert RetrievalService._shared_deduplicator is not None
+        assert RetrievalService._shared_rank_fusion is not None
+        assert RetrievalService._shared_lexical_reranker is not None
+        assert RetrievalService._shared_passage_chunker is not None
+        assert RetrievalService._shared_cross_encoder is not None
+
+        self.query_processor = RetrievalService._shared_query_processor
+        self.deduplicator = RetrievalService._shared_deduplicator
+        self.rank_fusion = RetrievalService._shared_rank_fusion
+        self.lexical_reranker = RetrievalService._shared_lexical_reranker
+        self.passage_chunker = RetrievalService._shared_passage_chunker
+        self.cross_encoder = cross_encoder or RetrievalService._shared_cross_encoder
 
     def _fetch_query_results(self, **kwargs: Any) -> list[dict[str, Any]]:
         """Fetch raw results using self.search_func."""
@@ -448,6 +479,11 @@ def get_retrieval_service(
 ) -> RetrievalService:
     """Get or create singleton RetrievalService instance."""
     global _RETRIEVAL_SERVICE_SINGLETON
-    if _RETRIEVAL_SERVICE_SINGLETON is None or search_func is not None:
+    if _RETRIEVAL_SERVICE_SINGLETON is None:
         _RETRIEVAL_SERVICE_SINGLETON = RetrievalService(search_func=search_func, scrape_func=scrape_func)
+    else:
+        if search_func is not None:
+            _RETRIEVAL_SERVICE_SINGLETON.search_func = search_func
+        if scrape_func is not None:
+            _RETRIEVAL_SERVICE_SINGLETON.scrape_func = scrape_func
     return _RETRIEVAL_SERVICE_SINGLETON

@@ -512,7 +512,7 @@ def execute_server_retrieval_search(
             timeout=timeout,
         )
 
-    svc = retrieval_service.RetrievalService(search_func=_s_func, scrape_func=_sc_func)
+    svc = retrieval_service.get_retrieval_service(search_func=_s_func, scrape_func=_sc_func)
     resp = svc.search(
         query=query,
         mode=mode,
@@ -698,7 +698,7 @@ def get_engines_settings_data(
     processors = getattr(sp, "PROCESSORS", {}) if sp else {}
 
     engine_items: list[dict[str, Any]] = []
-    category_names = sorted(list(all_categories.keys())) if all_categories else []
+    category_names = sorted(all_categories.keys()) if all_categories else []
 
     total_latency = 0.0
     latency_count = 0
@@ -2727,7 +2727,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
       function isUrlText(text) {
         var s = (text || '').trim();
-        return /^https?:\/\/\S+$/i.test(s);
+        return /^https?:\\/\\/\\S+$/i.test(s);
       }
 
       function estimateTokens(text) {
@@ -2989,7 +2989,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           var domSpan = document.createElement('span');
           domSpan.className = 'card-domain';
           var domain = item.domain || (function () {
-            try { return new URL(item.url).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
+            try { return new URL(item.url).hostname.replace(/^www\\./, ''); } catch (e) { return ''; }
           })();
           domSpan.textContent = domain;
 
@@ -3180,7 +3180,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           var urlSpan = document.createElement('span');
           urlSpan.className = 'classic-url-tag';
           var domain = item.domain || (function () {
-            try { return new URL(item.url).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
+            try { return new URL(item.url).hostname.replace(/^www\\./, ''); } catch (e) { return ''; }
           })();
           urlSpan.innerHTML = '🌐 ' + escapeHtml(domain || item.url);
 
@@ -3872,7 +3872,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
     # Guard against duplicate registration
     if getattr(app, "_sxng_next_registered", False):
         return
-    setattr(app, "_sxng_next_registered", True)
+    app._sxng_next_registered = True
 
     from flask import Response, jsonify, redirect, request
 
@@ -3914,17 +3914,17 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
     def unified_search_view() -> Any:
         out_fmt = (request.values.get("format") or "").strip().lower()
         accept = request.headers.get("Accept") or ""
-        if out_fmt in ("json", "json_lite", "csv", "rss") or "application/json" in accept or "text/json" in accept:
-            if orig_search:
-                return orig_search()
+        if (
+            out_fmt in ("json", "json_lite", "csv", "rss") or "application/json" in accept or "text/json" in accept
+        ) and orig_search:
+            return orig_search()
         params = dict(request.args)
         qs = urllib.parse.urlencode(params)
         return redirect(f"/?{qs}" if qs else "/", code=302)
 
     def unified_preferences_view() -> Any:
-        if request.method == "POST":
-            if orig_preferences:
-                return orig_preferences()
+        if request.method == "POST" and orig_preferences:
+            return orig_preferences()
         return redirect("/?mode=settings", code=302)
 
     app.view_functions["index"] = unified_index_view
@@ -4059,10 +4059,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         max_results = _parse_int(raw_max_results, 5, 1, 50)
         max_tokens = _parse_int(request.values.get("max_tokens") or payload.get("max_tokens"), 3000, 500, 20000)
         raw_page = (
-            request.values.get("page")
-            or request.values.get("pageno")
-            or payload.get("page")
-            or payload.get("pageno")
+            request.values.get("page") or request.values.get("pageno") or payload.get("page") or payload.get("pageno")
         )
         pageno = _parse_int(raw_page, 1, 1, 100)
         focus_query = (

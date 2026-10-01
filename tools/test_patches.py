@@ -455,6 +455,42 @@ class TestPatchEnginesInit(unittest.TestCase):
         self.assertNotIn("inactive or disabled in config!", result)
 
 
+class TestPatchEnginesFastLoad(unittest.TestCase):
+    """Verify fast-path skipping of inactive and onion engines."""
+
+    def setUp(self):
+        self.fn = apply_patches.patch_engines_fast_load
+
+    def _sample_content(self, *, already_applied=False):
+        lines = [
+            "def load_engine(engine_data):",
+            "    module_name = engine_data.get('engine')",
+            "    if module_name is None:",
+            "        return None",
+        ]
+        if already_applied:
+            lines.append("    # sxng-fast-engine-load-v1: skip inactive or unavailable onion engines before import")
+            lines.append("    if engine_data.get('inactive') is True:")
+            lines.append("        return None")
+        lines.append("    try:")
+        lines.append("        engine = load_module(module_name + '.py', ENGINE_DIR)")
+        lines.append("    except Exception:")
+        lines.append("        return None")
+        return "\n".join(lines) + "\n"
+
+    def test_already_applied(self):
+        content = self._sample_content(already_applied=True)
+        result = self.fn(content, "engines/__init__.py")
+        self.assertEqual(result, "ALREADY_APPLIED")
+
+    def test_applies_fast_load(self):
+        content = self._sample_content(already_applied=False)
+        result = self.fn(content, "engines/__init__.py")
+        self.assertNotEqual(result, "ALREADY_APPLIED")
+        self.assertIn("sxng-fast-engine-load-v1", result)
+        self.assertIn("engine_data.get('inactive') is True", result)
+
+
 class TestPatchSettingsYml(unittest.TestCase):
     def setUp(self):
         self.fn = apply_patches.patch_settings_yml

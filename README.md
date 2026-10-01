@@ -69,10 +69,21 @@ curl -G "http://127.0.0.1:8888/search" --data-urlencode "q=SearXNG" --data-urlen
 curl -G "http://127.0.0.1:8888/deep_search" --data-urlencode "q=SearXNG" --data-urlencode "format=markdown"
 ```
 
-### 4. キャッシュのクリーンアップ (軽量化)
-蓄積した Python バイトコード（`__pycache__`）や一時キャッシュを一括消去し、約 25〜30MB のディスク容量をワンクリックで解放できます。
+### 4. キャッシュのクリーンアップと容量最適化 (軽量化)
+蓄積した Python バイトコード（`__pycache__`）、不要な翻訳ソース（`.po`）、ソースマップ（`*.map`）を一括消去し、約 25〜50MB+ のディスク容量を解放できます。
+
 ```powershell
+# 標準クリーンアップ (安全: バイトコード, .po, .map, .tmp を削除)
 PowerShell -File .\tools\clean-cache.ps1
+
+# ディープクリーンアップ (Babel の未使用言語パック約25MB & pipキャッシュを削除)
+PowerShell -File .\tools\clean-cache.ps1 -Deep
+
+# 開発用ツール削除 (型検査ツール pyrefly 32MB をアンインストール)
+PowerShell -File .\tools\clean-cache.ps1 -UninstallDev
+
+# Git リポジトリの最適化
+PowerShell -File .\tools\clean-cache.ps1 -GitGc
 ```
 
 ---

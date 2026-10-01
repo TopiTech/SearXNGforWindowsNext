@@ -1692,6 +1692,41 @@ def patch_engines_init(content, path):
     return "ALREADY_APPLIED" if patched == content else patched
 
 
+# --- Patch 6b: engines/__init__.py (fast-path skip inactive & unconfigured onion engines) ---
+def patch_engines_fast_load(content: str, path: str) -> str:
+    """Optimize engine loading by skipping inactive and unavailable onion engines before importing."""
+    if "sxng-fast-engine-load-v1" in content:
+        return "ALREADY_APPLIED"
+
+    fast_load_code = (
+        "    # sxng-fast-engine-load-v1: skip inactive or unavailable onion engines before import\n"
+        "    if engine_data.get('inactive') is True:\n"
+        "        return None\n"
+        "    _using_tor = settings['outgoing'].get('using_tor_proxy') or engine_data.get('using_tor_proxy', False)\n"
+        "    if not _using_tor and (\n"
+        "        'onions' in engine_data.get('categories', []) or module_name in ('ahmia', 'torch')\n"
+        "    ):\n"
+        "        return None\n"
+    )
+
+    target = "    try:\n        engine = load_module(module_name + '.py', ENGINE_DIR)"
+    if target in content:
+        content = content.replace(target, fast_load_code + target, 1)
+    else:
+        target_fb = "        return None\n    try:"
+        if target_fb in content:
+            content = content.replace(target_fb, "        return None\n" + fast_load_code + "    try:", 1)
+        else:
+            raise RuntimeError("Could not find injection point in engines/__init__.py for fast-load")
+
+    old_log = "logger.error(\n                f\"(PID {os.getpid()}) {engine_data.get('name', '???')}: can't register engine (loading engine failed)\"\n            )"
+    new_log = "logger.debug(\n                f\"(PID {os.getpid()}) {engine_data.get('name', '???')}: can't register engine (loading engine skipped or failed)\"\n            )"
+    if old_log in content:
+        content = content.replace(old_log, new_log)
+
+    return content
+
+
 # --- Patch 7: search/processors/__init__.py (restore upstream disabled-engine semantics) ---
 def patch_processors_init(content, path):
     # Pure replace() rewrite of the legacy block; unchanged == already restored.
@@ -2383,6 +2418,18 @@ PATCH_SPECS = [
         severity=PatchSeverity.OPTIONAL,
         required_file=True,
         diagnostic_hint="Removes legacy disabled engine short-circuit in engines/__init__.py.",
+    ),
+    PatchSpec(
+        name="engines_fast_load",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "engines", "__init__.py"),
+        description="engines/__init__.py (fast-path skip inactive & unconfigured onion engines)",
+        patch_func=patch_engines_fast_load,
+        severity=PatchSeverity.FEATURE,
+        required_file=True,
+        expected_anchors=[
+            "def load_engine",
+        ],
+        diagnostic_hint="Skips loading inactive modules and unconfigured onion engines to accelerate startup.",
     ),
     PatchSpec(
         name="processors_init",

@@ -1377,7 +1377,7 @@ def execute_retrieval_search(
     timeout: float | None = None,
 ) -> retrieval_models.RetrievalResponse:
     """Execute high-quality retrieval pipeline returning structured GenAI RetrievalResponse."""
-    svc = retrieval_service.RetrievalService(search_func=search_func, scrape_func=scrape_func)
+    svc = retrieval_service.get_retrieval_service(search_func=search_func, scrape_func=scrape_func)
     return svc.search(
         query=query,
         mode=mode,

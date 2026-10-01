@@ -43,8 +43,8 @@ try {
     if ($SkipInstall) {
         Write-Host "[1/6] Skipping Python dependency installation (-SkipInstall requested)..." -ForegroundColor Yellow
     } else {
-        Write-Host "[1/6] Installing Python dependencies..." -ForegroundColor Green
-        & .\tools\install-requirements.ps1
+        Write-Host "[1/6] Installing Python dependencies (including -Dev)..." -ForegroundColor Green
+        & .\tools\install-requirements.ps1 -Dev
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to install dependencies via install-requirements.ps1"
         }

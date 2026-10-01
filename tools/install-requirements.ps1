@@ -1,3 +1,8 @@
+param(
+    [switch]$Dev,
+    [switch]$CleanPipCache
+)
+
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 $ErrorActionPreference = "Stop"
@@ -8,6 +13,11 @@ $pythonExe = Join-Path $scriptDir "python\python.exe"
 
 Write-Host "Python Dependencies Installer" -ForegroundColor Cyan
 Write-Host "==============================" -ForegroundColor Cyan
+if ($Dev) {
+    Write-Host "Mode: Runtime + Development/Testing (-Dev enabled)" -ForegroundColor Yellow
+} else {
+    Write-Host "Mode: Runtime Only (Lightweight)" -ForegroundColor Green
+}
 Write-Host ""
 
 if (-not (Test-Path $pythonExe)) {
@@ -29,16 +39,26 @@ try {
 
     $mainReqs = Join-Path $scriptDir "config\requirements.txt"
     $serverReqs = Join-Path $scriptDir "config\requirements-server.upstream.txt"
+    $devReqs = Join-Path $scriptDir "config\requirements-dev.txt"
 
     $pipArgs = @("install", "--quiet", "--prefer-binary", "-r", $mainReqs)
     if (Test-Path $serverReqs) {
         $pipArgs += @("-r", $serverReqs)
+    }
+    if ($Dev -and (Test-Path $devReqs)) {
+        Write-Host "Including development dependencies ($devReqs)..." -ForegroundColor Yellow
+        $pipArgs += @("-r", $devReqs)
     }
 
     Write-Host "Installing requirements (--prefer-binary)..." -ForegroundColor Green
     & $pythonExe -m pip @pipArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to install requirements"
+    }
+
+    if ($CleanPipCache) {
+        Write-Host "Cleaning pip cache to save disk space..." -ForegroundColor Green
+        & $pythonExe -m pip cache purge --quiet
     }
 
     Write-Host ""
