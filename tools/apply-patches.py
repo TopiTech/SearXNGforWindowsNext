@@ -1103,7 +1103,8 @@ def patch_webapp_scrape_route(content, path):
         "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')",  # default should be true
         "max_keepalive_connections=20",
         "_searxng_original_getaddrinfo",
-        "v18-bulletproof-scrape-fix",
+        "v19-bulletproof-scrape-fix",
+        "host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B'))",
         ".localdomain",
         ".arpa",
         "(?si)<script",
@@ -1176,7 +1177,12 @@ def patch_webapp_scrape_route(content, path):
         )
 
     while "@app.route('/scrape'" in content or '@app.route("/scrape"' in content:
-        content = re.sub(r'(?s)\n@app\.route\(\s*[\'"]/scrape[\'"].*?(?=\n@app\.route|\Z)', "", content, count=1)
+        content = re.sub(
+            r'(?s)\n@app\.route\(\s*[\'"]/scrape[\'"].*?(?=\n# --- GenAI Next WebUI Integration ---|\n@app\.route|\Z)',
+            "",
+            content,
+            count=1,
+        )
 
     # 3. Inject global client holder and pinned_dns context manager before scrape route
     # Also define the new route
@@ -1420,7 +1426,7 @@ def _is_blocked_scrape_host(host, resolve_dns=True):
 @app.route('/scrape', methods=['GET', 'POST'])
 def scrape():
     """Extract main text content from URL (GenAI friendly, SSRF-protected).
-    # v18-bulletproof-scrape-fix
+    # v19-bulletproof-scrape-fix
 
     SECURITY: Blocks loopback, private/reserved IP ranges, link-local, and
     file:// scheme to prevent SSRF attacks and internal resource exposure.

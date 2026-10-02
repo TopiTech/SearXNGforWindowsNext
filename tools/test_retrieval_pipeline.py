@@ -14,10 +14,11 @@ Tests:
 from __future__ import annotations
 
 import os
+import socket
 import sys
 import unittest
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 # Ensure tools directory is in sys.path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -424,6 +425,27 @@ class TestPassageChunkerAndSecurity(unittest.TestCase):
         self.assertTrue(is_safe_retrieval_url("https://github.com/SearXNG/searxng"))
         self.assertTrue(is_safe_retrieval_url("https://www.google.com/search"))
 
+    def test_is_safe_retrieval_url_resolve_dns(self) -> None:
+        """Verify is_safe_retrieval_url performs active DNS resolution check when resolve_dns=True."""
+        # When DNS resolves to loopback/private IP, it must be rejected
+        with patch("socket.getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))]):
+            self.assertFalse(is_safe_retrieval_url("http://example.com/api", resolve_dns=True))
+
+        with patch(
+            "socket.getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.168.1.1", 80))]
+        ):
+            self.assertFalse(is_safe_retrieval_url("http://internal.company.com/page", resolve_dns=True))
+
+        # When DNS resolution fails, it must fail safe (return False)
+        with patch("socket.getaddrinfo", side_effect=socket.gaierror(8, "nodename nor servname provided")):
+            self.assertFalse(is_safe_retrieval_url("http://nonexistent-domain.xyz/", resolve_dns=True))
+
+        # When DNS resolves to public IP, it must be accepted
+        with patch(
+            "socket.getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))]
+        ):
+            self.assertTrue(is_safe_retrieval_url("http://example.com/", resolve_dns=True))
+
 
 class TestDeterministicQueryPipeline(unittest.TestCase):
     """Test query normalization, intent detection, and query expansion."""
@@ -712,6 +734,32 @@ class TestRetrievalServiceIntegration(unittest.TestCase):
             items = [{"url": "https://example.com/page", "title": "Page"}]
             # simulate worker execution without raising InvalidStateError
             self.service._fetch_pages_concurrent(items, max_pages=1, scrape_length=1000, timeout=0.01)
+
+    def test_fetch_pages_concurrent_prefilters_unsafe_urls(self) -> None:
+        """Verify _fetch_pages_concurrent pre-filters unsafe URLs and does not invoke scraper."""
+        mock_scrape = MagicMock(return_value={"content": "forbidden content"})
+        service = RetrievalService(scrape_func=mock_scrape)
+
+        items = [
+            {"url": "http://127.0.0.1:8888/scrape", "title": "Loopback"},
+            {"url": "file:///etc/passwd", "title": "Local file"},
+            {"url": "http://example.com:0/badport", "title": "Bad port"},
+            {"url": "https://example.com/safe", "title": "Safe Page"},
+        ]
+
+        service._fetch_pages_concurrent(items, max_pages=4, scrape_length=1000, timeout=2.0)
+
+        # Unsafe items must be marked blocked without calling scrape_func
+        self.assertFalse(items[0]["is_scraped"])
+        self.assertEqual(items[0]["scrape_error"], "Blocked unsafe or non-HTTP retrieval URL")
+        self.assertFalse(items[1]["is_scraped"])
+        self.assertEqual(items[1]["scrape_error"], "Blocked unsafe or non-HTTP retrieval URL")
+        self.assertFalse(items[2]["is_scraped"])
+        self.assertEqual(items[2]["scrape_error"], "Blocked unsafe or non-HTTP retrieval URL")
+
+        # Safe item must be called
+        mock_scrape.assert_called_once()
+        self.assertTrue(items[3]["is_scraped"])
 
 
 if __name__ == "__main__":

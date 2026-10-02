@@ -75,6 +75,11 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                     "description": "Optional time filter.",
                     "enum": ["day", "week", "month", "year"],
                 },
+                "include_highlights": {
+                    "type": "boolean",
+                    "description": "Whether to extract relevant passage highlights (default true).",
+                    "default": True,
+                },
                 "include_domains": {
                     "type": "array",
                     "items": {"type": "string"},

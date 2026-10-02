@@ -579,7 +579,8 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')\n"
             "max_keepalive_connections=20\n"
             "_searxng_original_getaddrinfo\n"
-            "v18-bulletproof-scrape-fix\n"
+            "v19-bulletproof-scrape-fix\n"
+            "host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B'))\n"
             ".localdomain\n"
             ".arpa\n"
             "(?si)<script\n"
@@ -612,7 +613,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("import idna", res)
         self.assertIn("@app.route('/scrape'", res)
         self.assertIn("def scrape():", res)
-        self.assertIn("v18-bulletproof-scrape-fix", res)
+        self.assertIn("v19-bulletproof-scrape-fix", res)
         self.assertIn("def _parse_scrape_url", res)
         self.assertIn("def _read_scrape_response", res)
         self.assertIn("_SCRAPE_MAX_RESPONSE_BYTES", res)
@@ -654,6 +655,22 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("v4_ips = [ip for ip in valid_ips if ':' not in ip]", res)
         self.assertIn("ordered_ips = v4_ips + v6_ips", res)
         self.assertIn("with pinned_dns(original_host, safe_ips, port):", res)
+
+    def test_scrape_cleanup_preserves_next_webui_integration(self):
+        content = (
+            "import warnings\nfrom flask import Flask\n\n"
+            "@app.route('/scrape', methods=['GET', 'POST'])\n"
+            "def scrape():\n"
+            "    return 'old_scrape'\n\n"
+            "# --- GenAI Next WebUI Integration ---\n"
+            "import webui_next\n"
+            "webui_next.register_next_webui(app, None)\n\n"
+            "@app.route('/search')\ndef search():\n    pass\n"
+        )
+        res = self.fn(content, "webapp.py")
+        self.assertIn("# --- GenAI Next WebUI Integration ---", res)
+        self.assertIn("webui_next.register_next_webui(app, None)", res)
+        self.assertIn("v19-bulletproof-scrape-fix", res)
 
 
 class TestPatchProcessorsInit(unittest.TestCase):

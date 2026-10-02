@@ -31,7 +31,7 @@ from retrieval_models import (
     classify_source_type,
     compute_source_quality,
 )
-from url_normalizer import extract_domain, normalize_url
+from url_normalizer import extract_domain, is_safe_retrieval_url, normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +163,11 @@ class RetrievalService:
         for it in to_scrape:
             target_url = str(it.get("url") or "")
             if not target_url:
+                continue
+            if not is_safe_retrieval_url(target_url):
+                it["raw_content"] = ""
+                it["is_scraped"] = False
+                it["scrape_error"] = "Blocked unsafe or non-HTTP retrieval URL"
                 continue
             fut: Future = Future()
             t = threading.Thread(

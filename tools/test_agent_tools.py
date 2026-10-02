@@ -279,6 +279,8 @@ class TestMCPServer(unittest.TestCase):
         # Check search tool schema
         search_tool = next(t for t in tools if t["name"] == "searxng_search")
         self.assertIn("query", search_tool["inputSchema"]["required"])
+        self.assertIn("include_highlights", search_tool["inputSchema"]["properties"])
+        self.assertEqual(search_tool["inputSchema"]["properties"]["include_highlights"]["type"], "boolean")
 
         # Check deep search tool schema
         self.assertIn("searxng_deep_search", tool_names)

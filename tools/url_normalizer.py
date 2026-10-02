@@ -327,7 +327,7 @@ def _is_ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address | str) -> b
     return bool(teredo is not None and (_is_ip_blocked(teredo[0]) or _is_ip_blocked(teredo[1])))
 
 
-def is_safe_retrieval_url(url: str) -> bool:
+def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
     """Validate that a URL is safe for external retrieval and scraping (SSRF protection).
 
     Enforces:
@@ -337,6 +337,7 @@ def is_safe_retrieval_url(url: str) -> bool:
     - Rejects localhost, loopback, private, link-local, multicast, transition IPv4 and IPv6
     - Rejects hex/octal/decimal obfuscated IP formats
     - Rejects reserved TLDs and bare intranet hostnames
+    - Optional active DNS resolution to detect private/loopback resolved IPs
     """
     if not url or not isinstance(url, str):
         return False
@@ -402,5 +403,17 @@ def is_safe_retrieval_url(url: str) -> bool:
             return not _is_ip_blocked(ip_v4)
         except (OSError, ValueError, ipaddress.AddressValueError):
             pass
+
+    if resolve_dns:
+        try:
+            addr_info = socket.getaddrinfo(host, None)
+            if not addr_info:
+                return False
+            for res in addr_info:
+                ip_raw = str(res[4][0])
+                if _is_ip_blocked(ip_raw):
+                    return False
+        except (socket.gaierror, ValueError, OSError):
+            return False
 
     return True
