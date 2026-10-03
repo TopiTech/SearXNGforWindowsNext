@@ -7,19 +7,24 @@ Usage:
     python tools/test_patches.py
 """
 
+import importlib.util
 import io
+import ipaddress
 import json
 import os
+import re as re_mod
 import shutil
+import socket
 import sys
 import tempfile
 import unittest
+from typing import Any
 from unittest import mock
+
+import idna
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-
-import importlib.util
 
 
 # Both apply-patches.py and ensure-secret-key.py have hyphens in their file
@@ -731,18 +736,71 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         # first statement after the def line.
         body = code.group(1)
         body = re_mod.sub(r"\n            ", "\n", body).strip("\n")
-        namespace = {"chr": chr}
-        exec(
+        namespace: dict[str, Any] = {"chr": chr}
+        exec(  # noqa: S102 - static test input
             "def _normalize_scrape_host(host_raw):\n    " + body.replace("\n", "\n    ") + "\n    return host_norm\n",
             namespace,
-        )  # noqa: S102 - static test input
-        normalize = namespace["_normalize_scrape_host"]
+        )
+        normalize: Any = namespace["_normalize_scrape_host"]
         self.assertEqual(normalize("attacker.example\u3002"), "attacker.example")
         self.assertEqual(normalize("attacker.example."), "attacker.example")
         self.assertEqual(normalize("attacker.example\uff0e"), "attacker.example")
         self.assertEqual(normalize("attack\u3002er.example"), "attack.er.example")
         self.assertEqual(normalize("EXAMPLE.COM"), "example.com")
         self.assertEqual(normalize("127\u30020\u30020\u30021"), "127.0.0.1")
+
+    def test_is_blocked_scrape_host_catches_unicode_dots_and_bracketed_ipv6(self):
+        """Verify _is_blocked_scrape_host catches Unicode dot obfuscation, bracketed IPv6, and IDNA reserved domains."""
+        content = "import warnings\nfrom flask import Flask\n\n@app.route('/search')\ndef search():\n    pass\n"
+        patched = self.fn(content, "webapp.py")
+        self.assertIn("def _is_blocked_scrape_host(host, resolve_dns=True):", patched)
+
+        namespace: dict[str, Any] = {
+            "chr": chr,
+            "idna": idna,
+            "ipaddress": ipaddress,
+            "socket": socket,
+            "_RESERVED_TLDS": (
+                ".localhost",
+                ".local",
+                ".internal",
+                ".lan",
+                ".home.arpa",
+                ".invalid",
+                ".test",
+                ".example",
+                ".onion",
+                ".corp",
+                ".home",
+                ".localdomain",
+                ".intranet",
+                ".private",
+                ".arpa",
+            ),
+        }
+        helpers_code = re_mod.search(
+            r"(def _is_reserved_scrape_host\(host\):.*?)(?=@app\.route\('/scrape')", patched, re_mod.DOTALL
+        )
+        self.assertIsNotNone(helpers_code)
+        assert helpers_code is not None
+        exec(helpers_code.group(1), namespace)  # noqa: S102
+
+        is_blocked = namespace["_is_blocked_scrape_host"]
+
+        # Obfuscated Unicode dot variants must be blocked statically without DNS
+        self.assertTrue(is_blocked("127\u30020\u30020\u30021", resolve_dns=False))
+        self.assertTrue(is_blocked("127\uff0e0\uff0e0\uff0e1", resolve_dns=False))
+        self.assertTrue(is_blocked("127\uff610\uff610\uff611", resolve_dns=False))
+        self.assertTrue(is_blocked("attacker\u3002localhost", resolve_dns=False))
+        self.assertTrue(is_blocked("attacker\u3002local", resolve_dns=False))
+
+        # Bracketed IPv6 loopback and IPv4-mapped must be detected
+        self.assertTrue(is_blocked("[::1]", resolve_dns=False))
+        self.assertTrue(is_blocked("[::ffff:127.0.0.1]", resolve_dns=False))
+
+        # Public global hosts must not be blocked statically
+        self.assertFalse(is_blocked("example.com", resolve_dns=False))
+        self.assertFalse(is_blocked("93.184.216.34", resolve_dns=False))
 
 
 class TestPatchProcessorsInit(unittest.TestCase):
@@ -2788,15 +2846,17 @@ class TestAiWebuiPatches(unittest.TestCase):
         fake_webapp._read_scrape_response = lambda resp, max_duration=15.0: "<html>ok</html>"
         fake_webapp.trafilatura.extract = lambda html, **kw: "ok"
 
+        calls = [0]
+
         def fake_getaddrinfo(host, port, *args, **kwargs):
             # Simulate a rebinding attacker: the first lookup for ANY host
             # returns a public IP, any later lookup returns loopback.
-            if fake_getaddrinfo.calls == 0:
-                fake_getaddrinfo.calls = 1
+            if calls[0] == 0:
+                calls[0] = 1
                 return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port))]
 
-        fake_getaddrinfo.calls = 0
+        calls[0] = 0
 
         attack_urls = [
             # Ideographic full stop used as a dot -> httpx normalizes it away
@@ -2807,7 +2867,7 @@ class TestAiWebuiPatches(unittest.TestCase):
             "http://attacker.example\uff0e/x",
         ]
         for url in attack_urls:
-            fake_getaddrinfo.calls = 0
+            calls[0] = 0
             requested_urls.clear()
             captured_pinned.clear()
             with mock.patch("webui_next.socket.getaddrinfo", side_effect=fake_getaddrinfo):
@@ -2825,7 +2885,7 @@ class TestAiWebuiPatches(unittest.TestCase):
             self.assertEqual(res.get("content"), "ok", f"unexpected error for {url}: {res.get('error')}")
 
         # Non-ASCII IDN hosts must be punycoded so the transport and pin agree.
-        fake_getaddrinfo.calls = 0
+        calls[0] = 0
         requested_urls.clear()
         captured_pinned.clear()
         with mock.patch("webui_next.socket.getaddrinfo", side_effect=fake_getaddrinfo):

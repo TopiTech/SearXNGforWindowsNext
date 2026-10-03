@@ -376,6 +376,19 @@ class TestPassageChunkerAndSecurity(unittest.TestCase):
         self.assertFalse(is_safe_retrieval_url("http://0177.0.0.1/"))
         self.assertFalse(is_safe_retrieval_url("http://0b01111111000000000000000000000001/"))
 
+        # Obfuscated Unicode dot variants and bracketed IP literals
+        self.assertFalse(is_safe_retrieval_url("http://127\u30020\u30020\u30021/secret"))
+        self.assertFalse(is_safe_retrieval_url("http://127\uff0e0\uff0e0\uff0e1/secret"))
+        self.assertFalse(is_safe_retrieval_url("http://127\uff610\uff610\uff611/secret"))
+        self.assertFalse(is_safe_retrieval_url("http://attacker\u3002localhost/"))
+        self.assertFalse(is_safe_retrieval_url("http://attacker\u3002local/"))
+        self.assertFalse(is_safe_retrieval_url("http://例え\u3002localhost/"))
+        self.assertTrue(is_safe_retrieval_url("https://example.com/valid"))
+        self.assertEqual(
+            normalize_url("http://example\u3002com/path"),
+            "http://example.com/path",
+        )
+
     def test_html_metadata_extractor_relative_canonical_url(self) -> None:
         html = (
             "<html><head>"

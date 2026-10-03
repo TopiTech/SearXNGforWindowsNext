@@ -204,7 +204,7 @@ class TestSpeculativeFetcher(unittest.TestCase):
         fetcher = agentic_search.SpeculativeFetcher(scrape_func=hung_scrape, max_workers=2)
         items = [
             agentic_search.SearchResultItem(
-                title="Slow", url="https://slow.example", domain="slow.example", content=""
+                title="Slow", url="https://slow.example.com", domain="slow.example.com", content=""
             ),
         ]
         t0 = time.perf_counter()
@@ -231,7 +231,11 @@ class TestSpeculativeFetcher(unittest.TestCase):
             return {"content": "ok"}
 
         fetcher = agentic_search.SpeculativeFetcher(scrape_func=inspecting_scrape, max_workers=1)
-        items = [agentic_search.SearchResultItem(title="t", url="https://ok.example", domain="ok.example", content="")]
+        items = [
+            agentic_search.SearchResultItem(
+                title="t", url="https://ok.example.com", domain="ok.example.com", content=""
+            )
+        ]
         updated = fetcher.fetch_pages(items, max_fetch=1, timeout=5.0)
         self.assertTrue(seen.wait(timeout=5.0))
         self.assertTrue(updated[0].is_scraped)
@@ -531,6 +535,40 @@ class TestExecuteDeepSearch(unittest.TestCase):
         )
         self.assertIn("error", err_res)
         self.assertIn("search backend crashed", err_res["error"])
+
+    def test_speculative_fetch_pages_blocks_unsafe_urls(self) -> None:
+        scraped_calls = []
+
+        def spy_scrape(url: str, **kwargs):
+            scraped_calls.append(url)
+            return {"url": url, "content": "secret"}
+
+        fetcher = agentic_search.SpeculativeFetcher(scrape_func=spy_scrape)
+        items = [
+            agentic_search.SearchResultItem(
+                title="Safe", url="https://example.com/docs", domain="example.com", content=""
+            ),
+            agentic_search.SearchResultItem(
+                title="Unsafe Loopback", url="http://127.0.0.1:8888/", domain="127.0.0.1", content=""
+            ),
+            agentic_search.SearchResultItem(
+                title="Unsafe Unicode", url="http://127\u30020\u30020\u30021/", domain="127.0.0.1", content=""
+            ),
+            agentic_search.SearchResultItem(title="Unsafe Bracketed", url="http://[::1]/", domain="::1", content=""),
+            agentic_search.SearchResultItem(title="Unsafe Scheme", url="file:///etc/passwd", domain="", content=""),
+        ]
+        result = fetcher.fetch_pages(items, max_fetch=5)
+        self.assertEqual(len(scraped_calls), 1)
+        self.assertEqual(scraped_calls[0], "https://example.com/docs")
+        self.assertTrue(result[0].is_scraped)
+        self.assertFalse(result[1].is_scraped)
+        self.assertIn("Blocked unsafe", result[1].scrape_error)
+        self.assertFalse(result[2].is_scraped)
+        self.assertIn("Blocked unsafe", result[2].scrape_error)
+        self.assertFalse(result[3].is_scraped)
+        self.assertIn("Blocked unsafe", result[3].scrape_error)
+        self.assertFalse(result[4].is_scraped)
+        self.assertIn("Blocked unsafe", result[4].scrape_error)
 
     def test_execute_unified_search_handles_unexpected_backend_errors(self) -> None:
         # Non-tuple exceptions (e.g. KeyboardInterrupt-style failures from a

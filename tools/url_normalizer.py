@@ -7,6 +7,7 @@ canonicalization, and citation formatting.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import ipaddress
 import re
@@ -144,7 +145,10 @@ class URLNormalizer:
         else:
             h_part = h
 
-        h_clean = h_part.rstrip(".").lower()
+        h_clean = h_part
+        for dot in (chr(0x3002), chr(0xFF0E), chr(0xFF61)):
+            h_clean = h_clean.replace(dot, ".")
+        h_clean = h_clean.rstrip(".").lower()
 
         # Handle IDN (Internationalized Domain Names): encode to punycode
         try:
@@ -362,13 +366,24 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
     if parsed.username or parsed.password:
         return False
 
-    host = (parsed.hostname or "").strip().rstrip(".").lower()
-    if not host or _is_reserved_scrape_host(host):
-        return False
+    raw_host = parsed.hostname or ""
+    host = raw_host.strip().strip("[]").lower()
+    for dot in (chr(0x3002), chr(0xFF0E), chr(0xFF61)):
+        host = host.replace(dot, ".")
+    host = host.rstrip(".")
 
     # Remove IPv6 zone index if present
     if "%" in host:
         host = host.split("%", 1)[0]
+
+    if host and ":" not in host and not host.replace(".", "").isdigit():
+        with contextlib.suppress(Exception):
+            import idna
+
+            host = idna.encode(host, uts46=True).decode("ascii")
+
+    if not host or _is_reserved_scrape_host(host):
+        return False
 
     # Check direct IP addresses
     try:

@@ -113,7 +113,7 @@ def _scrape_url_direct(
         host_norm = host_norm.rstrip(".")
         if "%" in host_norm:
             host_norm = host_norm.split("%", 1)[0]
-        if host_norm and not host_norm.replace(".", "").isdigit():
+        if host_norm and ":" not in host_norm and not host_norm.replace(".", "").isdigit():
             with contextlib.suppress(Exception):
                 import idna  # local import: only needed for IDN hosts
 

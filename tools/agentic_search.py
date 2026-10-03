@@ -27,6 +27,7 @@ from typing import Any, ClassVar
 
 import retrieval_models
 import retrieval_service
+from url_normalizer import is_safe_retrieval_url
 
 # High-authority primary domains (Documentation, Source Repositories, Standards)
 DEFAULT_BOOST_DOMAINS: dict[str, float] = {
@@ -235,6 +236,9 @@ def extract_domain(url: str) -> str:
     try:
         parsed = urllib.parse.urlparse(url)
         host = (parsed.hostname or "").lower()
+        for dot in (chr(0x3002), chr(0xFF0E), chr(0xFF61)):
+            host = host.replace(dot, ".")
+        host = host.rstrip(".")
         # Remove leading www.
         return host.removeprefix("www.")
     except (ValueError, AttributeError):
@@ -765,6 +769,11 @@ class SpeculativeFetcher:
 
         future_to_item: dict[Future, SearchResultItem] = {}
         for it in to_fetch:
+            if not is_safe_retrieval_url(it.url, resolve_dns=False):
+                it.is_scraped = False
+                it.full_content = ""
+                it.scrape_error = "Blocked unsafe or non-HTTP retrieval URL"
+                continue
             fut: Future = Future()
             worker = threading.Thread(
                 target=_daemonized_run,

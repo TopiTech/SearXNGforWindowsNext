@@ -1393,11 +1393,19 @@ def _is_blocked_scrape_host(host, resolve_dns=True):
             host = host.decode('ascii')
         except UnicodeDecodeError:
             host = host.decode('utf-8', errors='replace')
-    host_clean = (host or '').strip().rstrip('.').lower()
-    if _is_reserved_scrape_host(host_clean):
-        return True
+    host_clean = (host or '').strip().strip('[]').lower()
+    for dot in (chr(0x3002), chr(0xFF0E), chr(0xFF61)):
+        host_clean = host_clean.replace(dot, '.')
+    host_clean = host_clean.rstrip('.')
     if '%' in host_clean:
         host_clean = host_clean.split('%', 1)[0]
+    if host_clean and ':' not in host_clean and not host_clean.replace('.', '').isdigit():
+        try:
+            host_clean = idna.encode(host_clean, uts46=True).decode('ascii')
+        except Exception:
+            pass
+    if not host_clean or _is_reserved_scrape_host(host_clean):
+        return True
     try:
         ip = ipaddress.ip_address(host_clean)
         return _is_ip_blocked(ip)
@@ -1430,7 +1438,7 @@ def _is_blocked_scrape_host(host, resolve_dns=True):
         for res in socket.getaddrinfo(host_clean, None):
             if _is_ip_blocked(res[4][0]):
                 return True
-    except (socket.gaierror, ValueError):
+    except (socket.gaierror, ValueError, OSError):
         pass
     return False
 
@@ -1512,7 +1520,7 @@ def scrape():
             host_norm = host_norm.rstrip('.')
             if '%' in host_norm:
                 host_norm = host_norm.split('%', 1)[0]
-            if host_norm and not host_norm.replace('.', '').isdigit():
+            if host_norm and ':' not in host_norm and not host_norm.replace('.', '').isdigit():
                 try:
                     host_norm = idna.encode(host_norm, uts46=True).decode('ascii')
                 except Exception:
