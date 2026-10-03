@@ -99,6 +99,27 @@ def _scrape_url_direct(
     blocked_exc_cls = getattr(webapp_mod, "_ScrapeBlockedError", ValueError)
     too_large_exc_cls = getattr(webapp_mod, "_ScrapeResponseTooLargeError", RuntimeError)
 
+    def _normalize_scrape_host(host_raw: str | None) -> str:
+        """Normalize a host the same way httpx does before transport.
+
+        Converts Unicode dots (U+3002, U+FF0E, U+FF61) to '.', strips
+        trailing dots and applies IDNA/punycode encoding so the validator,
+        the DNS pin and httpx's transport all agree on the host string
+        that will be resolved (prevents pin bypass / DNS rebinding).
+        """
+        host_norm = (host_raw or "").strip().strip("[]").lower()
+        for dot in (chr(0x3002), chr(0xFF0E), chr(0xFF61)):
+            host_norm = host_norm.replace(dot, ".")
+        host_norm = host_norm.rstrip(".")
+        if "%" in host_norm:
+            host_norm = host_norm.split("%", 1)[0]
+        if host_norm and not host_norm.replace(".", "").isdigit():
+            with contextlib.suppress(Exception):
+                import idna  # local import: only needed for IDN hosts
+
+                host_norm = idna.encode(host_norm, uts46=True).decode("ascii")
+        return host_norm
+
     def _parse_url(value: str) -> urllib.parse.ParseResult:
         try:
             parsed_u = urllib.parse.urlparse(value)
@@ -110,7 +131,7 @@ def _scrape_url_direct(
             raise blocked_exc_cls("Invalid URL") from exc
 
     def _is_static_host_blocked(host: str | None) -> bool:
-        host_clean = (host or "").strip().rstrip(".").lower()
+        host_clean = _normalize_scrape_host(host)
         if not host_clean:
             return True
         is_reserved_fn = getattr(webapp_mod, "_is_reserved_scrape_host", None)
@@ -153,16 +174,32 @@ def _scrape_url_direct(
             "error": "スクレイピング拒否 (400): プライベートIP、ループバック、または許可されていないスキームです。",
         }
 
-    def _resolve_safe_ip(url_to_resolve: str) -> tuple[list[str], str, int]:
+    def _resolve_safe_ip(url_to_resolve: str) -> tuple[list[str], str, int, str]:
         p_url = _parse_url(url_to_resolve)
         if p_url.scheme not in ("http", "https"):
             raise blocked_exc_cls(f"Blocked invalid scheme: {p_url.scheme}")
         host = p_url.hostname
-        if not host or _is_static_host_blocked(host):
+        if not host:
+            raise blocked_exc_cls("Empty hostname")
+        host_clean = _normalize_scrape_host(host)
+        if not host_clean or _is_static_host_blocked(host_clean):
             raise blocked_exc_cls(f"Blocked: {host} is a private/reserved host or IP")
         port = p_url.port or (443 if p_url.scheme == "https" else 80)
+        # Rebuild the URL with the normalized host so the transport (httpx)
+        # resolves exactly the host we validated and pinned. Without this,
+        # httpx's own host normalization (Unicode dots, trailing dot,
+        # IDNA) can diverge from the pin host and silently disable the
+        # pin, re-enabling DNS rebinding.
+        if ":" in host_clean and not host_clean.startswith("["):
+            host_out = f"[{host_clean}]"
+        else:
+            host_out = host_clean
+        hostport = f"{host_out}:{port}" if p_url.port else host_out
+        userinfo, at_sep, _rest = p_url.netloc.partition("@")
+        netloc = f"{userinfo}@{hostport}" if at_sep else hostport
+        safe_url = p_url._replace(netloc=netloc).geturl()
         try:
-            addr_info = socket.getaddrinfo(host, port)
+            addr_info = socket.getaddrinfo(host_clean, port)
         except (socket.gaierror, OSError) as exc:
             raise blocked_exc_cls(f"DNS resolution failed for {host}: {exc}") from exc
         if not addr_info:
@@ -180,7 +217,7 @@ def _scrape_url_direct(
         v4_ips = [ip for ip in valid_ips if ":" not in ip]
         v6_ips = [ip for ip in valid_ips if ":" in ip]
         ordered_ips = v4_ips + v6_ips
-        return ordered_ips, host, port
+        return ordered_ips, host_clean, port, safe_url
 
     try:
         httpx_mod = webapp_mod.httpx
@@ -217,11 +254,11 @@ def _scrape_url_direct(
             cur_parsed = _parse_url(current_url)
             if (cur_parsed.scheme or "").lower() not in ("http", "https"):
                 raise blocked_exc_cls(f"Blocked invalid scheme during redirect: {cur_parsed.scheme}")
-            safe_ips, original_host, port = _resolve_safe_ip(current_url)
+            safe_ips, original_host, port, safe_url = _resolve_safe_ip(current_url)
             headers = {"User-Agent": ua}
             with (
                 webapp_mod.pinned_dns(original_host, safe_ips, port),
-                webapp_mod._scrape_client.stream("GET", current_url, headers=headers, timeout=req_timeout) as response,
+                webapp_mod._scrape_client.stream("GET", safe_url, headers=headers, timeout=req_timeout) as response,
             ):
                 if response.status_code not in (301, 302, 303, 307, 308):
                     response.raise_for_status()
@@ -232,7 +269,7 @@ def _scrape_url_direct(
                 location = response.headers.get("location")
                 if not location or not location.strip():
                     raise RuntimeError(f"Redirect without Location header (status {response.status_code})")
-                current_url = urllib.parse.urljoin(current_url, location.strip())
+                current_url = urllib.parse.urljoin(safe_url, location.strip())
         else:
             raise RuntimeError("Too many redirects")
 

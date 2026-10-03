@@ -601,6 +601,9 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "max_duration=15.0\n"
             "Invalid port: 0\n"
             "Port mismatch for pinned host\n"
+            "_normalize_scrape_host\n"
+            "return ordered_ips, host_clean, port, safe_url\n"
+            "stream('GET', safe_url, headers=headers)\n"
         )
         self.assertEqual(self.fn(content, "webapp.py"), "ALREADY_APPLIED")
 
@@ -638,6 +641,12 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("(?si)<script", res)
         self.assertIn("(?si)<iframe", res)
         self.assertIn("SEARXNG_SCRAPE_MAX_DURATION", res)
+        # R6 regression: host normalization + safe URL rebuild to keep the
+        # DNS pin effective (Unicode dot / trailing dot / IDNA pin bypass).
+        self.assertIn("_normalize_scrape_host", res)
+        self.assertIn("return ordered_ips, host_clean, port, safe_url", res)
+        self.assertIn("stream('GET', safe_url, headers=headers)", res)
+        self.assertIn("current_url = urllib.parse.urljoin(safe_url, location.strip())", res)
         # HTTPX trusts HTTP(S)_PROXY by default.  The scrape client must make
         # direct, DNS-pinned connections instead of delegating DNS to a proxy.
         self.assertIn("trust_env=False", res)
@@ -671,6 +680,69 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn("# --- GenAI Next WebUI Integration ---", res)
         self.assertIn("webui_next.register_next_webui(app, None)", res)
         self.assertIn("v19-bulletproof-scrape-fix", res)
+
+    def test_scrape_host_normalization_prevents_pin_bypass(self):
+        """R6 SSRF regression: the injected scrape route must normalize hosts
+        (Unicode dot variants / trailing dot / IDNA) before blocking, DNS
+        resolution and pinning, and must fetch the rebuilt safe_url so the
+        DNS pin always matches the host httpx hands to the transport.
+
+        Without this, a URL like http://attacker.example\u3002/ makes the
+        validator pin the raw host while httpx normalizes it, the pin is
+        silently skipped and attacker DNS can point the second resolution
+        at an internal service (DNS rebinding -> SSRF).
+        """
+        import re as re_mod
+
+        content = "import warnings\nfrom flask import Flask\n\n@app.route('/search')\ndef search():\n    pass\n"
+        res = self.fn(content, "webapp.py")
+
+        # Host normalization helper exists and handles Unicode dot variants
+        self.assertIn("def _normalize_scrape_host(host_raw):", res)
+        self.assertIn("chr(0x3002), chr(0xFF0E), chr(0xFF61)", res)
+        self.assertIn("idna.encode(host_norm, uts46=True)", res)
+
+        # The validator resolves/pins the normalized host and returns a
+        # rebuilt safe_url.
+        self.assertIn("addr_info = socket.getaddrinfo(host_clean, port)", res)
+        self.assertIn("return ordered_ips, host_clean, port, safe_url", res)
+
+        # The request must use the normalized safe_url (not the raw URL).
+        self.assertIn("safe_ips, original_host, port, safe_url = _get_safe_ip_url(current_url)", res)
+        self.assertIn("with _scrape_client.stream('GET', safe_url, headers=headers) as response:", res)
+        self.assertIn("current_url = urllib.parse.urljoin(safe_url, location.strip())", res)
+        self.assertNotIn("stream('GET', current_url, headers=headers)", res)
+
+        # _safe_getaddrinfo must normalize both sides before comparing with
+        # the pin (defense in depth if any caller still pins a raw host).
+        self.assertIn("def _norm_gai_host(value):", res)
+        self.assertIn("h_clean = _norm_gai_host(h_str)", res)
+        self.assertIn("pin_clean = _norm_gai_host(pin_host)", res)
+
+        # Simulate the normalization end-to-end: raw unicode-dot host must
+        # collapse to the same string httpx would produce.
+        code = re_mod.search(
+            r"def _normalize_scrape_host\(host_raw\):(.*?)\n            return host_norm", res, re_mod.DOTALL
+        )
+        self.assertIsNotNone(code, "_normalize_scrape_host body not found in patch output")
+        # Dedent the extracted body (12-space indentation inside the patch)
+        # to module level so it can be exec'd standalone. The extracted
+        # body starts with the docstring, which becomes the function body's
+        # first statement after the def line.
+        body = code.group(1)
+        body = re_mod.sub(r"\n            ", "\n", body).strip("\n")
+        namespace = {"chr": chr}
+        exec(
+            "def _normalize_scrape_host(host_raw):\n    " + body.replace("\n", "\n    ") + "\n    return host_norm\n",
+            namespace,
+        )  # noqa: S102 - static test input
+        normalize = namespace["_normalize_scrape_host"]
+        self.assertEqual(normalize("attacker.example\u3002"), "attacker.example")
+        self.assertEqual(normalize("attacker.example."), "attacker.example")
+        self.assertEqual(normalize("attacker.example\uff0e"), "attacker.example")
+        self.assertEqual(normalize("attack\u3002er.example"), "attack.er.example")
+        self.assertEqual(normalize("EXAMPLE.COM"), "example.com")
+        self.assertEqual(normalize("127\u30020\u30020\u30021"), "127.0.0.1")
 
 
 class TestPatchProcessorsInit(unittest.TestCase):
@@ -2653,6 +2725,133 @@ class TestAiWebuiPatches(unittest.TestCase):
             err_res = webui_next._scrape_url_direct(fake_webapp, "https://example.com/unreachable")
             self.assertIn("スクレイピング拒否", err_res.get("error", ""))
             self.assertIn("DNS resolution failed", err_res.get("error", ""))
+
+    def test_webui_next_scrape_url_direct_normalizes_host_for_dns_pin(self):
+        """R6 SSRF regression: Unicode dot variants / trailing dots in the URL
+        host must be normalized before blocking, DNS resolution and pinning.
+
+        httpx normalizes hosts (U+3002 etc -> '.', IDNA, trailing dot strip)
+        before handing them to the transport. If the pin is keyed on the raw
+        (un-normalized) host, the transport lookup no longer matches the pin,
+        the pin is silently skipped and an attacker-controlled DNS answer can
+        point the second resolution at an internal service (DNS rebinding).
+        The scrape client must request the normalized-host URL so the pin is
+        always effective.
+        """
+        import contextlib
+        import ipaddress
+        import socket
+        import urllib.parse
+
+        import webui_next
+
+        fake_webapp = mock.MagicMock()
+        fake_webapp._ScrapeBlockedError = ValueError
+        fake_webapp._ScrapeResponseTooLargeError = RuntimeError
+        fake_webapp._is_reserved_scrape_host = lambda h: False
+        fake_webapp._is_ip_blocked = lambda ip: False
+        fake_webapp._is_blocked_scrape_host = lambda h: False
+
+        captured_pinned = []
+
+        @contextlib.contextmanager
+        def mock_pinned_dns(host, ips, port):
+            captured_pinned.append((host, ips, port))
+            yield
+
+        fake_webapp.pinned_dns = mock_pinned_dns
+
+        requested_urls = []
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {}
+
+        def fake_stream(method, url, **kwargs):
+            requested_urls.append(url)
+
+            class _Ctx:
+                def __enter__(self):
+                    return mock_resp
+
+                def __exit__(self, *exc):
+                    return False
+
+            return _Ctx()
+
+        fake_client = mock.MagicMock()
+        fake_client.stream.side_effect = fake_stream
+        fake_webapp._scrape_client = fake_client
+        fake_webapp._scrape_client_lock = contextlib.nullcontext()
+        # Match verify_ssl=True so the shared client is not rebuilt with a
+        # real httpx.Client during the test.
+        fake_webapp._scrape_client_verify_ssl = True
+        fake_webapp._read_scrape_response = lambda resp, max_duration=15.0: "<html>ok</html>"
+        fake_webapp.trafilatura.extract = lambda html, **kw: "ok"
+
+        def fake_getaddrinfo(host, port, *args, **kwargs):
+            # Simulate a rebinding attacker: the first lookup for ANY host
+            # returns a public IP, any later lookup returns loopback.
+            if fake_getaddrinfo.calls == 0:
+                fake_getaddrinfo.calls = 1
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port))]
+
+        fake_getaddrinfo.calls = 0
+
+        attack_urls = [
+            # Ideographic full stop used as a dot -> httpx normalizes it away
+            "http://attacker.example\u3002/x",
+            # Trailing dot (FQDN root label) -> httpx strips it
+            "http://attacker.example./x",
+            # Fullwidth dot variant
+            "http://attacker.example\uff0e/x",
+        ]
+        for url in attack_urls:
+            fake_getaddrinfo.calls = 0
+            requested_urls.clear()
+            captured_pinned.clear()
+            with mock.patch("webui_next.socket.getaddrinfo", side_effect=fake_getaddrinfo):
+                res = webui_next._scrape_url_direct(fake_webapp, url, max_length=100)
+            # The request must go out on the normalized host...
+            self.assertTrue(requested_urls, "scrape request must be issued")
+            self.assertEqual(
+                urllib.parse.urlsplit(requested_urls[0]).hostname,
+                "attacker.example",
+                f"transport host must be normalized for pin match: {url} -> {requested_urls[0]}",
+            )
+            # ...and the pin must be keyed on the same normalized host.
+            self.assertEqual(captured_pinned[-1][0], "attacker.example")
+            # Content must be fetched (pin effective, single resolution)
+            self.assertEqual(res.get("content"), "ok", f"unexpected error for {url}: {res.get('error')}")
+
+        # Non-ASCII IDN hosts must be punycoded so the transport and pin agree.
+        fake_getaddrinfo.calls = 0
+        requested_urls.clear()
+        captured_pinned.clear()
+        with mock.patch("webui_next.socket.getaddrinfo", side_effect=fake_getaddrinfo):
+            res = webui_next._scrape_url_direct(fake_webapp, "http://例え.example/テスト", max_length=100)
+        self.assertEqual(urllib.parse.urlsplit(requested_urls[0]).hostname, "xn--r8jz45g.example")
+        self.assertEqual(captured_pinned[-1][0], "xn--r8jz45g.example")
+
+        # Loopback obfuscation with Unicode dots must be statically blocked
+        # before any DNS lookup (uses a fake that actually blocks private IPs).
+        loopback_fake = mock.MagicMock()
+        loopback_fake._ScrapeBlockedError = ValueError
+        loopback_fake._ScrapeResponseTooLargeError = RuntimeError
+        loopback_fake._is_reserved_scrape_host = lambda h: False
+        loopback_fake._is_ip_blocked = lambda ip: (
+            ipaddress.ip_address(ip).is_loopback or ipaddress.ip_address(ip).is_private
+        )
+        loopback_fake._is_blocked_scrape_host = lambda h: False
+        loopback_fake.pinned_dns = mock_pinned_dns
+        with mock.patch("webui_next.socket.getaddrinfo") as ga:
+            res = webui_next._scrape_url_direct(
+                loopback_fake,
+                "http://127\u30020\u30020\u30021/secret",
+                max_length=100,
+            )
+            self.assertIn("スクレイピング拒否 (400)", res.get("error", ""))
+            ga.assert_not_called()
 
     def test_unified_root_serves_ai_first_workspace(self):
         """Verify root / serves the unified AI Search & Context Studio HTML with classic & settings tabs."""

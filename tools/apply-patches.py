@@ -1254,14 +1254,26 @@ def _safe_getaddrinfo(h, p, *args, **kwargs):
                     h_str = h.decode('utf-8', errors='replace')
             else:
                 h_str = h or ''
-            h_clean = h_str.strip('[]').rstrip('.').lower()
-            pin_clean = pin_host.strip('[]').rstrip('.').lower()
+            # Normalize both sides the same way httpx does: Unicode dot
+            # variants (U+3002/U+FF0E/U+FF61) become '.', trailing dots are
+            # stripped, then compare raw, ASCII-lowercase and IDNA forms.
+            # Without this, httpx may hand the transport a normalized host
+            # that differs textually from the pinned host and the pin would
+            # be silently skipped (DNS rebinding / SSRF regression).
+            def _norm_gai_host(value):
+                value = (value or '').strip().strip('[]').lower()
+                for dot in (chr(0x3002), chr(0xFF0E), chr(0xFF61)):
+                    value = value.replace(dot, '.')
+                return value.rstrip('.')
+
+            h_clean = _norm_gai_host(h_str)
+            pin_clean = _norm_gai_host(pin_host)
             if h_clean == pin_clean:
                 host_matches = True
             else:
                 try:
-                    enc_h = idna.encode(h_clean).decode('ascii')
-                    enc_pin = idna.encode(pin_clean).decode('ascii')
+                    enc_h = idna.encode(h_clean, uts46=True).decode('ascii')
+                    enc_pin = idna.encode(pin_clean, uts46=True).decode('ascii')
                     host_matches = (enc_h == enc_pin)
                 except Exception:
                     pass
@@ -1483,6 +1495,30 @@ def scrape():
                 )
                 _scrape_client_verify_ssl = verify_ssl
 
+        def _normalize_scrape_host(host_raw):
+            """Normalize a host the same way httpx does before transport.
+
+            Converts Unicode dots (U+3002, U+FF0E, U+FF61) to '.', strips
+            trailing dots and applies IDNA/punycode encoding. Must be applied
+            before host blocking, DNS resolution and pinning so that the
+            validator, the DNS pin and httpx's transport all agree on the
+            exact host string that will be resolved. Without this, a pin
+            keyed on a non-normalized host is silently ignored by the
+            transport, re-enabling DNS rebinding (SSRF).
+            """
+            host_norm = (host_raw or '').strip().strip('[]').lower()
+            for dot in (chr(0x3002), chr(0xFF0E), chr(0xFF61)):
+                host_norm = host_norm.replace(dot, '.')
+            host_norm = host_norm.rstrip('.')
+            if '%' in host_norm:
+                host_norm = host_norm.split('%', 1)[0]
+            if host_norm and not host_norm.replace('.', '').isdigit():
+                try:
+                    host_norm = idna.encode(host_norm, uts46=True).decode('ascii')
+                except Exception:
+                    pass
+            return host_norm
+
         def _get_safe_ip_url(url_to_resolve):
             parsed = urllib.parse.urlparse(url_to_resolve)
             if parsed.scheme not in ('http', 'https'):
@@ -1492,7 +1528,9 @@ def scrape():
             if not host:
                 raise _ScrapeBlockedError('Empty hostname')
 
-            host_clean = host.strip().rstrip('.').lower()
+            host_clean = _normalize_scrape_host(host)
+            if not host_clean:
+                raise _ScrapeBlockedError('Empty hostname')
             if _is_reserved_scrape_host(host_clean):
                 raise _ScrapeBlockedError(f'Blocked: {host} is a private/reserved host')
 
@@ -1536,9 +1574,24 @@ def scrape():
                     except Exception:
                         pass
 
+            # Rebuild the URL with the normalized host so that the transport
+            # (httpx) resolves exactly the host we validated and pinned.
+            # Without this, a host like 'attacker.example' + U+3002 is
+            # normalized by httpx to 'attacker.example.' which no longer
+            # matches the pin host, silently disabling the pin and
+            # re-enabling DNS rebinding.
+            port = parsed.port or (443 if parsed.scheme == 'https' else 80)
+            if ':' in host_clean and not host_clean.startswith('['):
+                host_out = f'[{host_clean}]'
+            else:
+                host_out = host_clean
+            hostport = f'{host_out}:{port}' if parsed.port else host_out
+            userinfo, at_sep, _rest = parsed.netloc.partition('@')
+            netloc = f'{userinfo}@{hostport}' if at_sep else hostport
+            safe_url = parsed._replace(netloc=netloc).geturl()
+
             try:
-                port = parsed.port or (443 if parsed.scheme == 'https' else 80)
-                addr_info = socket.getaddrinfo(host, port)
+                addr_info = socket.getaddrinfo(host_clean, port)
                 if not addr_info:
                     raise _ScrapeBlockedError(f'Could not resolve host: {host}')
                 valid_ips = []
@@ -1552,7 +1605,7 @@ def scrape():
                 v4_ips = [ip for ip in valid_ips if ':' not in ip]
                 v6_ips = [ip for ip in valid_ips if ':' in ip]
                 ordered_ips = v4_ips + v6_ips
-                return ordered_ips, host, port
+                return ordered_ips, host_clean, port, safe_url
             except _ScrapeBlockedError:
                 raise
             except socket.gaierror as e:
@@ -1566,14 +1619,16 @@ def scrape():
             if (cur_parsed.scheme or '').lower() not in ('http', 'https'):
                 raise _ScrapeBlockedError(f'Blocked invalid scheme during redirect: {cur_parsed.scheme}')
 
-            safe_ips, original_host, port = _get_safe_ip_url(current_url)
+            safe_ips, original_host, port, safe_url = _get_safe_ip_url(current_url)
             headers = {'User-Agent': ua}
 
             # Use thread-safe DNS Pinning context manager
             with pinned_dns(original_host, safe_ips, port):
-                # The host in current_url remains example.com, so TLS verify works,
-                # but the socket connects directly to safe_ip.
-                with _scrape_client.stream('GET', current_url, headers=headers) as response:
+                # current_url was rebuilt with the normalized host, so the
+                # transport always looks up the exact pinned host. TLS verify
+                # still uses the host name, while the socket connects to the
+                # validated safe IP.
+                with _scrape_client.stream('GET', safe_url, headers=headers) as response:
                     if response.status_code not in (301, 302, 303, 307, 308):
                         response.raise_for_status()
                         return _read_scrape_response(response)
@@ -1581,7 +1636,7 @@ def scrape():
                     location = response.headers.get('location')
                     if not location or not location.strip():
                         raise RuntimeError(f'Redirect without Location header (status {response.status_code})')
-                    current_url = urllib.parse.urljoin(current_url, location.strip())
+                    current_url = urllib.parse.urljoin(safe_url, location.strip())
         else:
             raise RuntimeError('Too many redirects')
 
