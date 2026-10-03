@@ -177,6 +177,8 @@ try {
     Assert-Blocked -Uri "$base/scrape?url=http://2130706433/" -Label "integer loopback (2130706433)"
     Assert-Blocked -Uri "$base/scrape?url=http://127.1/" -Label "shorthand loopback (127.1)"
     Assert-Blocked -Uri "$base/scrape?url=http://0177.0.0.1/" -Label "octal loopback (0177.0.0.1)"
+    Assert-Blocked -Uri "$base/scrape?url=http://017700000001/" -Label "un-dotted octal loopback (017700000001)"
+    Assert-Blocked -Uri "$base/scrape?url=http://999999999999/" -Label "invalid numeric host (999999999999)"
     Assert-Blocked -Uri "$base/scrape?url=http://127%E3%80%820%E3%80%820%E3%80%821/" -Label "Unicode ideographic dot loopback (127。0。0。1)"
     Assert-Blocked -Uri "$base/scrape?url=http://127%EF%BC%8E0%EF%BC%8E0%EF%BC%8E1/" -Label "Unicode fullwidth dot loopback (127．0．0．1)"
     Assert-Blocked -Uri "$base/scrape?url=http://127%EF%BD%A10%EF%BD%A10%EF%BD%A11/" -Label "Unicode halfwidth dot loopback (127｡0｡0｡1)"

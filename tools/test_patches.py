@@ -798,6 +798,14 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertTrue(is_blocked("[::1]", resolve_dns=False))
         self.assertTrue(is_blocked("[::ffff:127.0.0.1]", resolve_dns=False))
 
+        # Obfuscated integer/hex/octal/binary and invalid numeric hosts
+        self.assertTrue(is_blocked("2130706433", resolve_dns=False))
+        self.assertTrue(is_blocked("0x7f000001", resolve_dns=False))
+        self.assertTrue(is_blocked("0177.0.0.1", resolve_dns=False))
+        self.assertTrue(is_blocked("017700000001", resolve_dns=False))
+        self.assertTrue(is_blocked("999999999999", resolve_dns=False))
+        self.assertTrue(is_blocked("999.999.999.999", resolve_dns=False))
+
         # Public global hosts must not be blocked statically
         self.assertFalse(is_blocked("example.com", resolve_dns=False))
         self.assertFalse(is_blocked("93.184.216.34", resolve_dns=False))

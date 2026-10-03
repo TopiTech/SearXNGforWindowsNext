@@ -390,17 +390,29 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
         ip = ipaddress.ip_address(host)
         return not _is_ip_blocked(ip)
     except ValueError:
-        pass
+        if ":" in host:
+            return False
 
-    # Check numeric or obfuscated IP representations (e.g. 2130706433 or 0x7f000001)
-    if host.isdigit():
+    # Check numeric or obfuscated IP representations (e.g. 2130706433, 017700000001, or 0x7f000001)
+    if host.replace(".", "").isdigit():
+        try:
+            packed = socket.inet_aton(host)
+            ip_v4 = ipaddress.IPv4Address(packed)
+            return not _is_ip_blocked(ip_v4)
+        except (OSError, ValueError, ipaddress.AddressValueError):
+            pass
+
         try:
             ip_int = int(host)
             if 0 <= ip_int <= 0xFFFFFFFF:
                 ip_v4 = ipaddress.IPv4Address(ip_int)
                 return not _is_ip_blocked(ip_v4)
         except (ValueError, ipaddress.AddressValueError):
-            return False
+            pass
+
+        # An all-numeric host (with or without dots) that cannot be parsed as a valid IPv4 address
+        # is invalid (RFC 3696 / ICANN forbids all-numeric TLDs) and must be rejected.
+        return False
 
     if host.startswith(("0x", "0X", "0o", "0O", "0b", "0B")):
         try:
@@ -409,9 +421,18 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
                 ip_v4 = ipaddress.IPv4Address(ip_int)
                 return not _is_ip_blocked(ip_v4)
         except (ValueError, ipaddress.AddressValueError):
-            return False
+            pass
 
-    if ":" not in host and "." in host and any(part.isdigit() for part in host.split(".")):
+        try:
+            packed = socket.inet_aton(host)
+            ip_v4 = ipaddress.IPv4Address(packed)
+            return not _is_ip_blocked(ip_v4)
+        except (OSError, ValueError, ipaddress.AddressValueError):
+            pass
+
+        return False
+
+    if ":" not in host and "." in host:
         try:
             packed = socket.inet_aton(host)
             ip_v4 = ipaddress.IPv4Address(packed)

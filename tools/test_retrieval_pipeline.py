@@ -374,7 +374,10 @@ class TestPassageChunkerAndSecurity(unittest.TestCase):
         self.assertFalse(is_safe_retrieval_url("http://2130706433/"))
         self.assertFalse(is_safe_retrieval_url("http://0x7f000001/"))
         self.assertFalse(is_safe_retrieval_url("http://0177.0.0.1/"))
+        self.assertFalse(is_safe_retrieval_url("http://017700000001/"))
         self.assertFalse(is_safe_retrieval_url("http://0b01111111000000000000000000000001/"))
+        self.assertFalse(is_safe_retrieval_url("http://999999999999/"))
+        self.assertFalse(is_safe_retrieval_url("http://999.999.999.999/"))
 
         # Obfuscated Unicode dot variants and bracketed IP literals
         self.assertFalse(is_safe_retrieval_url("http://127\u30020\u30020\u30021/secret"))

@@ -11,6 +11,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -629,12 +630,15 @@ def process_message(line: str) -> dict[str, Any] | None:
 def main() -> None:
     """Main stdio loop for the MCP server."""
     # Ensure Windows stdio uses UTF-8
-    if hasattr(sys.stdin, "reconfigure"):
-        sys.stdin.reconfigure(encoding="utf-8")
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
-    if hasattr(sys.stderr, "reconfigure"):
-        sys.stderr.reconfigure(encoding="utf-8")
+    with contextlib.suppress(Exception):
+        if hasattr(sys.stdin, "reconfigure"):
+            sys.stdin.reconfigure(encoding="utf-8")
+    with contextlib.suppress(Exception):
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
+    with contextlib.suppress(Exception):
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8")
 
     log_debug(f"Starting {SERVER_NAME} v{SERVER_VERSION} (stdio mode)...")
 

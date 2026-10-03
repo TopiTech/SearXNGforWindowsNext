@@ -146,17 +146,27 @@ def _scrape_url_direct(
             ip_direct = ipaddress.ip_address(host_clean)
             return bool(webapp_mod._is_ip_blocked(ip_direct))
         except ValueError:
-            if host_clean.isdigit():
+            if ":" in host_clean:
+                return True
+            if host_clean.replace(".", "").isdigit():
+                with contextlib.suppress(OSError, ValueError):
+                    packed = socket.inet_aton(host_clean)
+                    return bool(webapp_mod._is_ip_blocked(ipaddress.IPv4Address(packed)))
                 with contextlib.suppress(ValueError, TypeError, OverflowError):
                     ip_int = int(host_clean)
                     if 0 <= ip_int <= 0xFFFFFFFF:
                         return bool(webapp_mod._is_ip_blocked(ipaddress.IPv4Address(ip_int)))
+                return True
             if host_clean.startswith(("0x", "0X", "0o", "0O", "0b", "0B")):
                 with contextlib.suppress(ValueError, TypeError, OverflowError):
                     ip_int = int(host_clean, 0)
                     if 0 <= ip_int <= 0xFFFFFFFF:
                         return bool(webapp_mod._is_ip_blocked(ipaddress.IPv4Address(ip_int)))
-            if ":" not in host_clean:
+                with contextlib.suppress(OSError, ValueError):
+                    packed = socket.inet_aton(host_clean)
+                    return bool(webapp_mod._is_ip_blocked(ipaddress.IPv4Address(packed)))
+                return True
+            if ":" not in host_clean and "." in host_clean:
                 with contextlib.suppress(OSError, ValueError):
                     packed = socket.inet_aton(host_clean)
                     return bool(webapp_mod._is_ip_blocked(ipaddress.IPv4Address(packed)))
