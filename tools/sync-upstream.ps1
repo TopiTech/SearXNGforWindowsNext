@@ -271,7 +271,7 @@ synced_at=$(Get-Date -Format o)
     Write-Host ""
     Write-Host "Applying Windows-specific patches..." -ForegroundColor Green
     try {
-        & (Join-Path $repoRoot "tools\apply-windows-patches.ps1") --force
+        & (Join-Path $repoRoot "tools\apply-windows-patches.ps1") --force --rollback-on-failure
     }
     catch {
         Write-Host ""

@@ -86,12 +86,9 @@ foreach ($tmp in $tmpFiles) {
     Remove-FileSafe -FilePath $tmp.FullName
 }
 
-# 1.4 Remove Ruff cache & patch backups
+# 1.4 Remove Ruff cache
 $ruffCache = Join-Path $workspaceRoot ".ruff_cache"
 if (Test-Path $ruffCache) { Remove-DirectorySafe -DirPath $ruffCache }
-
-$patchBackup = Join-Path $workspaceRoot "python\.patches_backup"
-if (Test-Path $patchBackup) { Remove-DirectorySafe -DirPath $patchBackup }
 
 
 # --- Stage 2: Unused Runtime Assets (PO sources & Source Maps) ---
@@ -142,6 +139,15 @@ if ($Deep -or $PruneBabel) {
     if (Test-Path $pythonExe) {
         Write-Host "      Purging pip local wheel cache..." -ForegroundColor Gray
         & $pythonExe -m pip cache purge --quiet 2>$null
+    }
+
+    # 3.3 Purge patch rollback backups (only with -Deep)
+    if ($Deep) {
+        $patchBackup = Join-Path $workspaceRoot "python\.patches_backup"
+        if (Test-Path $patchBackup) {
+            Remove-DirectorySafe -DirPath $patchBackup
+            Write-Host "      Purged patch rollback backups." -ForegroundColor Gray
+        }
     }
 } else {
     Write-Host "[3/5] Skipping deep pruning (run with -Deep to prune unused Babel locales & pip cache)." -ForegroundColor Gray

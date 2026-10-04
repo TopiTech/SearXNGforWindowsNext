@@ -15,6 +15,7 @@ import os
 import re as re_mod
 import shutil
 import socket
+import stat
 import sys
 import tempfile
 import unittest
@@ -582,7 +583,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "Blocked invalid scheme\n"
             "Redirect without Location header\n"
             "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')\n"
-            "max_keepalive_connections=20\n"
+            "max_keepalive_connections=0\n"
             "_searxng_original_getaddrinfo\n"
             "v19-bulletproof-scrape-fix\n"
             "host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B'))\n"
@@ -3432,6 +3433,370 @@ class TestPatchDiagnosticsAndResilience(unittest.TestCase):
         )
         # Verify idempotency
         self.assertEqual(apply_patches.patch_webapp_preferences_validation(patched, "webapp.py"), "ALREADY_APPLIED")
+
+
+class TestPatchHardeningM2(unittest.TestCase):
+    """Dedicated regression unit tests for M2 Patch Management and Windows Security Hardening."""
+
+    def test_cache_tracked_targets_completeness(self):
+        """F2.1: Verify _get_tracked_targets dynamically includes all PATCH_SPECS targets."""
+        tracked = apply_patches._get_tracked_targets()
+        self.assertIsInstance(tracked, list)
+
+        # Core targets must be present
+        self.assertIsNotNone(apply_patches.__file__)
+        assert apply_patches.__file__ is not None
+        self.assertIn(os.path.abspath(apply_patches.__file__), tracked)
+        self.assertIn(os.path.join(apply_patches.REPO_ROOT, "tools", "disable-missing-engines.py"), tracked)
+        self.assertIn(os.path.join(apply_patches.REPO_ROOT, "tools", "webui_next.py"), tracked)
+        self.assertIn(os.path.join(apply_patches.REPO_ROOT, "UPSTREAM_VERSION.txt"), tracked)
+
+        # All PATCH_SPECS target paths must be present
+        for spec in apply_patches.PATCH_SPECS:
+            self.assertIn(
+                os.path.abspath(spec.target_path),
+                tracked,
+                f"Spec target {spec.target_path} missing from _get_tracked_targets()",
+            )
+
+        # Specifically verify critical category targets are tracked
+        pref_target = os.path.abspath(os.path.join(apply_patches.SITE_PACKAGES, "searx", "preferences.py"))
+        webadapter_target = os.path.abspath(os.path.join(apply_patches.SITE_PACKAGES, "searx", "webadapter.py"))
+        self.assertIn(pref_target, tracked)
+        self.assertIn(webadapter_target, tracked)
+
+    def test_rollback_path_traversal_orig_path_rejected(self):
+        """F2.2: Verify PatchTransaction.rollback rejects orig_path outside REPO_ROOT / SITE_PACKAGES."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backup_dir = os.path.join(tmpdir, "backups")
+            os.makedirs(backup_dir, exist_ok=True)
+
+            # Create a legitimate backup file in backup_dir
+            bak_file = os.path.join(backup_dir, "outside.bak")
+            with open(bak_file, "w", encoding="utf-8") as f:
+                f.write("malicious payload")
+
+            # Point orig_path to an unauthorized location outside REPO_ROOT and SITE_PACKAGES
+            outside_target = os.path.join(tmpdir, "outside_target.txt")
+            manifest = {outside_target: bak_file}
+            with open(os.path.join(backup_dir, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump(manifest, f)
+
+            tx = apply_patches.PatchTransaction(backup_dir=backup_dir)
+            with mock.patch.object(apply_patches.logger, "error") as mock_logger:
+                restored = tx.rollback()
+                self.assertEqual(restored, [])
+                self.assertFalse(os.path.exists(outside_target))
+                mock_logger.assert_called_with(
+                    "Security violation: rollback target %s outside permitted boundaries",
+                    outside_target,
+                )
+
+    def test_rollback_path_traversal_bak_path_rejected(self):
+        """F2.2: Verify PatchTransaction.rollback rejects bak_path outside backup_dir."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backup_dir = os.path.join(tmpdir, "backups")
+            os.makedirs(backup_dir, exist_ok=True)
+
+            # Legitimate target inside repo
+            valid_target = os.path.join(apply_patches.REPO_ROOT, "tools", "test_dummy_target.txt")
+            # bak_path outside backup_dir
+            outside_bak = os.path.join(tmpdir, "outside.bak")
+            with open(outside_bak, "w", encoding="utf-8") as f:
+                f.write("fake backup")
+
+            manifest = {valid_target: outside_bak}
+            with open(os.path.join(backup_dir, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump(manifest, f)
+
+            tx = apply_patches.PatchTransaction(backup_dir=backup_dir)
+            with mock.patch.object(apply_patches.logger, "error") as mock_logger:
+                restored = tx.rollback()
+                self.assertEqual(restored, [])
+                self.assertFalse(os.path.exists(valid_target))
+                mock_logger.assert_called_with(
+                    "Security violation: backup file %s outside backup directory",
+                    outside_bak,
+                )
+
+    def test_rollback_legitimate_target_restored(self):
+        """F2.2: Verify PatchTransaction.rollback restores authorized files correctly."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backup_dir = os.path.join(tmpdir, "backups")
+            os.makedirs(backup_dir, exist_ok=True)
+
+            # Use a mock repo root to avoid touching live workspace files
+            mock_repo = os.path.join(tmpdir, "repo")
+            os.makedirs(mock_repo, exist_ok=True)
+            target_file = os.path.join(mock_repo, "file.py")
+            with open(target_file, "w", encoding="utf-8") as f:
+                f.write("modified content")
+
+            bak_file = os.path.join(backup_dir, "file.bak")
+            with open(bak_file, "w", encoding="utf-8") as f:
+                f.write("original content")
+
+            manifest = {target_file: bak_file}
+            with open(os.path.join(backup_dir, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump(manifest, f)
+
+            tx = apply_patches.PatchTransaction(backup_dir=backup_dir)
+            with mock.patch.object(apply_patches, "REPO_ROOT", mock_repo):
+                restored = tx.rollback()
+                self.assertEqual(len(restored), 1)
+                with open(target_file, "r", encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "original content")
+
+    def test_cli_report_path_traversal_rejected(self):
+        """F2.3: Verify CLI --report path traversal outside REPO_ROOT raises ValueError."""
+        outside_path = os.path.abspath(os.path.join(apply_patches.REPO_ROOT, "..", "outside_report.json"))
+        with (
+            mock.patch("sys.argv", ["apply-patches.py", "--check", "--report", outside_path]),
+            self.assertRaisesRegex(ValueError, "Report output must reside within repository directory."),
+        ):
+            apply_patches.main()
+
+    def test_cli_report_path_valid_accepted(self):
+        """F2.3: Verify CLI --report within REPO_ROOT is accepted without error."""
+        valid_report = os.path.join(apply_patches.REPO_ROOT, ".test_m2_report.json")
+        try:
+            with mock.patch("sys.argv", ["apply-patches.py", "--check", "--report", valid_report]):
+                exit_code = apply_patches.main()
+                self.assertEqual(exit_code, 0)
+        finally:
+            if os.path.exists(valid_report):
+                try:
+                    os.remove(valid_report)
+                except OSError:
+                    pass
+
+    def test_ensure_secret_key_mkstemp_usage(self):
+        """F2.4 & F2.5: Verify ensure-secret-key uses tempfile.mkstemp rather than static .tmp."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            key_file = os.path.join(tmpdir, "secret.key")
+            with mock.patch("tempfile.mkstemp", wraps=tempfile.mkstemp) as mock_mkstemp:
+                success = ensure_secret_key._write_key(key_file, "a" * 64)
+                self.assertTrue(success)
+                self.assertTrue(mock_mkstemp.called)
+                _, kwargs = mock_mkstemp.call_args
+                self.assertEqual(kwargs.get("prefix"), ".tmp_key_")
+
+            with open(key_file, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read().strip(), "a" * 64)
+
+    def test_ensure_secret_key_icacls_permissions_on_windows(self):
+        """F2.4: Verify set_file_permissions runs icacls on Windows."""
+        dummy_path = r"C:\fake\config\secret.key"
+        with (
+            mock.patch("sys.platform", "win32"),
+            mock.patch.dict(os.environ, {"USERNAME": "win_user"}),
+            mock.patch("subprocess.run") as mock_run,
+        ):
+            ensure_secret_key.set_file_permissions(dummy_path)
+            mock_run.assert_called_once_with(
+                ["icacls", dummy_path, "/inheritance:r", "/grant:r", "win_user:(R,W)"],
+                check=False,
+                capture_output=True,
+            )
+
+    def test_ensure_secret_key_posix_permissions(self):
+        """F2.4: Verify set_file_permissions uses chmod 600 on POSIX platforms."""
+        dummy_path = "/fake/config/secret.key"
+        with (
+            mock.patch("sys.platform", "linux"),
+            mock.patch("os.chmod") as mock_chmod,
+        ):
+            ensure_secret_key.set_file_permissions(dummy_path)
+            mock_chmod.assert_called_once_with(dummy_path, stat.S_IRUSR | stat.S_IWUSR)
+
+    def test_settings_loader_quoted_path_stripped(self):
+        """F2.6: Verify settings_loader.get_user_cfg_folder strips enclosing quotes."""
+        from searx import settings_loader
+
+        example_cfg = os.path.abspath(os.path.join(apply_patches.REPO_ROOT, "config", "settings.yml.example"))
+        expected_folder = os.path.dirname(example_cfg)
+
+        # 1. Double quotes
+        with mock.patch.dict(os.environ, {"SEARXNG_SETTINGS_PATH": f'"{example_cfg}"'}):
+            folder = settings_loader.get_user_cfg_folder()
+            self.assertEqual(str(folder), expected_folder)
+
+        # 2. Single quotes
+        with mock.patch.dict(os.environ, {"SEARXNG_SETTINGS_PATH": f"'{example_cfg}'"}):
+            folder = settings_loader.get_user_cfg_folder()
+            self.assertEqual(str(folder), expected_folder)
+
+    def test_scrape_client_keepalive_hardening(self):
+        """F2.9: Verify patch_webapp_scrape_route sets max_keepalive_connections=0."""
+        sample = "import warnings\nfrom flask import Flask\n\n@app.route('/search')\ndef search():\n    pass\n"
+        patched = apply_patches.patch_webapp_scrape_route(sample, "webapp.py")
+        self.assertIn("max_keepalive_connections=0", patched)
+        self.assertNotIn("max_keepalive_connections=20", patched)
+
+    def test_settings_loader_whitespace_padded_quotes(self):
+        """Verify settings_loader.get_user_cfg_folder handles whitespace around quotes."""
+        from searx import settings_loader
+
+        example_cfg = os.path.abspath(os.path.join(apply_patches.REPO_ROOT, "config", "settings.yml.example"))
+        expected_folder = os.path.dirname(example_cfg)
+
+        cases = [
+            f'  "{example_cfg}"  ',
+            f"  '{example_cfg}'  ",
+            f"   {example_cfg}   ",
+            f'  " {example_cfg} "  ',
+            f"  ' {example_cfg} '  ",
+        ]
+        for c in cases:
+            with mock.patch.dict(os.environ, {"SEARXNG_SETTINGS_PATH": c}):
+                folder = settings_loader.get_user_cfg_folder()
+                self.assertEqual(str(folder), expected_folder, f"Failed on case: {c}")
+
+    def test_settings_loader_quoted_custom_filename_retained(self):
+        """Verify load_settings retains custom filename when SEARXNG_SETTINGS_PATH is quoted."""
+        from searx import settings_loader
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            custom_cfg = os.path.join(tmpdir, "custom_profile.yml")
+            with open(custom_cfg, "w", encoding="utf-8") as f:
+                f.write("use_default_settings: true\ngeneral:\n  debug: false\n")
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "SEARXNG_SETTINGS_PATH": f'  "{custom_cfg}"  ',
+                    "SEARXNG_DISABLE_ETC_SETTINGS": "1",
+                },
+            ):
+                _cfg, msg = settings_loader.load_settings()
+                self.assertIn("custom_profile.yml", msg)
+
+    def test_settings_loader_patch_spec_registered_and_applied(self):
+        """Verify settings_loader_quotes is registered in PATCH_SPECS and functions properly."""
+        spec_names = [s.name for s in apply_patches.PATCH_SPECS]
+        self.assertIn("settings_loader_quotes", spec_names)
+
+        raw_sample = (
+            "def get_user_cfg_folder():\n"
+            "    folder = None\n"
+            '    settings_path = os.environ.get("SEARXNG_SETTINGS_PATH", "")\n'
+            "    return folder\n\n"
+            "def load_settings():\n"
+            '    settings_yml = os.environ.get("SEARXNG_SETTINGS_PATH")\n'
+            "    if settings_yml and Path(settings_yml).is_file():\n"
+            "        pass\n"
+        )
+        patched = apply_patches.patch_settings_loader(raw_sample, "settings_loader.py")
+        self.assertIn('raw_path = os.environ.get("SEARXNG_SETTINGS_PATH", "").strip()', patched)
+        self.assertIn("settings_path = raw_path.strip('\"\\'').strip()", patched)
+        self.assertIn("settings_yml = settings_yml.strip().strip('\"\\'').strip()", patched)
+
+        # Re-running on patched returns ALREADY_APPLIED
+        reapplied = apply_patches.patch_settings_loader(patched, "settings_loader.py")
+        self.assertEqual(reapplied, "ALREADY_APPLIED")
+
+    def test_ensure_secret_key_multiprocess_concurrency(self):
+        """Verify concurrent processes can initialize secret key without WinError 5/32."""
+        import concurrent.futures
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_repo = os.path.join(tmpdir, "fake_repo")
+            fake_tools = os.path.join(fake_repo, "tools")
+            fake_config = os.path.join(fake_repo, "config")
+            os.makedirs(fake_tools, exist_ok=True)
+            os.makedirs(fake_config, exist_ok=True)
+
+            shutil.copy(
+                os.path.join(HERE, "ensure-secret-key.py"),
+                os.path.join(fake_tools, "ensure-secret-key.py"),
+            )
+            shutil.copy(
+                os.path.join(apply_patches.REPO_ROOT, "config", "settings.yml.example"),
+                os.path.join(fake_config, "settings.yml.example"),
+            )
+
+            target_script = os.path.join(fake_tools, "ensure-secret-key.py")
+            num_procs = 8
+            cmd = [sys.executable, target_script]
+
+            def run_proc():
+                p = subprocess.run(cmd, capture_output=True, text=True, cwd=fake_repo, check=False)
+                return p.returncode, p.stdout.strip(), p.stderr.strip()
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_procs) as executor:
+                futures = [executor.submit(run_proc) for _ in range(num_procs)]
+                results = [f.result() for f in futures]
+
+            exit_codes = [r[0] for r in results]
+            outputs = [r[1] for r in results]
+
+            for i, code in enumerate(exit_codes):
+                self.assertEqual(code, 0, f"Process {i} failed with return code {code}: {results[i]}")
+                self.assertTrue(outputs[i].startswith("set SEARXNG_SECRET="))
+                key = outputs[i].replace("set SEARXNG_SECRET=", "")
+                self.assertEqual(len(key), 64)
+
+            # Check that secret.key was generated and has no orphans
+            orphaned = [f for f in os.listdir(fake_config) if f.startswith(".tmp_key_") or f.endswith(".tmp")]
+            self.assertEqual(orphaned, [])
+
+    def test_ensure_secret_key_fd_cleanup_on_open_error(self):
+        """Verify temp_fd is closed and temp file removed if open() fails."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_file = os.path.join(tmpdir, "secret.key")
+            orig_open = open
+
+            def failing_open(*args, **kwargs):
+                if len(args) > 0 and isinstance(args[0], int):
+                    raise OSError("Simulated low-level OS failure in open()")
+                return orig_open(*args, **kwargs)
+
+            with mock.patch("builtins.open", side_effect=failing_open):
+                success = ensure_secret_key._write_key(test_file, "a" * 64)
+                self.assertFalse(success)
+
+            orphaned = [f for f in os.listdir(tmpdir) if f.startswith(".tmp_key_")]
+            self.assertEqual(orphaned, [], f"Orphaned files remaining: {orphaned}")
+
+    def test_ensure_secret_key_acl_applied_to_existing_key(self):
+        """Verify main() unconditionally calls set_file_permissions even when key exists."""
+        with (
+            mock.patch.object(ensure_secret_key, "_read_key", return_value="f" * 64),
+            mock.patch.object(ensure_secret_key, "set_file_permissions") as mock_set_perm,
+            mock.patch.object(ensure_secret_key, "_ensure_settings_file"),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            code = ensure_secret_key.main()
+            self.assertEqual(code, 0)
+            mock_set_perm.assert_called_once_with(ensure_secret_key.SECRET_KEY_PATH)
+
+    def test_deployed_webapp_keepalive_setting(self):
+        """Verify deployed site-packages webapp.py has max_keepalive_connections=0."""
+        webapp_path = os.path.join(apply_patches.SITE_PACKAGES, "searx", "webapp.py")
+        self.assertTrue(os.path.exists(webapp_path), f"webapp.py not found at {webapp_path}")
+        with open(webapp_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn(
+            "max_keepalive_connections=0",
+            content,
+            "Deployed site-packages webapp.py does not have max_keepalive_connections=0",
+        )
+        self.assertNotIn(
+            "max_keepalive_connections=20",
+            content,
+            "Deployed site-packages webapp.py still contains max_keepalive_connections=20",
+        )
+
+    def test_apply_patches_check_all_clean(self):
+        """Verify python tools/apply-patches.py --check reports 0 pending patches."""
+        results = apply_patches.run_all_patches(apply_patches.PATCH_SPECS, dry_run=True)
+        non_applied = [r for r in results if r.status != apply_patches.PatchStatus.ALREADY_APPLIED]
+        self.assertEqual(
+            non_applied,
+            [],
+            f"apply-patches.py --check found pending or failed patches: {non_applied}",
+        )
 
 
 if __name__ == "__main__":

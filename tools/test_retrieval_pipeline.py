@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import socket
 import sys
+import time
 import unittest
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -776,6 +777,214 @@ class TestRetrievalServiceIntegration(unittest.TestCase):
         # Safe item must be called
         mock_scrape.assert_called_once()
         self.assertTrue(items[3]["is_scraped"])
+
+
+class TestQueryPipeline(unittest.TestCase):
+    """Regression tests for QueryProcessor ReDoS safety, length limits, and quote preservation."""
+
+    def test_redos_safety_comparison_patterns_direct(self) -> None:
+        """Verify COMPARISON_PATTERNS regex search terminates in < 50ms on 20,000 non-matching characters."""
+        pat_japanese = QueryProcessor.COMPARISON_PATTERNS[1]
+        pat_english = QueryProcessor.COMPARISON_PATTERNS[0]
+        payload = "a" * 20000
+
+        # Japanese pattern
+        t0 = time.perf_counter()
+        m_ja = pat_japanese.search(payload)
+        elapsed_ja = (time.perf_counter() - t0) * 1000.0
+        self.assertIsNone(m_ja)
+        self.assertLess(elapsed_ja, 50.0, f"COMPARISON_PATTERNS[1] took {elapsed_ja:.2f}ms (> 50ms)")
+
+        # English pattern
+        t0 = time.perf_counter()
+        m_en = pat_english.search(payload)
+        elapsed_en = (time.perf_counter() - t0) * 1000.0
+        self.assertIsNone(m_en)
+        self.assertLess(elapsed_en, 50.0, f"COMPARISON_PATTERNS[0] took {elapsed_en:.2f}ms (> 50ms)")
+
+        # Pathological repetitive delimiter character
+        t0 = time.perf_counter()
+        m_delim = pat_japanese.search("と" * 20000)
+        elapsed_delim = (time.perf_counter() - t0) * 1000.0
+        self.assertIsNone(m_delim)
+        self.assertLess(elapsed_delim, 50.0, f"Delim search took {elapsed_delim:.2f}ms (> 50ms)")
+
+    def test_redos_safety_classify_intent(self) -> None:
+        """Verify QueryProcessor.classify_intent completes in < 10ms on 20,000 characters."""
+        payload = "a" * 20000
+        t0 = time.perf_counter()
+        intent = QueryProcessor.classify_intent(payload)
+        elapsed = (time.perf_counter() - t0) * 1000.0
+        self.assertEqual(intent, "research")
+        self.assertLess(elapsed, 10.0, f"classify_intent took {elapsed:.2f}ms (> 10ms)")
+
+    def test_comparison_pattern_intent_and_expansion_accuracy(self) -> None:
+        """Verify valid comparison patterns are accurately identified and expanded."""
+        cases = [
+            ("Python vs Rust", "Python", "Rust"),
+            ("React compared to Vue", "React", "Vue"),
+            ("FastAPI versus Django", "FastAPI", "Django"),
+            ("Python と Rust 比較", "Python", "Rust"),
+            ("Vue と React の違い", "Vue", "React"),
+            ("TypeScript と JavaScript どっち", "TypeScript", "JavaScript"),
+            ("A 対 B 比較", "A", "B"),
+        ]
+        for query_str, expected_a, expected_b in cases:
+            proc = QueryProcessor.parse_and_normalize(query_str)
+            self.assertEqual(proc.intent, "comparison", f"Failed for {query_str}")
+            expansions = QueryProcessor.expand_query(proc, mode="deep")
+            self.assertIn(expected_a, expansions, f"Item A missing for {query_str}")
+            self.assertIn(expected_b, expansions, f"Item B missing for {query_str}")
+
+    def test_unspaced_and_quoted_japanese_comparison_queries(self) -> None:
+        """Verify unspaced, bracketed, particle 'の', and polite comparison queries are recognized and expanded."""
+        cases = [
+            ("PythonとRustの比較", "Python", "Rust"),
+            ("VueとReactの違い", "Vue", "React"),
+            ("TypeScriptとJavaScriptどっち", "TypeScript", "JavaScript"),
+            ("iPhone対Android比較", "iPhone", "Android"),
+            ("FastAPIとDjangoの比較", "FastAPI", "Django"),
+            ("Mac対Windowsどっち", "Mac", "Windows"),
+            ("呪術廻戦と鬼滅の刃の比較", "呪術廻戦", "鬼滅の刃"),
+            ("風の谷のナウシカと天空の城ラピュタの比較", "風の谷のナウシカ", "天空の城ラピュタ"),
+            ("「Python」と「Rust」の比較", "Python", "Rust"),
+            ("『Python』と『Rust』の比較", "Python", "Rust"),
+            ("【Python】と【Rust】の比較", "Python", "Rust"),
+            ("「Vue」と「React」の違い", "Vue", "React"),
+            ("「Mac」対「Windows」どっち", "Mac", "Windows"),
+            ("「呪術廻戦」と「鬼滅の刃」の比較", "呪術廻戦", "鬼滅の刃"),
+            ("「Python」 vs 「Rust」", "Python", "Rust"),
+            ("'Python' vs 'Rust'", "Python", "Rust"),
+            ("MacとWindowsどちら", "Mac", "Windows"),
+            ("TypeScriptとJavaScriptどちら", "TypeScript", "JavaScript"),
+        ]
+        for query_str, expected_a, expected_b in cases:
+            proc = QueryProcessor.parse_and_normalize(query_str)
+            self.assertEqual(
+                proc.intent,
+                "comparison",
+                f"Intent classification failed for {query_str!r} (got {proc.intent!r})",
+            )
+            expansions = QueryProcessor.expand_query(proc, mode="deep")
+            self.assertIn(
+                expected_a,
+                expansions,
+                f"Item A {expected_a!r} missing in expansions {expansions!r} for {query_str!r}",
+            )
+            self.assertIn(
+                expected_b,
+                expansions,
+                f"Item B {expected_b!r} missing in expansions {expansions!r} for {query_str!r}",
+            )
+
+    def test_aspect_and_negative_comparison_queries(self) -> None:
+        """Verify aspect-specific comparison queries match and non-comparison queries do not falsely match."""
+        aspect_cases = [
+            ("GoとRustの性能比較", "Go", "Rust"),
+            ("AWSとGCPの料金比較", "AWS", "GCP"),
+            ("iPhoneとPixelのカメラ比較", "iPhone", "Pixel"),
+        ]
+        for query_str, expected_a, expected_b in aspect_cases:
+            proc = QueryProcessor.parse_and_normalize(query_str)
+            self.assertEqual(
+                proc.intent,
+                "comparison",
+                f"Aspect intent classification failed for {query_str!r} (got {proc.intent!r})",
+            )
+            expansions = QueryProcessor.expand_query(proc, mode="deep")
+            self.assertIn(expected_a, expansions, f"Item A missing for {query_str!r}")
+            self.assertIn(expected_b, expansions, f"Item B missing for {query_str!r}")
+
+        negative_cases = [
+            ("セキュリティ対策", "research"),
+            ("ブラウザ対応状況", "research"),
+            ("対話型AIの仕組み", "research"),
+            ("FastAPIとDockerの使い方", "howto"),
+        ]
+        for query_str, expected_intent in negative_cases:
+            proc = QueryProcessor.parse_and_normalize(query_str)
+            self.assertNotEqual(
+                proc.intent,
+                "comparison",
+                f"Negative query {query_str!r} falsely classified as comparison",
+            )
+            self.assertEqual(
+                proc.intent,
+                expected_intent,
+                f"Negative query {query_str!r} unexpected intent (got {proc.intent!r}, expected {expected_intent!r})",
+            )
+
+    def test_query_length_bound_enforcement(self) -> None:
+        """Verify queries exceeding 2,000 characters are safely bounded to MAX_QUERY_LENGTH."""
+        oversized = "a" * 4000
+        self.assertGreater(len(oversized), 2000)
+
+        proc = QueryProcessor.parse_and_normalize(oversized)
+        self.assertLessEqual(len(proc.original), QueryProcessor.MAX_QUERY_LENGTH)
+        self.assertLessEqual(len(proc.normalized), QueryProcessor.MAX_QUERY_LENGTH)
+        self.assertLessEqual(len(proc.clean_text), QueryProcessor.MAX_QUERY_LENGTH)
+        self.assertEqual(len(proc.original), 2000)
+
+        # Words with trailing space stripped
+        oversized_words = "fastapi " * 500
+        proc_words = QueryProcessor.parse_and_normalize(oversized_words)
+        self.assertLessEqual(len(proc_words.original), QueryProcessor.MAX_QUERY_LENGTH)
+
+        # Empty and whitespace queries
+        empty_proc = QueryProcessor.parse_and_normalize("   ")
+        self.assertEqual(empty_proc.original, "")
+        self.assertEqual(empty_proc.clean_text, "")
+
+    def test_exact_phrase_quote_retention(self) -> None:
+        """Verify double quotes surrounding exact phrases are preserved in clean_text."""
+        # Simple exact phrase
+        proc = QueryProcessor.parse_and_normalize('"FastAPI lifespan"')
+        self.assertEqual(proc.clean_text, '"FastAPI lifespan"')
+        self.assertEqual(proc.clean_no_quotes, "FastAPI lifespan")
+        self.assertEqual(proc.exact_phrases, ["FastAPI lifespan"])
+
+        # Quoted phrase with search operators
+        proc_with_op = QueryProcessor.parse_and_normalize('"FastAPI lifespan" site:fastapi.tiangolo.com')
+        self.assertEqual(proc_with_op.clean_text, '"FastAPI lifespan"')
+        self.assertEqual(proc_with_op.include_domains, ["fastapi.tiangolo.com"])
+        self.assertEqual(proc_with_op.exact_phrases, ["FastAPI lifespan"])
+
+        # Multiple quotes and free terms
+        proc_multi = QueryProcessor.parse_and_normalize('python "machine learning" "deep learning"')
+        self.assertEqual(proc_multi.clean_text, 'python "machine learning" "deep learning"')
+        self.assertEqual(proc_multi.exact_phrases, ["machine learning", "deep learning"])
+        self.assertEqual(proc_multi.clean_no_quotes, "python machine learning deep learning")
+
+        # Fullwidth / typographic quotes normalized to ASCII double quotes and retained
+        proc_curly = QueryProcessor.parse_and_normalize("“FastAPI lifespan”")
+        self.assertEqual(proc_curly.clean_text, '"FastAPI lifespan"')
+        self.assertEqual(proc_curly.exact_phrases, ["FastAPI lifespan"])
+
+    def test_retrieval_service_exact_quote_dispatch(self) -> None:
+        """Verify RetrievalService retains quotes when dispatching queries to search backend."""
+        dispatched_queries: list[str] = []
+
+        def mock_search(**kwargs: Any) -> dict[str, Any]:
+            q = kwargs.get("query")
+            if q:
+                dispatched_queries.append(str(q))
+            return {
+                "results": [
+                    {
+                        "title": "Lifespan Events - FastAPI",
+                        "url": "https://fastapi.tiangolo.com/advanced/events/",
+                        "content": "You can define logic that should be executed before the application starts up.",
+                        "source": "duckduckgo",
+                    }
+                ]
+            }
+
+        service = RetrievalService(search_func=mock_search)
+        resp = service.search('"FastAPI lifespan" site:fastapi.tiangolo.com', mode="fast")
+
+        self.assertGreater(len(dispatched_queries), 0)
+        self.assertEqual(dispatched_queries[0], '"FastAPI lifespan"')
+        self.assertEqual(resp.query.clean_text, '"FastAPI lifespan"')
 
 
 if __name__ == "__main__":

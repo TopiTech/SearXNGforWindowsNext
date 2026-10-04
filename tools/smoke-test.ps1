@@ -319,6 +319,20 @@ try {
     Write-Host "  [OK] /api/retrieval returned $(@($retResp.results).Count) result(s) (schema_version: $($retResp.schema_version))" -ForegroundColor Green
     Write-Host ""
 
+    # Test 41: /api/settings/engines endpoint
+    Write-Host "Test 41: /api/settings/engines endpoint..." -ForegroundColor Cyan
+    $enginesSettings = Invoke-RestMethod -Method Get -Uri "$base/api/settings/engines" -ErrorAction Stop
+    Assert-JsonProperty -Value $enginesSettings -PropertyName "total_engines" -Label "/api/settings/engines"
+    Assert-JsonProperty -Value $enginesSettings -PropertyName "active_engines" -Label "/api/settings/engines"
+    if ($enginesSettings.total_engines -le 0) {
+        throw "[FAIL] /api/settings/engines expected total_engines > 0, got $($enginesSettings.total_engines)"
+    }
+    if ($enginesSettings.active_engines -le 0) {
+        throw "[FAIL] /api/settings/engines expected active_engines > 0, got $($enginesSettings.active_engines)"
+    }
+    Write-Host "  [OK] /api/settings/engines returned $($enginesSettings.total_engines) engines ($($enginesSettings.active_engines) active)" -ForegroundColor Green
+    Write-Host ""
+
     Write-Host "=====================================" -ForegroundColor Green
     Write-Host "[OK] All smoke tests PASSED" -ForegroundColor Green
     Write-Host "=====================================" -ForegroundColor Green

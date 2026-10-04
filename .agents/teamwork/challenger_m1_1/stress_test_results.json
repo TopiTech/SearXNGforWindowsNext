@@ -1,0 +1,1188 @@
+{
+  "timestamp": "2026-10-04T05:26:39Z",
+  "regex_stress": [
+    {
+      "description": "Uniform non-matching ASCII ('a'*N)",
+      "length": 20000,
+      "dur_ja_ms": 4.64,
+      "dur_en_ms": 0.32,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Uniform non-matching ASCII ('a'*N)",
+      "length": 50000,
+      "dur_ja_ms": 12.543,
+      "dur_en_ms": 0.805,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Uniform non-matching ASCII ('a'*N)",
+      "length": 100000,
+      "dur_ja_ms": 24.507,
+      "dur_en_ms": 1.562,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Uniform non-matching Japanese ('あ'*N)",
+      "length": 20000,
+      "dur_ja_ms": 6.329,
+      "dur_en_ms": 0.312,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Uniform non-matching Japanese ('あ'*N)",
+      "length": 50000,
+      "dur_ja_ms": 15.869,
+      "dur_en_ms": 0.781,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Uniform non-matching Japanese ('あ'*N)",
+      "length": 100000,
+      "dur_ja_ms": 32.365,
+      "dur_en_ms": 1.543,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive delimiter ('と'*N)",
+      "length": 20000,
+      "dur_ja_ms": 0.205,
+      "dur_en_ms": 0.31,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive delimiter ('と'*N)",
+      "length": 50000,
+      "dur_ja_ms": 0.573,
+      "dur_en_ms": 0.775,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive delimiter ('と'*N)",
+      "length": 100000,
+      "dur_ja_ms": 1.002,
+      "dur_en_ms": 1.538,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive delimiter ('VS'*(N//2))",
+      "length": 20000,
+      "dur_ja_ms": 43.752,
+      "dur_en_ms": 0.401,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive delimiter ('VS'*(N//2))",
+      "length": 50000,
+      "dur_ja_ms": 113.275,
+      "dur_en_ms": 0.84,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "WARN (>50ms)"
+    },
+    {
+      "description": "Repetitive delimiter ('VS'*(N//2))",
+      "length": 100000,
+      "dur_ja_ms": 218.58,
+      "dur_en_ms": 1.697,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "WARN (>50ms)"
+    },
+    {
+      "description": "Repetitive delimiter ('対'*N)",
+      "length": 20000,
+      "dur_ja_ms": 0.223,
+      "dur_en_ms": 0.31,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive delimiter ('対'*N)",
+      "length": 50000,
+      "dur_ja_ms": 0.552,
+      "dur_en_ms": 0.768,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive delimiter ('対'*N)",
+      "length": 100000,
+      "dur_ja_ms": 1.163,
+      "dur_en_ms": 1.573,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive delimiter combo ('とVS対'*(N//3))",
+      "length": 26664,
+      "dur_ja_ms": 0.964,
+      "dur_en_ms": 0.41,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive delimiter combo ('とVS対'*(N//3))",
+      "length": 66664,
+      "dur_ja_ms": 2.405,
+      "dur_en_ms": 1.036,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive delimiter combo ('とVS対'*(N//3))",
+      "length": 133332,
+      "dur_ja_ms": 4.863,
+      "dur_en_ms": 2.055,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial comparison prefix ('item と item '*(N//14))",
+      "length": 17136,
+      "dur_ja_ms": 2.165,
+      "dur_en_ms": 1.164,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial comparison prefix ('item と item '*(N//14))",
+      "length": 42852,
+      "dur_ja_ms": 5.475,
+      "dur_en_ms": 2.895,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial comparison prefix ('item と item '*(N//14))",
+      "length": 85704,
+      "dur_ja_ms": 11.128,
+      "dur_en_ms": 5.874,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial comparison prefix + 'の ' ('item と item の '*(N//17))",
+      "length": 16464,
+      "dur_ja_ms": 3.183,
+      "dur_en_ms": 1.236,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial comparison prefix + 'の ' ('item と item の '*(N//17))",
+      "length": 41174,
+      "dur_ja_ms": 8.235,
+      "dur_en_ms": 3.03,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial comparison prefix + 'の ' ('item と item の '*(N//17))",
+      "length": 82348,
+      "dur_ja_ms": 15.992,
+      "dur_en_ms": 6.175,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial prefix with non-matching suffix ('item と item '*(N//14) + 'abc')",
+      "length": 17139,
+      "dur_ja_ms": 2.201,
+      "dur_en_ms": 1.197,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial prefix with non-matching suffix ('item と item '*(N//14) + 'abc')",
+      "length": 42855,
+      "dur_ja_ms": 5.533,
+      "dur_en_ms": 2.897,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial prefix with non-matching suffix ('item と item '*(N//14) + 'abc')",
+      "length": 85707,
+      "dur_ja_ms": 10.978,
+      "dur_en_ms": 8.04,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial prefix with comparison keyword at tail ('item と item '*(N//14) + '比較')",
+      "length": 17138,
+      "dur_ja_ms": 2.208,
+      "dur_en_ms": 1.182,
+      "matched_ja": true,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial prefix with comparison keyword at tail ('item と item '*(N//14) + '比較')",
+      "length": 42854,
+      "dur_ja_ms": 5.495,
+      "dur_en_ms": 2.974,
+      "matched_ja": true,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial prefix with comparison keyword at tail ('item と item '*(N//14) + '比較')",
+      "length": 85706,
+      "dur_ja_ms": 11.001,
+      "dur_en_ms": 5.774,
+      "matched_ja": true,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial prefix with '違い' at tail ('item と item '*(N//14) + '違い')",
+      "length": 17138,
+      "dur_ja_ms": 2.186,
+      "dur_en_ms": 1.178,
+      "matched_ja": true,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial prefix with '違い' at tail ('item と item '*(N//14) + '違い')",
+      "length": 42854,
+      "dur_ja_ms": 5.578,
+      "dur_en_ms": 2.95,
+      "matched_ja": true,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial prefix with '違い' at tail ('item と item '*(N//14) + '違い')",
+      "length": 85706,
+      "dur_ja_ms": 11.332,
+      "dur_en_ms": 5.93,
+      "matched_ja": true,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial prefix with 'どっち' at tail ('item と item '*(N//14) + 'どっち')",
+      "length": 17139,
+      "dur_ja_ms": 2.31,
+      "dur_en_ms": 1.183,
+      "matched_ja": true,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial prefix with 'どっち' at tail ('item と item '*(N//14) + 'どっち')",
+      "length": 42855,
+      "dur_ja_ms": 5.482,
+      "dur_en_ms": 3.072,
+      "matched_ja": true,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive partial prefix with 'どっち' at tail ('item と item '*(N//14) + 'どっち')",
+      "length": 85707,
+      "dur_ja_ms": 11.118,
+      "dur_en_ms": 6.027,
+      "matched_ja": true,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "English partial prefix ('item vs '*(N//8))",
+      "length": 20000,
+      "dur_ja_ms": 5.041,
+      "dur_en_ms": 0.002,
+      "matched_ja": false,
+      "matched_en": true,
+      "status": "PASS"
+    },
+    {
+      "description": "English partial prefix ('item vs '*(N//8))",
+      "length": 50000,
+      "dur_ja_ms": 12.366,
+      "dur_en_ms": 0.001,
+      "matched_ja": false,
+      "matched_en": true,
+      "status": "PASS"
+    },
+    {
+      "description": "English partial prefix ('item vs '*(N//8))",
+      "length": 100000,
+      "dur_ja_ms": 25.752,
+      "dur_en_ms": 0.004,
+      "matched_ja": false,
+      "matched_en": true,
+      "status": "PASS"
+    },
+    {
+      "description": "English partial prefix ('item compared to '*(N//17))",
+      "length": 19992,
+      "dur_ja_ms": 0.984,
+      "dur_en_ms": 0.001,
+      "matched_ja": false,
+      "matched_en": true,
+      "status": "PASS"
+    },
+    {
+      "description": "English partial prefix ('item compared to '*(N//17))",
+      "length": 49997,
+      "dur_ja_ms": 2.611,
+      "dur_en_ms": 0.002,
+      "matched_ja": false,
+      "matched_en": true,
+      "status": "PASS"
+    },
+    {
+      "description": "English partial prefix ('item compared to '*(N//17))",
+      "length": 99994,
+      "dur_ja_ms": 6.942,
+      "dur_en_ms": 0.003,
+      "matched_ja": false,
+      "matched_en": true,
+      "status": "PASS"
+    },
+    {
+      "description": "English partial prefix with tail match ('item vs '*(N//8) + 'target')",
+      "length": 20000,
+      "dur_ja_ms": 5.206,
+      "dur_en_ms": 0.003,
+      "matched_ja": false,
+      "matched_en": true,
+      "status": "PASS"
+    },
+    {
+      "description": "English partial prefix with tail match ('item vs '*(N//8) + 'target')",
+      "length": 50000,
+      "dur_ja_ms": 12.949,
+      "dur_en_ms": 0.003,
+      "matched_ja": false,
+      "matched_en": true,
+      "status": "PASS"
+    },
+    {
+      "description": "English partial prefix with tail match ('item vs '*(N//8) + 'target')",
+      "length": 100000,
+      "dur_ja_ms": 26.232,
+      "dur_en_ms": 0.004,
+      "matched_ja": false,
+      "matched_en": true,
+      "status": "PASS"
+    },
+    {
+      "description": "Japanese natural text without spaces ('これは非常に長いテキストであり'*(N//16))",
+      "length": 18750,
+      "dur_ja_ms": 5.776,
+      "dur_en_ms": 0.294,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Japanese natural text without spaces ('これは非常に長いテキストであり'*(N//16))",
+      "length": 46875,
+      "dur_ja_ms": 15.748,
+      "dur_en_ms": 0.711,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Japanese natural text without spaces ('これは非常に長いテキストであり'*(N//16))",
+      "length": 93750,
+      "dur_ja_ms": 30.841,
+      "dur_en_ms": 1.43,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Japanese natural text with embedded 'と' every 45 chars",
+      "length": 19980,
+      "dur_ja_ms": 43.212,
+      "dur_en_ms": 0.329,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Japanese natural text with embedded 'と' every 45 chars",
+      "length": 49995,
+      "dur_ja_ms": 108.11,
+      "dur_en_ms": 0.806,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "WARN (>50ms)"
+    },
+    {
+      "description": "Japanese natural text with embedded 'と' every 45 chars",
+      "length": 99990,
+      "dur_ja_ms": 220.021,
+      "dur_en_ms": 1.595,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "WARN (>50ms)"
+    },
+    {
+      "description": "Japanese natural text with embedded '対' every 45 chars",
+      "length": 19980,
+      "dur_ja_ms": 43.238,
+      "dur_en_ms": 0.323,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "PASS"
+    },
+    {
+      "description": "Japanese natural text with embedded '対' every 45 chars",
+      "length": 49995,
+      "dur_ja_ms": 113.453,
+      "dur_en_ms": 0.865,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "WARN (>50ms)"
+    },
+    {
+      "description": "Japanese natural text with embedded '対' every 45 chars",
+      "length": 99990,
+      "dur_ja_ms": 219.729,
+      "dur_en_ms": 1.651,
+      "matched_ja": false,
+      "matched_en": false,
+      "status": "WARN (>50ms)"
+    }
+  ],
+  "intent_stress": [
+    {
+      "description": "Long non-matching string (no keywords)",
+      "length": 20000,
+      "intent": "research",
+      "dur_ms": 0.416,
+      "status": "PASS"
+    },
+    {
+      "description": "Long non-matching string (no keywords)",
+      "length": 50000,
+      "intent": "research",
+      "dur_ms": 1.52,
+      "status": "PASS"
+    },
+    {
+      "description": "Long non-matching string (no keywords)",
+      "length": 100000,
+      "intent": "research",
+      "dur_ms": 2.984,
+      "status": "PASS"
+    },
+    {
+      "description": "Keyword '比較' at very end of long string",
+      "length": 20000,
+      "intent": "research",
+      "dur_ms": 8.676,
+      "status": "PASS"
+    },
+    {
+      "description": "Keyword '比較' at very end of long string",
+      "length": 50000,
+      "intent": "research",
+      "dur_ms": 17.327,
+      "status": "WARN (>10ms)"
+    },
+    {
+      "description": "Keyword '比較' at very end of long string",
+      "length": 100000,
+      "intent": "research",
+      "dur_ms": 33.92,
+      "status": "WARN (>10ms)"
+    },
+    {
+      "description": "Keyword 'vs' at very end of long string",
+      "length": 20000,
+      "intent": "research",
+      "dur_ms": 5.631,
+      "status": "PASS"
+    },
+    {
+      "description": "Keyword 'vs' at very end of long string",
+      "length": 50000,
+      "intent": "research",
+      "dur_ms": 14.496,
+      "status": "WARN (>10ms)"
+    },
+    {
+      "description": "Keyword 'vs' at very end of long string",
+      "length": 100000,
+      "intent": "research",
+      "dur_ms": 31.233,
+      "status": "WARN (>10ms)"
+    },
+    {
+      "description": "Keyword '違い' at position 0 followed by long non-match",
+      "length": 20000,
+      "intent": "research",
+      "dur_ms": 7.095,
+      "status": "PASS"
+    },
+    {
+      "description": "Keyword '違い' at position 0 followed by long non-match",
+      "length": 50000,
+      "intent": "research",
+      "dur_ms": 17.597,
+      "status": "WARN (>10ms)"
+    },
+    {
+      "description": "Keyword '違い' at position 0 followed by long non-match",
+      "length": 100000,
+      "intent": "research",
+      "dur_ms": 32.712,
+      "status": "WARN (>10ms)"
+    },
+    {
+      "description": "Repetitive keyword ' 比較 ' every 100 chars",
+      "length": 20000,
+      "intent": "research",
+      "dur_ms": 5.486,
+      "status": "PASS"
+    },
+    {
+      "description": "Repetitive keyword ' 比較 ' every 100 chars",
+      "length": 50000,
+      "intent": "research",
+      "dur_ms": 14.46,
+      "status": "WARN (>10ms)"
+    },
+    {
+      "description": "Repetitive keyword ' 比較 ' every 100 chars",
+      "length": 100000,
+      "intent": "research",
+      "dur_ms": 28.307,
+      "status": "WARN (>10ms)"
+    },
+    {
+      "description": "Repetitive keyword ' vs ' every 100 chars",
+      "length": 20000,
+      "intent": "research",
+      "dur_ms": 42.711,
+      "status": "WARN (>10ms)"
+    },
+    {
+      "description": "Repetitive keyword ' vs ' every 100 chars",
+      "length": 50000,
+      "intent": "research",
+      "dur_ms": 105.596,
+      "status": "FAIL (EXCESSIVE DURATION >100ms)"
+    },
+    {
+      "description": "Repetitive keyword ' vs ' every 100 chars",
+      "length": 100000,
+      "intent": "research",
+      "dur_ms": 239.089,
+      "status": "FAIL (EXCESSIVE DURATION >100ms)"
+    },
+    {
+      "description": "Pathological comparison-like non-match with keyword ('item と item '*(N//14) + '比較')",
+      "length": 17138,
+      "intent": "comparison",
+      "dur_ms": 3.39,
+      "status": "PASS"
+    },
+    {
+      "description": "Pathological comparison-like non-match with keyword ('item と item '*(N//14) + '比較')",
+      "length": 42854,
+      "intent": "comparison",
+      "dur_ms": 8.714,
+      "status": "PASS"
+    },
+    {
+      "description": "Pathological comparison-like non-match with keyword ('item と item '*(N//14) + '比較')",
+      "length": 85706,
+      "intent": "comparison",
+      "dur_ms": 17.59,
+      "status": "WARN (>10ms)"
+    },
+    {
+      "description": "Code traceback keyword stress ('traceback ' + 'a'*N)",
+      "length": 20000,
+      "intent": "code",
+      "dur_ms": 0.164,
+      "status": "PASS"
+    },
+    {
+      "description": "Code traceback keyword stress ('traceback ' + 'a'*N)",
+      "length": 50000,
+      "intent": "code",
+      "dur_ms": 0.733,
+      "status": "PASS"
+    },
+    {
+      "description": "Code traceback keyword stress ('traceback ' + 'a'*N)",
+      "length": 100000,
+      "intent": "code",
+      "dur_ms": 1.44,
+      "status": "PASS"
+    },
+    {
+      "description": "Research keyword stress ('architecture ' + 'a'*N)",
+      "length": 20000,
+      "intent": "research",
+      "dur_ms": 0.117,
+      "status": "PASS"
+    },
+    {
+      "description": "Research keyword stress ('architecture ' + 'a'*N)",
+      "length": 50000,
+      "intent": "research",
+      "dur_ms": 0.642,
+      "status": "PASS"
+    },
+    {
+      "description": "Research keyword stress ('architecture ' + 'a'*N)",
+      "length": 100000,
+      "intent": "research",
+      "dur_ms": 1.265,
+      "status": "PASS"
+    }
+  ],
+  "boundary_stress": [
+    {
+      "description": "Empty string",
+      "input_length": 0,
+      "orig_len": 0,
+      "clean_len": 0,
+      "no_quotes_len": 0,
+      "dur_ms": 0.011,
+      "status": "PASS"
+    },
+    {
+      "description": "Whitespace only (spaces)",
+      "input_length": 4,
+      "orig_len": 0,
+      "clean_len": 0,
+      "no_quotes_len": 0,
+      "dur_ms": 0.002,
+      "status": "PASS"
+    },
+    {
+      "description": "Whitespace only (tabs, newlines)",
+      "input_length": 4,
+      "orig_len": 0,
+      "clean_len": 0,
+      "no_quotes_len": 0,
+      "dur_ms": 0.001,
+      "status": "PASS"
+    },
+    {
+      "description": "Ideographic fullwidth spaces",
+      "input_length": 3,
+      "orig_len": 0,
+      "clean_len": 0,
+      "no_quotes_len": 0,
+      "dur_ms": 0.001,
+      "status": "PASS"
+    },
+    {
+      "description": "Mixed whitespace",
+      "input_length": 8,
+      "orig_len": 0,
+      "clean_len": 0,
+      "no_quotes_len": 0,
+      "dur_ms": 0.001,
+      "status": "PASS"
+    },
+    {
+      "description": "Exact boundary: 1999 chars",
+      "input_length": 1999,
+      "orig_len": 1999,
+      "clean_len": 1999,
+      "no_quotes_len": 1999,
+      "dur_ms": 1.555,
+      "status": "PASS"
+    },
+    {
+      "description": "Exact boundary: 2000 chars",
+      "input_length": 2000,
+      "orig_len": 2000,
+      "clean_len": 2000,
+      "no_quotes_len": 2000,
+      "dur_ms": 0.115,
+      "status": "PASS"
+    },
+    {
+      "description": "Exact boundary: 2001 chars",
+      "input_length": 2001,
+      "orig_len": 2000,
+      "clean_len": 2000,
+      "no_quotes_len": 2000,
+      "dur_ms": 0.109,
+      "status": "PASS"
+    },
+    {
+      "description": "Exact boundary: 2002 chars",
+      "input_length": 2002,
+      "orig_len": 2000,
+      "clean_len": 2000,
+      "no_quotes_len": 2000,
+      "dur_ms": 0.106,
+      "status": "PASS"
+    },
+    {
+      "description": "Super boundary: 5,000 chars",
+      "input_length": 5000,
+      "orig_len": 2000,
+      "clean_len": 2000,
+      "no_quotes_len": 2000,
+      "dur_ms": 0.105,
+      "status": "PASS"
+    },
+    {
+      "description": "Super boundary: 10,000 chars",
+      "input_length": 10000,
+      "orig_len": 2000,
+      "clean_len": 2000,
+      "no_quotes_len": 2000,
+      "dur_ms": 0.105,
+      "status": "PASS"
+    },
+    {
+      "description": "Super boundary: 50,000 chars",
+      "input_length": 50000,
+      "orig_len": 2000,
+      "clean_len": 2000,
+      "no_quotes_len": 2000,
+      "dur_ms": 0.105,
+      "status": "PASS"
+    },
+    {
+      "description": "Super boundary: 100,000 chars",
+      "input_length": 100000,
+      "orig_len": 2000,
+      "clean_len": 2000,
+      "no_quotes_len": 2000,
+      "dur_ms": 0.11,
+      "status": "PASS"
+    },
+    {
+      "description": "2000-char Japanese kanji/kana",
+      "input_length": 2000,
+      "orig_len": 2000,
+      "clean_len": 2000,
+      "no_quotes_len": 2000,
+      "dur_ms": 0.144,
+      "status": "PASS"
+    },
+    {
+      "description": "2001-char Japanese kanji/kana",
+      "input_length": 2001,
+      "orig_len": 2000,
+      "clean_len": 2000,
+      "no_quotes_len": 2000,
+      "dur_ms": 0.144,
+      "status": "PASS"
+    },
+    {
+      "description": "Unclosed quote at char 1999",
+      "input_length": 1999,
+      "orig_len": 1999,
+      "clean_len": 1999,
+      "no_quotes_len": 1999,
+      "dur_ms": 0.123,
+      "status": "PASS"
+    },
+    {
+      "description": "Closed quote starting before and ending after 2000",
+      "input_length": 2010,
+      "orig_len": 2000,
+      "clean_len": 2000,
+      "no_quotes_len": 1998,
+      "dur_ms": 0.112,
+      "status": "PASS"
+    },
+    {
+      "description": "Operator truncated across 2000 boundary",
+      "input_length": 2011,
+      "orig_len": 2000,
+      "clean_len": 2000,
+      "no_quotes_len": 2000,
+      "dur_ms": 0.11,
+      "status": "PASS"
+    },
+    {
+      "description": "Multi-byte typographic quotes at boundary",
+      "input_length": 2005,
+      "orig_len": 2000,
+      "clean_len": 2000,
+      "no_quotes_len": 1998,
+      "dur_ms": 0.115,
+      "status": "PASS"
+    },
+    {
+      "description": "Many operators (500 'site:foo.com')",
+      "input_length": 6499,
+      "orig_len": 2000,
+      "clean_len": 0,
+      "no_quotes_len": 0,
+      "dur_ms": 0.106,
+      "status": "PASS"
+    },
+    {
+      "description": "Many exact phrases (500 '\"foo\"')",
+      "input_length": 2999,
+      "orig_len": 2000,
+      "clean_len": 2000,
+      "no_quotes_len": 1334,
+      "dur_ms": 0.391,
+      "status": "PASS"
+    },
+    {
+      "description": "Unicode NFKC expansion input (㌀ * 2000)",
+      "input_length": 2000,
+      "orig_len": 2000,
+      "clean_len": 8000,
+      "no_quotes_len": 8000,
+      "dur_ms": 1.503,
+      "status": "PASS"
+    },
+    {
+      "description": "Null bytes and control characters",
+      "input_length": 18,
+      "orig_len": 18,
+      "clean_len": 18,
+      "no_quotes_len": 18,
+      "dur_ms": 0.015,
+      "status": "PASS"
+    }
+  ],
+  "concurrency_stress": {
+    "total_requests": 2000,
+    "num_threads": 20,
+    "wall_time_sec": 0.105,
+    "qps": 19040.1,
+    "errors_count": 0,
+    "min_ms": 0.007,
+    "avg_ms": 0.034,
+    "p50_ms": 0.013,
+    "p90_ms": 0.107,
+    "p95_ms": 0.111,
+    "p99_ms": 0.148,
+    "max_ms": 0.282
+  },
+  "accuracy_checks": [
+    {
+      "query": "PythonとRustの比較",
+      "description": "Natural Japanese without spaces",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "Python",
+        "Rust"
+      ],
+      "actual_expansions": [
+        "Python",
+        "Rust"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "VueとReactの違い",
+      "description": "Natural Japanese without spaces",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "Vue",
+        "React"
+      ],
+      "actual_expansions": [
+        "Vue",
+        "React"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "TypeScriptとJavaScriptどっち",
+      "description": "Natural Japanese without spaces",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "TypeScript",
+        "JavaScript"
+      ],
+      "actual_expansions": [
+        "TypeScript",
+        "JavaScript"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "iPhone対Android比較",
+      "description": "Natural Japanese without spaces",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "iPhone",
+        "Android"
+      ],
+      "actual_expansions": [
+        "iPhone",
+        "Android"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "FastAPIとDjangoの比較",
+      "description": "Natural Japanese without spaces",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "FastAPI",
+        "Django"
+      ],
+      "actual_expansions": [
+        "FastAPI",
+        "Django"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "PostgreSQLとMySQLの違い",
+      "description": "Natural Japanese without spaces",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "PostgreSQL",
+        "MySQL"
+      ],
+      "actual_expansions": [
+        "PostgreSQL",
+        "MySQL"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "Mac対Windowsどっち",
+      "description": "Natural Japanese without spaces",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "Mac",
+        "Windows"
+      ],
+      "actual_expansions": [
+        "Mac",
+        "Windows"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "Python と Rust 比較",
+      "description": "Japanese with artificial spaces",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "Python",
+        "Rust"
+      ],
+      "actual_expansions": [
+        "Python",
+        "Rust"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "Vue と React の違い",
+      "description": "Japanese with artificial spaces",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "Vue",
+        "React"
+      ],
+      "actual_expansions": [
+        "Vue",
+        "React"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "TypeScript と JavaScript どっち",
+      "description": "Japanese with artificial spaces",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "TypeScript",
+        "JavaScript"
+      ],
+      "actual_expansions": [
+        "TypeScript",
+        "JavaScript"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "A 対 B 比較",
+      "description": "Japanese with artificial spaces",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "A",
+        "B"
+      ],
+      "actual_expansions": [
+        "A",
+        "B"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "Python vs Rust",
+      "description": "Standard English vs",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "Python",
+        "Rust"
+      ],
+      "actual_expansions": [
+        "Python",
+        "Rust"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "React compared to Vue",
+      "description": "English compared to",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "React",
+        "Vue"
+      ],
+      "actual_expansions": [
+        "React",
+        "Vue"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "FastAPI versus Django",
+      "description": "English versus",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "FastAPI",
+        "Django"
+      ],
+      "actual_expansions": [
+        "FastAPI",
+        "Django"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "C++ vs Rust",
+      "description": "English with symbols",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "C++",
+        "Rust"
+      ],
+      "actual_expansions": [
+        "C++",
+        "Rust"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "Node.js vs Deno",
+      "description": "English with dot",
+      "expected_intent": "comparison",
+      "actual_intent": "comparison",
+      "expected_expansions": [
+        "Node.js",
+        "Deno"
+      ],
+      "actual_expansions": [
+        "Node.js",
+        "Deno"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "Python documentation",
+      "description": "Code documentation query",
+      "expected_intent": "code",
+      "actual_intent": "navigation",
+      "expected_expansions": [],
+      "actual_expansions": [],
+      "status": "FAIL"
+    },
+    {
+      "query": "Vue tutorial",
+      "description": "Howto tutorial query",
+      "expected_intent": "howto",
+      "actual_intent": "howto",
+      "expected_expansions": [],
+      "actual_expansions": [],
+      "status": "PASS"
+    },
+    {
+      "query": "weather in Tokyo today",
+      "description": "Fresh weather query",
+      "expected_intent": "fresh",
+      "actual_intent": "fresh",
+      "expected_expansions": [],
+      "actual_expansions": [
+        "weather in Tokyo today week"
+      ],
+      "status": "PASS"
+    },
+    {
+      "query": "\"FastAPI lifespan\" site:fastapi.tiangolo.com",
+      "description": "Quoted phrase with operator",
+      "expected_intent": "research",
+      "actual_intent": "code",
+      "expected_expansions": [],
+      "actual_expansions": [
+        "FastAPI lifespan documentation",
+        "FastAPI lifespan github"
+      ],
+      "status": "FAIL"
+    }
+  ]
+}

@@ -39,7 +39,10 @@ import os
 import re
 import secrets
 import stat
+import subprocess
 import sys
+import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, ".."))
@@ -69,34 +72,103 @@ def _read_key(path: str) -> str | None:
     return value or None
 
 
+def set_file_permissions(path: str) -> None:
+    """Lock down file permissions: icacls on Windows, chmod 600 on POSIX."""
+    if sys.platform == "win32":
+        username = os.environ.get("USERNAME")
+        if username:
+            try:
+                subprocess.run(
+                    ["icacls", path, "/inheritance:r", "/grant:r", f"{username}:(R,W)"],
+                    check=False,
+                    capture_output=True,
+                )
+            except (subprocess.SubprocessError, OSError):
+                pass
+    else:
+        try:
+            if hasattr(os, "chmod"):
+                os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
+
+
 def _write_key(path: str, key: str) -> bool:
     try:
-        # Write atomically: write to a sibling temp file, fsync, then replace.
-        # This avoids leaving a half-written file if the process is killed
-        # mid-write, which would force an unnecessary rotation on next launch.
-        tmp_path = f"{path}.tmp"
-        with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(key + "\n")
-            f.flush()
+        config_dir = os.path.dirname(os.path.abspath(path))
+        os.makedirs(config_dir, exist_ok=True)
+        temp_fd, tmp_path = tempfile.mkstemp(prefix=".tmp_key_", dir=config_dir, text=True)
+        fd_closed = False
+        try:
             try:
-                os.fsync(f.fileno())
-            except (AttributeError, OSError):
-                # fsync isn't critical; the file is small and the worst case
-                # is a one-time rotation on the next launch.
-                pass
-        os.replace(tmp_path, path)
+                with open(temp_fd, "w", encoding="utf-8", newline="\n") as f:
+                    fd_closed = True
+                    f.write(key + "\n")
+                    f.flush()
+                    try:
+                        os.fsync(f.fileno())
+                    except (AttributeError, OSError):
+                        pass
+            finally:
+                if not fd_closed:
+                    try:
+                        os.close(temp_fd)
+                    except OSError:
+                        pass
+                    fd_closed = True
+
+            replace_success = False
+            last_exc: OSError | None = None
+            max_attempts = 5
+            for attempt in range(max_attempts):
+                try:
+                    os.replace(tmp_path, path)
+                    replace_success = True
+                    break
+                except OSError as exc:
+                    last_exc = exc
+                    # If another process wrote a valid key, adopt it
+                    existing = _read_key(path)
+                    if existing and _SAFE_KEY_RE.fullmatch(existing):
+                        replace_success = True
+                        break
+                    if attempt < max_attempts - 1:
+                        time.sleep(0.05 * (2**attempt))
+                        existing = _read_key(path)
+                        if existing and _SAFE_KEY_RE.fullmatch(existing):
+                            replace_success = True
+                            break
+
+            if not replace_success:
+                existing = _read_key(path)
+                if existing and _SAFE_KEY_RE.fullmatch(existing):
+                    replace_success = True
+                elif last_exc:
+                    raise last_exc
+
+            legacy_tmp = f"{path}.tmp"
+            if os.path.exists(legacy_tmp):
+                try:
+                    os.remove(legacy_tmp)
+                except OSError:
+                    pass
+        finally:
+            if not fd_closed:
+                try:
+                    os.close(temp_fd)
+                except OSError:
+                    pass
+                fd_closed = True
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
     except OSError as exc:
         print(f"[ERROR] Could not write {path}: {exc}", file=sys.stderr)
         return False
 
-    # Best-effort: lock down permissions on POSIX. Windows ignores the mode
-    # bits but NTFS ACL inheritance already keeps the file user-private in
-    # the common case.
-    try:
-        if hasattr(os, "chmod"):
-            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        pass
+    set_file_permissions(path)
     return True
 
 
@@ -129,10 +201,58 @@ def _ensure_settings_file() -> None:
         os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(SETTINGS_EXAMPLE_PATH, "r", encoding="utf-8") as src:
             content = src.read()
-        tmp_settings = f"{SETTINGS_PATH}.tmp"
-        with open(tmp_settings, "w", encoding="utf-8", newline="\n") as dst:
-            dst.write(content)
-        os.replace(tmp_settings, SETTINGS_PATH)
+        temp_fd, tmp_settings = tempfile.mkstemp(prefix=".tmp_settings_", dir=CONFIG_DIR, text=True)
+        fd_closed = False
+        try:
+            try:
+                with open(temp_fd, "w", encoding="utf-8", newline="\n") as dst:
+                    fd_closed = True
+                    dst.write(content)
+                    dst.flush()
+            finally:
+                if not fd_closed:
+                    try:
+                        os.close(temp_fd)
+                    except OSError:
+                        pass
+                    fd_closed = True
+
+            replace_success = False
+            last_exc: OSError | None = None
+            max_attempts = 5
+            for attempt in range(max_attempts):
+                try:
+                    os.replace(tmp_settings, SETTINGS_PATH)
+                    replace_success = True
+                    break
+                except OSError as exc:
+                    last_exc = exc
+                    if os.path.exists(SETTINGS_PATH) and os.path.getsize(SETTINGS_PATH) > 0:
+                        replace_success = True
+                        break
+                    if attempt < max_attempts - 1:
+                        time.sleep(0.05 * (2**attempt))
+                        if os.path.exists(SETTINGS_PATH) and os.path.getsize(SETTINGS_PATH) > 0:
+                            replace_success = True
+                            break
+
+            if not replace_success:
+                if os.path.exists(SETTINGS_PATH) and os.path.getsize(SETTINGS_PATH) > 0:
+                    replace_success = True
+                elif last_exc:
+                    raise last_exc
+        finally:
+            if not fd_closed:
+                try:
+                    os.close(temp_fd)
+                except OSError:
+                    pass
+                fd_closed = True
+            if os.path.exists(tmp_settings):
+                try:
+                    os.remove(tmp_settings)
+                except OSError:
+                    pass
     except OSError as exc:
         print(f"[ERROR] Could not seed {SETTINGS_PATH}: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -155,6 +275,9 @@ def main() -> int:
         key = _generate_key()
         if not _write_key(SECRET_KEY_PATH, key):
             return 1
+        persisted = _read_key(SECRET_KEY_PATH)
+        if persisted and _SAFE_KEY_RE.fullmatch(persisted):
+            key = persisted
         if existing is None:
             print(f"[INFO] Generated secret_key in {SECRET_KEY_PATH}", file=sys.stderr)
         else:
@@ -162,6 +285,8 @@ def main() -> int:
                 f"[INFO] Replaced invalid or unsafe secret_key in {SECRET_KEY_PATH}",
                 file=sys.stderr,
             )
+
+    set_file_permissions(SECRET_KEY_PATH)
 
     # The launcher parses this single line via `for /f`. Keep the format
     # stable; downstream code (and the tests) depend on it.

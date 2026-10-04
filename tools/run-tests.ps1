@@ -97,6 +97,10 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Unit tests in tools\test_retrieval_pipeline.py failed with exit code $LASTEXITCODE"
     }
+    & ".\python\python.exe" "tools\test_webui.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unit tests in tools\test_webui.py failed with exit code $LASTEXITCODE"
+    }
     Write-Host "  -> Running evaluation benchmark..." -ForegroundColor Green
     & ".\python\python.exe" "tests\evaluation\run_benchmark.py"
     if ($LASTEXITCODE -ne 0) {
@@ -108,6 +112,12 @@ try {
         throw "Pyrefly type checker failed with exit code $LASTEXITCODE"
     }
     $ruffCmd = Get-Command "ruff" -ErrorAction SilentlyContinue
+    if (-not $ruffCmd) {
+        $fallbackRuff = Join-Path $repoRoot "python\Scripts\ruff.exe"
+        if (Test-Path $fallbackRuff) {
+            $ruffCmd = [PSCustomObject]@{ Source = $fallbackRuff }
+        }
+    }
     if ($ruffCmd) {
         Write-Host "  -> Running linter & code format check (Ruff)..." -ForegroundColor Green
         & $ruffCmd.Source "check" "."
@@ -118,6 +128,9 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw "Ruff format check failed with exit code $LASTEXITCODE"
         }
+    }
+    else {
+        Write-Warning "Ruff executable not found on PATH or at python\Scripts\ruff.exe. Skipping linter checks."
     }
     Write-Host "  [OK] Unit tests, benchmark, and static checks passed!" -ForegroundColor Green
 

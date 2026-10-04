@@ -8,6 +8,7 @@ import io
 import json
 import os
 import sys
+import time
 import unittest
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -20,6 +21,8 @@ if SCRIPT_DIR not in sys.path:
 import mcp_server
 import searxng_cli
 import searxng_client
+from query_pipeline import QueryProcessor
+from retrieval_service import RetrievalService
 
 
 class TestSearXNGClient(unittest.TestCase):
@@ -869,6 +872,51 @@ class TestWebUINextRegression(unittest.TestCase):
         # 3. Preferences reset handler cleans localStorage
         self.assertIn("localStorage.removeItem('sxng_pref_mode')", html)
         self.assertIn("localStorage.removeItem('sxng_pref_safesearch')", html)
+
+
+class TestAgentQueryPipelineIntegration(unittest.TestCase):
+    """Regression tests for agent tool integration with QueryProcessor and RetrievalService."""
+
+    def test_redos_catastrophic_backtracking_mitigated(self) -> None:
+        """Verify 20,000 non-matching character payload finishes in < 50ms without ReDoS."""
+        payload = "x" * 20000
+        t0 = time.perf_counter()
+        m = QueryProcessor.COMPARISON_PATTERNS[1].search(payload)
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+        self.assertIsNone(m)
+        self.assertLess(elapsed_ms, 50.0, f"ReDoS risk detected: regex took {elapsed_ms:.2f}ms")
+
+    def test_query_length_boundary_protection(self) -> None:
+        """Verify inputs exceeding 2,000 characters are bounded by QueryProcessor."""
+        oversized_query = "searxng query " * 300  # 4200 chars
+        proc = QueryProcessor.parse_and_normalize(oversized_query)
+
+        self.assertLessEqual(len(proc.original), QueryProcessor.MAX_QUERY_LENGTH)
+        self.assertLessEqual(len(proc.clean_text), QueryProcessor.MAX_QUERY_LENGTH)
+        self.assertEqual(len(proc.original), 2000)
+
+    def test_exact_phrase_quote_preservation_in_retrieval(self) -> None:
+        """Verify exact phrase quotes are retained through query pipeline into search dispatch."""
+        raw_query = '"Python 3.12" site:docs.python.org'
+        proc = QueryProcessor.parse_and_normalize(raw_query)
+
+        self.assertEqual(proc.clean_text, '"Python 3.12"')
+        self.assertEqual(proc.clean_no_quotes, "Python 3.12")
+        self.assertIn("Python 3.12", proc.exact_phrases)
+
+        dispatched: list[str] = []
+
+        def mock_search(**kwargs: Any) -> dict[str, Any]:
+            if "query" in kwargs:
+                dispatched.append(str(kwargs["query"]))
+            return {"results": []}
+
+        service = RetrievalService(search_func=mock_search)
+        service.search(raw_query, mode="fast")
+
+        self.assertGreater(len(dispatched), 0)
+        self.assertEqual(dispatched[0], '"Python 3.12"')
 
 
 if __name__ == "__main__":

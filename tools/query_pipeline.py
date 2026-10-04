@@ -19,7 +19,7 @@ class ProcessedQuery:
 
     original: str
     normalized: str
-    clean_text: str  # text stripped of operators
+    clean_text: str  # text stripped of operators (preserves exact-match double quotes)
     intent: str  # navigation, factual, fresh, comparison, howto, research, code, local
     language: str  # ja, en, etc.
     freshness: str | None = None  # day, week, month, year, or specific year string
@@ -28,6 +28,7 @@ class ProcessedQuery:
     exclude_domains: list[str] = field(default_factory=list)
     filetype: str = ""
     exact_phrases: list[str] = field(default_factory=list)
+    clean_no_quotes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Convert query representation to GenAI Structured Response schema dict."""
@@ -42,6 +43,8 @@ class ProcessedQuery:
 
 class QueryProcessor:
     """Deterministic query normalizer, intent classifier, and expander."""
+
+    MAX_QUERY_LENGTH: ClassVar[int] = 2000
 
     CODE_KEYWORDS: ClassVar[set[str]] = {
         "error",
@@ -121,9 +124,25 @@ class QueryProcessor:
         "構築",
     }
 
+    COMPARISON_KEYWORDS: ClassVar[set[str]] = {
+        "vs",
+        "versus",
+        "compared to",
+        "比較",
+        "違い",
+        "どっち",
+        "どちら",
+    }
+
     COMPARISON_PATTERNS: ClassVar[list[re.Pattern]] = [
-        re.compile(r"\b([a-z0-9_+#.-]+)\s+(vs|versus|compared to)\s+([a-z0-9_+#.-]+)\b", re.IGNORECASE),
-        re.compile(r"([^\s]+)\s*(と|VS|対)\s*([^\s]+)\s*(比較|違い|どっち)", re.IGNORECASE),
+        re.compile(
+            r"(?:^|\s|[^\w])['\"「『【]?([a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]{1,50}+)['\"」』】]?\s*(?:vs\.?|versus|compared\s+to)\s*['\"「『【]?([a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]{1,50}+)['\"」』】]?(?:\s|[^\w]|$)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"([^\sと対]{1,50}+)\s*(と|VS|vs|対)\s*([^\sと対]{1,50}?)\s*(?:の\s*(?:[^\sと対の比較違いどっちどちら]{1,10}\s*)?)?(比較|違い|どっち|どちら)",
+            re.IGNORECASE,
+        ),
     ]
 
     RESEARCH_KEYWORDS: ClassVar[set[str]] = {
@@ -196,10 +215,11 @@ class QueryProcessor:
         """Classify search intent into one of the 8 canonical categories."""
         low = text.lower()
 
-        # Check comparisons
-        for pat in cls.COMPARISON_PATTERNS:
-            if pat.search(low):
-                return "comparison"
+        # Check comparisons with keyword pre-filter
+        if any(w in low for w in cls.COMPARISON_KEYWORDS):
+            for pat in cls.COMPARISON_PATTERNS:
+                if pat.search(low):
+                    return "comparison"
 
         # Check navigation
         if any(w in low for w in cls.NAVIGATION_KEYWORDS) or low.endswith((".com", ".org", ".io", ".dev", ".net")):
@@ -240,6 +260,8 @@ class QueryProcessor:
     def parse_and_normalize(cls, raw_query: str) -> ProcessedQuery:
         """Normalize query string while preserving operators, versions, and codes."""
         orig = (raw_query or "").strip()
+        if len(orig) > cls.MAX_QUERY_LENGTH:
+            orig = orig[: cls.MAX_QUERY_LENGTH].strip()
         if not orig:
             return ProcessedQuery(
                 original="",
@@ -247,6 +269,7 @@ class QueryProcessor:
                 clean_text="",
                 intent="factual",
                 language="en",
+                clean_no_quotes="",
             )
 
         # 1. Unicode NFKC normalization
@@ -314,7 +337,7 @@ class QueryProcessor:
         return ProcessedQuery(
             original=orig,
             normalized=norm,
-            clean_text=clean_no_quotes,
+            clean_text=clean_text,
             intent=intent,
             language=lang,
             freshness=freshness,
@@ -322,6 +345,7 @@ class QueryProcessor:
             exclude_domains=exc_domains,
             filetype=filetype,
             exact_phrases=exact_phrases,
+            clean_no_quotes=clean_no_quotes,
         )
 
     @classmethod
@@ -342,21 +366,24 @@ class QueryProcessor:
         if mode == "fast":
             return []
 
-        base = processed.clean_text
+        base = processed.clean_no_quotes or processed.clean_text
         if not base or len(base) < 3:
             return []
 
         expansions: list[str] = []
 
         if processed.intent == "comparison":
-            for pat in cls.COMPARISON_PATTERNS:
-                m = pat.search(base)
-                if m:
-                    item_a, item_b = m.group(1).strip(), m.group(3).strip()
-                    if item_a and item_b:
-                        expansions.append(item_a)
-                        expansions.append(item_b)
-                        break
+            if any(w in base.lower() for w in cls.COMPARISON_KEYWORDS):
+                for pat in cls.COMPARISON_PATTERNS:
+                    m = pat.search(base)
+                    if m:
+                        item_a, item_b = m.group(1).strip(), m.group(3 if len(m.groups()) >= 3 else 2).strip()
+                        item_a = item_a.strip("\"'「」『』【】()[]")
+                        item_b = item_b.strip("\"'「」『』【】()[]")
+                        if item_a and item_b:
+                            expansions.append(item_a)
+                            expansions.append(item_b)
+                            break
 
         elif processed.intent == "code":
             if "documentation" not in base.lower() and "docs" not in base.lower():

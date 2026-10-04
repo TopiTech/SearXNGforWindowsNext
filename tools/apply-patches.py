@@ -122,6 +122,14 @@ class PatchTransaction:
     def rollback(self) -> list[str]:
         """Roll back all modified files to their original state."""
         restored = []
+        norm_repo = os.path.abspath(REPO_ROOT)
+        norm_sp = os.path.abspath(SITE_PACKAGES)
+        norm_bak_dir = os.path.abspath(self.backup_dir)
+
+        c_repo = os.path.normcase(norm_repo)
+        c_sp = os.path.normcase(norm_sp)
+        c_bak_dir = os.path.normcase(norm_bak_dir)
+
         # Try memory backups first
         if self.originals:
             for path, content in self.originals.items():
@@ -139,11 +147,23 @@ class PatchTransaction:
                 with open(manifest_file, "r", encoding="utf-8") as f:
                     manifest = json.load(f)
                 for orig_path, bak_path in manifest.items():
-                    if os.path.exists(bak_path):
-                        with open(bak_path, "r", encoding="utf-8") as f:
+                    norm_orig = os.path.abspath(orig_path)
+                    norm_bak = os.path.abspath(bak_path)
+                    c_orig = os.path.normcase(norm_orig)
+                    c_bak = os.path.normcase(norm_bak)
+
+                    if not c_orig.startswith((c_repo + os.sep, c_sp + os.sep)):
+                        logger.error("Security violation: rollback target %s outside permitted boundaries", orig_path)
+                        continue
+                    if not c_bak.startswith(c_bak_dir + os.sep):
+                        logger.error("Security violation: backup file %s outside backup directory", bak_path)
+                        continue
+
+                    if os.path.exists(norm_bak):
+                        with open(norm_bak, "r", encoding="utf-8") as f:
                             content = f.read()
-                        _atomic_write(orig_path, content, encoding="utf-8", newline="\n")
-                        restored.append(orig_path)
+                        _atomic_write(norm_orig, content, encoding="utf-8", newline="\n")
+                        restored.append(norm_orig)
             except (OSError, json.JSONDecodeError) as exc:
                 logger.error(f"Failed to restore from disk backups: {exc}")
         return restored
@@ -235,32 +255,18 @@ def diagnose_patch_failure(
 
 
 def _get_tracked_targets() -> list[str]:
-    """Return all target file paths tracked by the patch cache."""
-    return [
+    """Return all target file paths tracked by the patch cache.
+    Dynamically includes all registered PATCH_SPECS targets plus core tools.
+    """
+    core_targets = {
         os.path.abspath(__file__),
         os.path.join(REPO_ROOT, "tools", "disable-missing-engines.py"),
         os.path.join(REPO_ROOT, "tools", "webui_next.py"),
         os.path.join(REPO_ROOT, "UPSTREAM_VERSION.txt"),
-        os.path.join(SITE_PACKAGES, "searx", "valkeydb.py"),
-        os.path.join(SITE_PACKAGES, "searx", "settings_defaults.py"),
-        os.path.join(SITE_PACKAGES, "searx", "webutils.py"),
-        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "base.html"),
-        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "index.html"),
-        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "results.html"),
-        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "search.html"),
-        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "simple_search.html"),
-        os.path.join(SITE_PACKAGES, "searx", "templates", "simple", "preferences", "cookies.html"),
-        os.path.join(SITE_PACKAGES, "searx", "webapp.py"),
-        os.path.join(SITE_PACKAGES, "searx", "engines", "__init__.py"),
-        os.path.join(SITE_PACKAGES, "searx", "search", "processors", "__init__.py"),
-        os.path.join(SITE_PACKAGES, "searx", "engines", "google.py"),
-        os.path.join(SITE_PACKAGES, "searx", "engines", "sogou.py"),
-        os.path.join(SITE_PACKAGES, "searx", "search", "processors", "abstract.py"),
-        os.path.join(SITE_PACKAGES, "searx", "search", "processors", "online.py"),
-        os.path.join(SITE_PACKAGES, "searx", "network", "raise_for_httperror.py"),
-        os.path.join(SITE_PACKAGES, "searx", "settings.yml"),
-        os.path.join(REPO_ROOT, "config", "settings.yml"),
-    ]
+    }
+    for spec in PATCH_SPECS:
+        core_targets.add(os.path.abspath(spec.target_path))
+    return sorted(core_targets)
 
 
 def _compute_fingerprints() -> dict[str, dict[str, int]]:
@@ -1101,7 +1107,7 @@ def patch_webapp_scrape_route(content, path):
         "Blocked invalid scheme",
         "Redirect without Location header",
         "verify_ssl = os.environ.get('SEARXNG_SCRAPE_VERIFY_SSL', 'true').lower() in ('true', '1', 'yes')",  # default should be true
-        "max_keepalive_connections=20",
+        "max_keepalive_connections=0",
         "_searxng_original_getaddrinfo",
         "v19-bulletproof-scrape-fix",
         "host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B'))",
@@ -1497,8 +1503,8 @@ def scrape():
 
         with _scrape_client_lock:
             if _scrape_client is None or _scrape_client_verify_ssl != verify_ssl:
-                # Reusable HTTP client with connection pooling and explicit limits
-                scrape_limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
+                # Reusable HTTP client with explicit limits and disabled keepalive
+                scrape_limits = httpx.Limits(max_keepalive_connections=0, max_connections=50)
                 if _scrape_client is not None:
                     try:
                         _scrape_client.close()
@@ -2327,6 +2333,57 @@ def patch_simple_results_ai_webui(content, path):
     return content.replace(target_div, toolkit_bar, 1)
 
 
+# --- Patch 17: settings_loader.py (quoted and whitespace-padded SEARXNG_SETTINGS_PATH) ---
+def patch_settings_loader(content: str, path: str) -> str:
+    """Normalize quotes and whitespace around SEARXNG_SETTINGS_PATH in settings_loader.py."""
+    required_anchors = (
+        'raw_path = os.environ.get("SEARXNG_SETTINGS_PATH", "").strip()',
+        "settings_path = raw_path.strip('\"\\'').strip()",
+        "settings_yml = settings_yml.strip().strip('\"\\'').strip()",
+    )
+    if all(anchor in content for anchor in required_anchors):
+        return "ALREADY_APPLIED"
+
+    # 1. get_user_cfg_folder normalization
+    target1_pattern = r'settings_path\s*=\s*os\.environ\.get\(\s*["\']SEARXNG_SETTINGS_PATH["\']\s*,\s*["\']["\']\s*\)(\.strip\([^\)]*\))?'
+    replacement1 = (
+        'raw_path = os.environ.get("SEARXNG_SETTINGS_PATH", "").strip()\n'
+        "    settings_path = raw_path.strip('\"\\'').strip()\n"
+        "    while settings_path.startswith(('\"', \"'\")) or settings_path.endswith(('\"', \"'\")):\n"
+        "        settings_path = settings_path.strip('\"\\'').strip()"
+    )
+    if 'raw_path = os.environ.get("SEARXNG_SETTINGS_PATH", "").strip()' not in content:
+        content, count1 = re.subn(target1_pattern, lambda _m: replacement1, content, count=1)
+        if count1 == 0:
+            raise RuntimeError(
+                f"Patch failed for {path}: Could not locate settings_path assignment in get_user_cfg_folder."
+            )
+
+    # 2. load_settings normalization
+    target2_pattern = (
+        r'settings_yml\s*=\s*os\.environ\.get\(\s*["\']SEARXNG_SETTINGS_PATH["\']\s*\)\n'
+        r"(\s*)if settings_yml and Path\(settings_yml\)\.is_file\(\):"
+    )
+
+    def _replace_load_settings(m: re.Match[str]) -> str:
+        indent = m.group(1)
+        return (
+            'settings_yml = os.environ.get("SEARXNG_SETTINGS_PATH")\n'
+            f"{indent}if settings_yml:\n"
+            f"{indent}    settings_yml = settings_yml.strip().strip('\"\\'').strip()\n"
+            f"{indent}    while settings_yml.startswith(('\"', \"'\")) or settings_yml.endswith(('\"', \"'\")):\n"
+            f"{indent}        settings_yml = settings_yml.strip('\"\\'').strip()\n"
+            f"{indent}if settings_yml and Path(settings_yml).is_file():"
+        )
+
+    if "settings_yml = settings_yml.strip().strip('\"\\'').strip()" not in content:
+        content, count2 = re.subn(target2_pattern, _replace_load_settings, content, count=1)
+        if count2 == 0:
+            raise RuntimeError(f"Patch failed for {path}: Could not locate load_settings environment variable check.")
+
+    return content
+
+
 PATCH_SPECS = [
     PatchSpec(
         name="valkeydb_pwd",
@@ -2605,6 +2662,20 @@ PATCH_SPECS = [
         ],
         diagnostic_hint="Includes categories_as_tabs in Preferences choices and catches ValidationException gracefully.",
     ),
+    PatchSpec(
+        name="settings_loader_quotes",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "settings_loader.py"),
+        description="settings_loader.py (quoted and whitespace-padded SEARXNG_SETTINGS_PATH)",
+        patch_func=patch_settings_loader,
+        severity=PatchSeverity.CRITICAL,
+        required_file=True,
+        expected_anchors=[
+            'os.environ.get("SEARXNG_SETTINGS_PATH"',
+            "get_user_cfg_folder",
+            "load_settings",
+        ],
+        diagnostic_hint="Ensures SEARXNG_SETTINGS_PATH strips quotes and whitespace in get_user_cfg_folder and load_settings.",
+    ),
 ]
 
 
@@ -2682,6 +2753,14 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Output summary in JSON format to stdout")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose debug logging")
     args = parser.parse_args()
+
+    if args.report:
+        norm_report = os.path.abspath(args.report)
+        norm_repo = os.path.abspath(REPO_ROOT)
+        c_report = os.path.normcase(norm_report)
+        c_repo = os.path.normcase(norm_repo)
+        if not (c_report.startswith(c_repo + os.sep) or c_report == c_repo):
+            raise ValueError("Report output must reside within repository directory.")
 
     if args.verbose:
         logger.setLevel(logging.DEBUG)
@@ -2792,6 +2871,12 @@ def main() -> int:
     # Save diagnostic report file if requested or if any failures occurred
     report_path = args.report or (REPORT_FILE if all_failures else None)
     if report_path:
+        norm_report = os.path.abspath(report_path)
+        norm_repo = os.path.abspath(REPO_ROOT)
+        c_report = os.path.normcase(norm_report)
+        c_repo = os.path.normcase(norm_repo)
+        if not (c_report.startswith(c_repo + os.sep) or c_report == c_repo):
+            raise ValueError("Report output must reside within repository directory.")
         try:
             report_data = {
                 "timestamp": time.time(),

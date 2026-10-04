@@ -343,7 +343,8 @@ class RetrievalService:
         candidate_items = fused_items[: budget.max_candidate_results]
 
         # 6. Lexical BM25 Reranking
-        self.lexical_reranker.rerank(processed_q.clean_text, candidate_items)
+        ranking_query = processed_q.clean_no_quotes or processed_q.clean_text
+        self.lexical_reranker.rerank(ranking_query, candidate_items)
 
         # 7. Compute Blended Composite Score
         for item in candidate_items:
@@ -379,7 +380,7 @@ class RetrievalService:
         # Optional Cross-Encoder reranking for top candidates
         if self.cross_encoder.is_available():
             candidate_items = self.cross_encoder.rerank(
-                processed_q.clean_text,
+                ranking_query,
                 candidate_items,
                 top_k=min(5, len(candidate_items)),
             )
@@ -428,7 +429,7 @@ class RetrievalService:
             if raw_body and total_passages_budget > 0:
                 passages = self.passage_chunker.extract_evidence(
                     content=raw_body,
-                    query=processed_q.clean_text,
+                    query=ranking_query,
                     source_id=source_id,
                     max_passages=min(budget.max_passages_per_page, total_passages_budget),
                 )

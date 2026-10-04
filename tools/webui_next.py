@@ -238,7 +238,7 @@ def _scrape_url_direct(
         )
         with webapp_mod._scrape_client_lock:
             if webapp_mod._scrape_client is None or webapp_mod._scrape_client_verify_ssl != verify_ssl:
-                scrape_limits = httpx_mod.Limits(max_keepalive_connections=20, max_connections=50)
+                scrape_limits = httpx_mod.Limits(max_keepalive_connections=0, max_connections=50)
                 if webapp_mod._scrape_client is not None:
                     with contextlib.suppress(Exception):
                         webapp_mod._scrape_client.close()
@@ -1465,8 +1465,8 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       --accent-soft: rgba(79, 70, 229, 0.09);
       --emerald: #059669;
       --emerald-soft: rgba(5, 150, 105, 0.10);
-      --amber: #d97706;
-      --amber-soft: rgba(217, 119, 6, 0.10);
+      --amber: #b45309;
+      --amber-soft: rgba(180, 83, 9, 0.10);
       --danger: #dc2626;
       --danger-soft: rgba(220, 38, 38, 0.10);
       --shadow: 0 6px 20px rgba(15, 23, 42, 0.06);
@@ -1483,6 +1483,23 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
     }
     a { color: var(--accent-hover); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    .skip-link {
+      position: absolute;
+      top: -999px;
+      left: 1rem;
+      z-index: 1000;
+      padding: 0.5rem 1rem;
+      background: var(--accent);
+      color: #fff;
+      border-radius: 0.4rem;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .skip-link:focus {
+      top: 1rem;
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     /* Top Header */
     header.topbar {
       display: flex;
@@ -2149,7 +2166,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
     }
     .engines-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
       gap: 0.85rem;
     }
     .engine-item-card {
@@ -2350,6 +2367,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
   </style>
 </head>
 <body>
+  <a href="#q" class="skip-link">検索入力へスキップ</a>
   <header class="topbar">
     <div class="brand-group">
       <a href="/" class="brand-logo" title="SearXNG Next Studio">
@@ -2360,10 +2378,10 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
     </div>
 
     <nav class="nav-tabs" role="tablist" aria-label="Workspace Modes">
-      <button type="button" class="nav-tab active" role="tab" aria-selected="true" aria-controls="main-split-view" data-mode="deep" id="tab-deep">⚡ AI Deep Search</button>
-      <button type="button" class="nav-tab" role="tab" aria-selected="false" aria-controls="classic-search-view" data-mode="classic" id="tab-classic">🔍 Classic 検索</button>
-      <button type="button" class="nav-tab" role="tab" aria-selected="false" aria-controls="agent-hub-view" data-mode="agent" id="tab-agent">🤖 Agent &amp; MCP Hub</button>
-      <button type="button" class="nav-tab" role="tab" aria-selected="false" aria-controls="settings-view" data-mode="settings" id="tab-settings">⚙️ 設定</button>
+      <button type="button" class="nav-tab active" role="tab" aria-selected="true" tabindex="0" aria-controls="main-split-view" data-mode="deep" id="tab-deep">⚡ AI Deep Search</button>
+      <button type="button" class="nav-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="classic-search-view" data-mode="classic" id="tab-classic">🔍 Classic 検索</button>
+      <button type="button" class="nav-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="agent-hub-view" data-mode="agent" id="tab-agent">🤖 Agent &amp; MCP Hub</button>
+      <button type="button" class="nav-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="settings-view" data-mode="settings" id="tab-settings">⚙️ 設定</button>
     </nav>
 
     <div class="header-actions">
@@ -2445,14 +2463,14 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           <div class="opt-group" style="flex: 1; flex-wrap: wrap;">
             <span style="font-weight:600;font-size:0.78rem;color:var(--text-muted);margin-right:0.2rem;">カテゴリー:</span>
             <div class="preset-chips" id="classic-cat-chips" style="margin-left:0;">
-              <button type="button" class="cat-btn active" data-cat="">🌐 全般</button>
-              <button type="button" class="cat-btn" data-cat="it">💻 IT・技術</button>
-              <button type="button" class="cat-btn" data-cat="news">📰 ニュース</button>
-              <button type="button" class="cat-btn" data-cat="science">🔬 科学</button>
-              <button type="button" class="cat-btn" data-cat="files">📁 ファイル</button>
-              <button type="button" class="cat-btn" data-cat="social media">💬 ソーシャル</button>
-              <button type="button" class="cat-btn" data-cat="images">🖼️ 画像</button>
-              <button type="button" class="cat-btn" data-cat="videos">🎬 動画</button>
+              <button type="button" class="cat-btn active" data-cat="" aria-pressed="true">🌐 全般</button>
+              <button type="button" class="cat-btn" data-cat="it" aria-pressed="false">💻 IT・技術</button>
+              <button type="button" class="cat-btn" data-cat="news" aria-pressed="false">📰 ニュース</button>
+              <button type="button" class="cat-btn" data-cat="science" aria-pressed="false">🔬 科学</button>
+              <button type="button" class="cat-btn" data-cat="files" aria-pressed="false">📁 ファイル</button>
+              <button type="button" class="cat-btn" data-cat="social media" aria-pressed="false">💬 ソーシャル</button>
+              <button type="button" class="cat-btn" data-cat="images" aria-pressed="false">🖼️ 画像</button>
+              <button type="button" class="cat-btn" data-cat="videos" aria-pressed="false">🎬 動画</button>
             </div>
           </div>
 
@@ -2531,10 +2549,10 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           </div>
         </div>
         <div class="context-tabs" role="tablist" aria-label="Context Output Format">
-          <button type="button" class="ctx-tab active" role="tab" aria-selected="true" aria-controls="ctx-output" data-ctx="markdown">Markdown</button>
-          <button type="button" class="ctx-tab" role="tab" aria-selected="false" aria-controls="ctx-output" data-ctx="prompt">RAG Prompt</button>
-          <button type="button" class="ctx-tab" role="tab" aria-selected="false" aria-controls="ctx-output" data-ctx="json">JSON</button>
-          <button type="button" class="ctx-tab" role="tab" aria-selected="false" aria-controls="ctx-output" data-ctx="curl">API / CLI</button>
+          <button type="button" class="ctx-tab active" role="tab" aria-selected="true" tabindex="0" aria-controls="ctx-output" data-ctx="markdown">Markdown</button>
+          <button type="button" class="ctx-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="ctx-output" data-ctx="prompt">RAG Prompt</button>
+          <button type="button" class="ctx-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="ctx-output" data-ctx="json">JSON</button>
+          <button type="button" class="ctx-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="ctx-output" data-ctx="curl">API / CLI</button>
         </div>
         <textarea id="ctx-output" class="context-textarea" readonly aria-label="Generated AI Context" placeholder="検索またはURL本文抽出を実行すると、ここにLLM貼り付け用の構造化Markdown・プロンプト・JSONが生成されます。"></textarea>
         <div class="token-progress-wrap">
@@ -2594,8 +2612,8 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
       <!-- Settings Subtabs -->
       <div class="settings-subtabs" role="tablist" aria-label="設定カテゴリ">
-        <button type="button" class="settings-subtab active" role="tab" aria-selected="true" aria-controls="section-settings-engines" data-subtab="engines" id="subtab-engines-btn">🔌 検索エンジン管理</button>
-        <button type="button" class="settings-subtab" role="tab" aria-selected="false" aria-controls="section-settings-general" data-subtab="general" id="subtab-general-btn">⚙️ 一般設定</button>
+        <button type="button" class="settings-subtab active" role="tab" aria-selected="true" tabindex="0" aria-controls="section-settings-engines" data-subtab="engines" id="subtab-engines-btn">🔌 検索エンジン管理</button>
+        <button type="button" class="settings-subtab" role="tab" aria-selected="false" tabindex="-1" aria-controls="section-settings-general" data-subtab="general" id="subtab-general-btn">⚙️ 一般設定</button>
       </div>
 
       <!-- Section: Search Engines -->
@@ -2621,11 +2639,11 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         <div class="general-settings-card">
           <div class="settings-row">
             <div class="settings-label-wrap">
-              <h4>デフォルト検索モード</h4>
+              <label for="pref-default-mode"><h4>デフォルト検索モード</h4></label>
               <p>検索トップ画面にアクセスした際、または外部から検索時の初期モード</p>
             </div>
             <div>
-              <select id="pref-default-mode" class="opt-select" style="min-width:14rem;">
+              <select id="pref-default-mode" class="opt-select" style="min-width:14rem;" aria-label="デフォルト検索モード">
                 <option value="deep" selected>⚡ AI Deep Search (並列抽出 + BM25)</option>
                 <option value="classic">🔍 Classic 検索 (軽量メタ検索)</option>
                 <option value="balanced">🧠 Retrieval (Balanced グラウンディング)</option>
@@ -2635,11 +2653,11 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
           <div class="settings-row">
             <div class="settings-label-wrap">
-              <h4>セーフサーチ (SafeSearch)</h4>
+              <label for="pref-safesearch"><h4>セーフサーチ (SafeSearch)</h4></label>
               <p>成人向けコンテンツのフィルタリング設定</p>
             </div>
             <div>
-              <select id="pref-safesearch" class="opt-select" style="min-width:14rem;">
+              <select id="pref-safesearch" class="opt-select" style="min-width:14rem;" aria-label="セーフサーチ (SafeSearch)">
                 <option value="0">無効 (Off)</option>
                 <option value="1" selected>標準 (Moderate)</option>
                 <option value="2">厳格 (Strict)</option>
@@ -2649,11 +2667,11 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
           <div class="settings-row">
             <div class="settings-label-wrap">
-              <h4>デフォルト取得件数</h4>
+              <label for="pref-default-count"><h4>デフォルト取得件数</h4></label>
               <p>検索時に各エンジンから集約・選抜する結果件数の標準値</p>
             </div>
             <div>
-              <select id="pref-default-count" class="opt-select" style="min-width:14rem;">
+              <select id="pref-default-count" class="opt-select" style="min-width:14rem;" aria-label="デフォルト取得件数">
                 <option value="5">5件</option>
                 <option value="10" selected>10件</option>
                 <option value="15">15件</option>
@@ -2664,11 +2682,11 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
           <div class="settings-row">
             <div class="settings-label-wrap">
-              <h4>トークン予算上限</h4>
+              <label for="pref-default-tokens"><h4>トークン予算上限</h4></label>
               <p>AI Deep Search時にLLMへ渡すMarkdownコンテキストの上限</p>
             </div>
             <div>
-              <select id="pref-default-tokens" class="opt-select" style="min-width:14rem;">
+              <select id="pref-default-tokens" class="opt-select" style="min-width:14rem;" aria-label="トークン予算上限">
                 <option value="1500">1,500 tok</option>
                 <option value="3000" selected>3,000 tok</option>
                 <option value="6000">6,000 tok</option>
@@ -2848,6 +2866,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           var isSelected = (t.dataset.mode === mode);
           t.classList.toggle('active', isSelected);
           t.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+          t.setAttribute('tabindex', isSelected ? '0' : '-1');
         });
 
         var inputPanel = document.getElementById('input-panel');
@@ -2897,8 +2916,12 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       // Classic Category buttons
       document.querySelectorAll('#classic-cat-chips .cat-btn').forEach(function (btn) {
         btn.addEventListener('click', function () {
-          document.querySelectorAll('#classic-cat-chips .cat-btn').forEach(function (b) { b.classList.remove('active'); });
+          document.querySelectorAll('#classic-cat-chips .cat-btn').forEach(function (b) {
+            b.classList.remove('active');
+            b.setAttribute('aria-pressed', 'false');
+          });
           btn.classList.add('active');
+          btn.setAttribute('aria-pressed', 'true');
           state.classicCategory = btn.dataset.cat || '';
           state.classicPage = 1;
           var qVal = document.getElementById('q').value.trim();
@@ -2954,6 +2977,7 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           var isSelected = (t.dataset.ctx === state.ctxTab);
           t.classList.toggle('active', isSelected);
           t.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+          t.setAttribute('tabindex', isSelected ? '0' : '-1');
         });
         updateContextView();
       }
@@ -3290,16 +3314,23 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
           scrapeBtn.type = 'button';
           scrapeBtn.className = 'btn btn-sm';
           scrapeBtn.innerHTML = '📄 本文抽出';
+          var drawerId = 'classic-scrape-drawer-' + idx;
+          scrapeBtn.setAttribute('aria-expanded', 'false');
+          scrapeBtn.setAttribute('aria-controls', drawerId);
           scrapeBtn.addEventListener('click', function () {
             var ex = card.querySelector('.inline-scrape-drawer');
             if (ex) {
-              ex.style.display = ex.style.display === 'none' ? 'block' : 'none';
+              var isHidden = ex.style.display === 'none';
+              ex.style.display = isHidden ? 'block' : 'none';
+              scrapeBtn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
               return;
             }
             var d = document.createElement('div');
             d.className = 'inline-scrape-drawer';
+            d.id = drawerId;
             d.textContent = '⏳ URL本文を抽出中...';
             card.appendChild(d);
+            scrapeBtn.setAttribute('aria-expanded', 'true');
             fetch('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
               .then(function (r) { return r.json(); })
               .then(function (res) { d.textContent = res.content || res.error || '(本文なし)'; })
@@ -3625,10 +3656,15 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
             var allBtn = document.createElement('button');
             allBtn.type = 'button';
             allBtn.className = 'cat-btn active';
+            allBtn.setAttribute('aria-pressed', 'true');
             allBtn.textContent = 'すべて (' + res.total_engines + ')';
             allBtn.addEventListener('click', function () {
-              chipsContainer.querySelectorAll('.cat-btn').forEach(function (b) { b.classList.remove('active'); });
+              chipsContainer.querySelectorAll('.cat-btn').forEach(function (b) {
+                b.classList.remove('active');
+                b.setAttribute('aria-pressed', 'false');
+              });
               allBtn.classList.add('active');
+              allBtn.setAttribute('aria-pressed', 'true');
               state.settingsCurrentCat = '';
               renderSettingsEngineCards();
             });
@@ -3639,10 +3675,15 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
               var b = document.createElement('button');
               b.type = 'button';
               b.className = 'cat-btn';
+              b.setAttribute('aria-pressed', 'false');
               b.textContent = cat + ' (' + count + ')';
               b.addEventListener('click', function () {
-                chipsContainer.querySelectorAll('.cat-btn').forEach(function (btn) { btn.classList.remove('active'); });
+                chipsContainer.querySelectorAll('.cat-btn').forEach(function (btn) {
+                  btn.classList.remove('active');
+                  btn.setAttribute('aria-pressed', 'false');
+                });
                 b.classList.add('active');
+                b.setAttribute('aria-pressed', 'true');
                 state.settingsCurrentCat = cat;
                 renderSettingsEngineCards();
               });
@@ -3665,15 +3706,19 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
         if (name === 'engines') {
           engBtn.classList.add('active');
           engBtn.setAttribute('aria-selected', 'true');
+          engBtn.setAttribute('tabindex', '0');
           genBtn.classList.remove('active');
           genBtn.setAttribute('aria-selected', 'false');
+          genBtn.setAttribute('tabindex', '-1');
           engSec.style.display = 'block';
           genSec.style.display = 'none';
         } else if (name === 'general') {
           genBtn.classList.add('active');
           genBtn.setAttribute('aria-selected', 'true');
+          genBtn.setAttribute('tabindex', '0');
           engBtn.classList.remove('active');
           engBtn.setAttribute('aria-selected', 'false');
+          engBtn.setAttribute('tabindex', '-1');
           engSec.style.display = 'none';
           genSec.style.display = 'block';
         }
@@ -3882,7 +3927,11 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
 
       function executeCurrentAction() {
         var qVal = document.getElementById('q').value.trim();
-        if (!qVal) return;
+        if (!qVal) {
+          showToast('検索キーワードまたはURLを入力してください');
+          document.getElementById('q').focus();
+          return;
+        }
 
         // Auto-detect URL in search bar if user pastes http(s)://...
         if (isUrlText(qVal)) {
@@ -3958,7 +4007,9 @@ AI_WORKSPACE_HTML = """<!DOCTYPE html>
       if (initCat) {
         state.classicCategory = initCat;
         document.querySelectorAll('#classic-cat-chips .cat-btn').forEach(function (b) {
-          b.classList.toggle('active', b.dataset.cat === initCat);
+          var isCurrent = (b.dataset.cat === initCat);
+          b.classList.toggle('active', isCurrent);
+          b.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
         });
       }
       if (initMode && ['deep', 'classic', 'agent', 'settings'].indexOf(initMode) !== -1) {
@@ -4028,7 +4079,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             out_fmt in ("json", "json_lite", "csv", "rss") or "application/json" in accept or "text/json" in accept
         ) and orig_search:
             return orig_search()
-        params = dict(request.args)
+        params = dict(request.values)
         qs = urllib.parse.urlencode(params)
         return redirect(f"/?{qs}" if qs else "/", code=302)
 
