@@ -355,7 +355,18 @@ def run_benchmark():
         ("Python documentation", "code", [], "Code documentation query"),
         ("Vue tutorial", "howto", [], "Howto tutorial query"),
         ("weather in Tokyo today", "fresh", [], "Fresh weather query"),
-        ('"FastAPI lifespan" site:fastapi.tiangolo.com', "research", [], "Quoted phrase with operator"),
+        (
+            '"FastAPI lifespan" site:fastapi.tiangolo.com',
+            "code",
+            ["FastAPI lifespan documentation", "FastAPI lifespan github"],
+            "Quoted code phrase with operator",
+        ),
+        (
+            '"renewable energy storage" site:nature.com',
+            "research",
+            [],
+            "Quoted research phrase with operator",
+        ),
     ]
 
     for query_str, expected_intent, expected_expansions, desc in accuracy_test_cases:

@@ -213,17 +213,30 @@ class QueryProcessor:
     @classmethod
     def classify_intent(cls, text: str) -> str:
         """Classify search intent into one of the 8 canonical categories."""
+        if not text:
+            return "research"
+        if len(text) > cls.MAX_QUERY_LENGTH:
+            text = text[: cls.MAX_QUERY_LENGTH]
         low = text.lower()
 
-        # Check comparisons with keyword pre-filter
-        if any(w in low for w in cls.COMPARISON_KEYWORDS):
-            for pat in cls.COMPARISON_PATTERNS:
-                if pat.search(low):
-                    return "comparison"
+        # Check comparisons with targeted keyword pre-filters
+        if any(w in low for w in ("vs", "versus", "compared to")) and cls.COMPARISON_PATTERNS[0].search(low):
+            return "comparison"
+        if any(w in low for w in ("比較", "違い", "どっち", "どちら")) and cls.COMPARISON_PATTERNS[1].search(low):
+            return "comparison"
+
+        words = set(re.findall(r"\b[a-z0-9_+#.-]+\b", low))
+        has_code_keywords = bool(words & cls.CODE_KEYWORDS)
 
         # Check navigation
-        if any(w in low for w in cls.NAVIGATION_KEYWORDS) or low.endswith((".com", ".org", ".io", ".dev", ".net")):
-            return "navigation"
+        nav_matches = {w for w in cls.NAVIGATION_KEYWORDS if w in low}
+        if nav_matches or low.endswith((".com", ".org", ".io", ".dev", ".net")):
+            # If navigation match is solely docs/documentation and query contains code keywords,
+            # prioritize code intent (e.g. "Python documentation", "FastAPI docs")
+            if has_code_keywords and nav_matches.issubset({"docs", "documentation"}):
+                pass
+            else:
+                return "navigation"
 
         # Check research / security advisory
         if any(w in low for w in cls.RESEARCH_KEYWORDS):
@@ -242,8 +255,7 @@ class QueryProcessor:
             return "howto"
 
         # Check code / programming languages
-        words = set(re.findall(r"\b[a-z0-9_+#.-]+\b", low))
-        if len(words & cls.CODE_KEYWORDS) >= 1:
+        if has_code_keywords:
             return "code"
 
         # Check local / geographic
@@ -380,6 +392,8 @@ class QueryProcessor:
                         item_a, item_b = m.group(1).strip(), m.group(3 if len(m.groups()) >= 3 else 2).strip()
                         item_a = item_a.strip("\"'「」『』【】()[]")
                         item_b = item_b.strip("\"'「」『』【】()[]")
+                        if item_b.endswith("の"):
+                            item_b = item_b[:-1].strip()
                         if item_a and item_b:
                             expansions.append(item_a)
                             expansions.append(item_b)
