@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Security Vulnerability Reporting
+    url: https://github.com/TopiTech/SearXNGforWindowsNext/security/advisories/new
+    about: Please report security vulnerabilities privately rather than via public issues.
+  - name: 💬 Questions & Discussions
+    url: https://github.com/TopiTech/SearXNGforWindowsNext/discussions
+    about: Ask general questions or discuss ideas with the community.

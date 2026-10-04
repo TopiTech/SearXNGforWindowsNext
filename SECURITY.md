@@ -1,6 +1,17 @@
 # Security Policy & Deployment Guidelines
 
-This document outlines security considerations and best practices for deploying SearXNG for Windows.
+This document outlines security considerations, vulnerability reporting procedures, and best practices for deploying SearXNG for Windows Next.
+
+---
+
+## 🛡️ Reporting a Vulnerability
+
+We take the security of SearXNG for Windows Next seriously. If you believe you have discovered a vulnerability, please do NOT disclose it publicly in an issue or PR.
+
+Instead, please report security vulnerabilities via:
+- **GitHub Private Vulnerability Reporting**: [Open Security Advisory](https://github.com/TopiTech/SearXNGforWindowsNext/security/advisories/new)
+
+Please include reproduction steps, potential impact, and system configuration details. We will acknowledge receipt within 48 hours and work with you on a coordinated fix.
 
 ---
 

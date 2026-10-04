@@ -1,0 +1,64 @@
+# ==============================================================================
+# SearXNG for Windows Next - Git Attributes Configuration
+# ==============================================================================
+
+# Set default behaviour to automatically normalize line endings to LF
+* text=auto eol=lf
+
+# ------------------------------------------------------------------------------
+# Windows scripts (Batch files require CRLF for cmd.exe execution)
+# ------------------------------------------------------------------------------
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell scripts (Standardize on CRLF for Windows native execution)
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
+
+# ------------------------------------------------------------------------------
+# Source Code, Configuration, and Documentation (LF normalized)
+# ------------------------------------------------------------------------------
+*.py text eol=lf
+*.pyi text eol=lf
+*.json text eol=lf
+*.jsonl text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.js text eol=lf
+*.po text eol=lf
+*.pot text eol=lf
+*.xml text eol=lf
+*.sh text eol=lf
+
+# ------------------------------------------------------------------------------
+# Binary files (Never convert line endings, prevent corrupting embedded runtime)
+# ------------------------------------------------------------------------------
+*.exe binary
+*.dll binary
+*.pyd binary
+*.cat binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.bz2 binary
+*.7z binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.svg binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary

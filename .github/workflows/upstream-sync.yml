@@ -33,12 +33,12 @@ jobs:
 
     steps:
       - name: Checkout fork repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Setup Python 3.11
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -74,7 +74,7 @@ jobs:
 
       - name: Handle sync failure
         if: steps.sync.outcome == 'failure'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v7
         with:
          script: |
            const issueNumber = context.issue && context.issue.number;
@@ -160,7 +160,7 @@ jobs:
 
       - name: Create or update PR
         if: (steps.sync.outcome == 'success') && (steps.changes.outputs.has_changes == 'true' || github.event.inputs.force_pr == 'true')
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "sync: upstream searxng ${{ steps.meta.outputs.resolved_commit }}"

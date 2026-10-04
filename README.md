@@ -6,6 +6,11 @@
 
 # SearXNG for Windows Next 🚀
 
+[![CI Test](https://github.com/TopiTech/SearXNGforWindowsNext/actions/workflows/ci.yml/badge.svg)](https://github.com/TopiTech/SearXNGforWindowsNext/actions/workflows/ci.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg?logo=windows)](README.md)
+[![Python: 3.11](https://img.shields.io/badge/python-3.11-3776AB.svg?logo=python)](pyproject.toml)
+
 **GenAIフレンドリーな検索体験を、Windowsネイティブ環境で。**
 
 このプロジェクトは、Windows環境でSearXNGを最適に動作させつつ、LLM（大規模言語モデル）やAPIワークフローから利用しやすい**軽量・高速な検索結果取得**を実現することを目的としたフォークリポジトリです。
@@ -440,6 +445,19 @@ GitHub Actions（`.github/workflows/upstream-sync.yml`）により、本家の�
 
 > [!WARNING]
 > 文量を増やしすぎると、LLM のトークン消費量が増大し、レスポンス速度の低下やコスト増につながる可能性があるため、ご利用のモデルに合わせて調整してください。
+
+---
+
+## 🤝 コントリビューション & 開発
+
+本プロジェクトへの機能改善・バグ報告・ドキュメント修正などのコントリビューションを歓迎します！
+Windows ネイティブ環境固有のパッチシステムや開発フローについては、以下のドキュメントをご参照ください。
+
+- 📖 **[開発ガイド (DEVELOPMENT.md)](DEVELOPMENT.md)**: 開発環境のセットアップとアーキテクチャ
+- 🤝 **[コントリビューションガイド (CONTRIBUTING.md)](CONTRIBUTING.md)**: PR作成ルール・テスト実行・パッチ作成
+- 🧩 **[Windows パッチ仕様 (docs/WINDOWS_PATCHES.md)](docs/WINDOWS_PATCHES.md)**: 適用パッチ一覧とアップストリーム同期方針
+- 📜 **[行動規範 (CODE_OF_CONDUCT.md)](CODE_OF_CONDUCT.md)**: コミュニティ規範
+- 🛡️ **[セキュリティポリシー (SECURITY.md)](SECURITY.md)**: 脆弱性報告手順・SSRF 防御仕様
 
 ---
 

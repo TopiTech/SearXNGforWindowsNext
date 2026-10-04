@@ -1,0 +1,59 @@
+name: "🐛 Bug Report"
+description: "Report a bug or unexpected behavior in SearXNG for Windows Next"
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please check if a similar issue already exists before submitting.
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe what happened...
+    validations:
+      required: true
+  - type: dropdown
+    id: os_version
+    attributes:
+      label: Windows OS Version
+      description: Which Windows version are you running?
+      options:
+        - Windows 11 (23H2 / 24H2)
+        - Windows 10 (22H2)
+        - Windows Server 2022 / 2025
+        - Other (specify in description)
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this issue?
+      placeholder: |
+        1. Run `.\SearXNG for Windows.bat`
+        2. Open browser at `http://127.0.0.1:8888`
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Error Output
+      description: Paste relevant terminal logs or error output here (omit any private tokens).
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Verification Checklist
+      options:
+        - label: I have run `.\tools\install-requirements.ps1` before reporting.
+          required: false
+        - label: I verified that `tools\apply-patches.py --check` passes.
+          required: false
+        - label: This issue does not contain sensitive data or private keys.
+          required: true
