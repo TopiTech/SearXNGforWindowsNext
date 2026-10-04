@@ -1,5 +1,7 @@
+import errno
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -26,9 +28,15 @@ def _atomic_write(file_path: str, data: str, encoding: str = "utf-8", newline: s
             try:
                 os.replace(temp_path, file_path)
                 return
-            except PermissionError as exc:
-                last_err = exc
-                time.sleep(0.05 * (2**attempt))
+            except OSError as exc:
+                if getattr(exc, "winerror", None) == 17 or getattr(exc, "errno", None) == errno.EXDEV:
+                    shutil.move(temp_path, file_path)
+                    return
+                if isinstance(exc, PermissionError):
+                    last_err = exc
+                    time.sleep(0.05 * (2**attempt))
+                else:
+                    raise
         if last_err:
             raise last_err
     except Exception:

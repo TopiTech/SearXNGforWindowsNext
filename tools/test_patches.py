@@ -80,10 +80,14 @@ class TestEnsureSecretKey(unittest.TestCase):
         self.fn = ensure_secret_key  # alias for readability
         self._tmpdir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self._tmpdir, ignore_errors=True)
+        self.config_dir = os.path.join(self._tmpdir, "config")
+        os.makedirs(self.config_dir, exist_ok=True)
+        patcher = mock.patch.object(self.fn, "CONFIG_DIR", self.config_dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _make_paths(self, with_key=None, with_settings=True):
-        config_dir = os.path.join(self._tmpdir, "config")
-        os.makedirs(config_dir, exist_ok=True)
+        config_dir = self.config_dir
         secret_path = os.path.join(config_dir, "secret.key")
         settings_path = os.path.join(config_dir, "settings.yml")
         example_path = os.path.join(config_dir, "settings.yml.example")
@@ -259,6 +263,55 @@ class TestEnsureSecretKey(unittest.TestCase):
         ):
             self.fn.main()
         self.assertEqual(os.path.getmtime(settings_path), original_mtime)
+
+    def test_ensure_settings_seeds_when_config_dir_different(self):
+        """Ensure settings file creates temp files in SETTINGS_PATH's directory even if CONFIG_DIR differs."""
+        _, settings_path, example_path = self._make_paths()
+        os.remove(settings_path)
+        with (
+            mock.patch.object(self.fn, "CONFIG_DIR", r"Z:\different_drive\config"),
+            mock.patch.object(self.fn, "SETTINGS_PATH", settings_path),
+            mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path),
+        ):
+            self.fn._ensure_settings_file()
+        self.assertTrue(os.path.exists(settings_path))
+        with open(settings_path, "r", encoding="utf-8") as f:
+            self.assertIn("ultrasecretkey", f.read())
+
+    def test_ensure_settings_cross_drive_fallback(self):
+        """Simulate WinError 17 on os.replace and verify shutil.move fallback works."""
+        _, settings_path, example_path = self._make_paths()
+        os.remove(settings_path)
+
+        def mock_replace(src, dst):
+            err = OSError("The system cannot move the file to a different disk drive")
+            err.winerror = 17
+            raise err
+
+        with (
+            mock.patch.object(self.fn, "SETTINGS_PATH", settings_path),
+            mock.patch.object(self.fn, "SETTINGS_EXAMPLE_PATH", example_path),
+            mock.patch("os.replace", side_effect=mock_replace),
+        ):
+            self.fn._ensure_settings_file()
+        self.assertTrue(os.path.exists(settings_path))
+        with open(settings_path, "r", encoding="utf-8") as f:
+            self.assertIn("ultrasecretkey", f.read())
+
+    def test_write_key_cross_drive_fallback(self):
+        """Simulate WinError 17 on os.replace during _write_key and verify shutil.move fallback works."""
+        secret_path, _, _ = self._make_paths()
+
+        def mock_replace(src, dst):
+            err = OSError("The system cannot move the file to a different disk drive")
+            err.winerror = 17
+            raise err
+
+        with mock.patch("os.replace", side_effect=mock_replace):
+            ok = self.fn._write_key(secret_path, "feca" * 16)
+        self.assertTrue(ok)
+        with open(secret_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), "feca" * 16)
 
 
 class TestPatchValKeyDB(unittest.TestCase):

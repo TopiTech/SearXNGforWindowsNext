@@ -35,9 +35,11 @@ never used at runtime.
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import secrets
+import shutil
 import stat
 import subprocess
 import sys
@@ -127,6 +129,13 @@ def _write_key(path: str, key: str) -> bool:
                     break
                 except OSError as exc:
                     last_exc = exc
+                    if getattr(exc, "winerror", None) == 17 or getattr(exc, "errno", None) == errno.EXDEV:
+                        try:
+                            shutil.move(tmp_path, path)
+                            replace_success = True
+                            break
+                        except OSError as move_exc:
+                            last_exc = move_exc
                     # If another process wrote a valid key, adopt it
                     existing = _read_key(path)
                     if existing and _SAFE_KEY_RE.fullmatch(existing):
@@ -197,11 +206,12 @@ def _ensure_settings_file() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+    target_dir = os.path.dirname(os.path.abspath(SETTINGS_PATH))
     try:
-        os.makedirs(CONFIG_DIR, exist_ok=True)
+        os.makedirs(target_dir, exist_ok=True)
         with open(SETTINGS_EXAMPLE_PATH, "r", encoding="utf-8") as src:
             content = src.read()
-        temp_fd, tmp_settings = tempfile.mkstemp(prefix=".tmp_settings_", dir=CONFIG_DIR, text=True)
+        temp_fd, tmp_settings = tempfile.mkstemp(prefix=".tmp_settings_", dir=target_dir, text=True)
         fd_closed = False
         try:
             try:
@@ -227,6 +237,13 @@ def _ensure_settings_file() -> None:
                     break
                 except OSError as exc:
                     last_exc = exc
+                    if getattr(exc, "winerror", None) == 17 or getattr(exc, "errno", None) == errno.EXDEV:
+                        try:
+                            shutil.move(tmp_settings, SETTINGS_PATH)
+                            replace_success = True
+                            break
+                        except OSError as move_exc:
+                            last_exc = move_exc
                     if os.path.exists(SETTINGS_PATH) and os.path.getsize(SETTINGS_PATH) > 0:
                         replace_success = True
                         break
