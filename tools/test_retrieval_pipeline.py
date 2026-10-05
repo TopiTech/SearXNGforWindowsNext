@@ -409,6 +409,32 @@ class TestPassageChunkerAndSecurity(unittest.TestCase):
         meta_no_canon = HTMLMetadataExtractor.extract_metadata(html_no_canon, fallback_url="https://example.com/page")
         self.assertEqual(meta_no_canon["canonical_url"], "https://example.com/page")
 
+    def test_html_metadata_extractor_empty_and_malformed(self) -> None:
+        """Regression test: verify HTMLMetadataExtractor handles empty, whitespace, comment-only, and malformed HTML."""
+        # 1. Empty string
+        meta_empty = HTMLMetadataExtractor.extract_metadata("", fallback_url="https://example.com/empty")
+        self.assertEqual(meta_empty["canonical_url"], "https://example.com/empty")
+        self.assertEqual(meta_empty["title"], "")
+        self.assertIsNone(meta_empty["published_at"])
+
+        # 2. Whitespace-only string
+        meta_ws = HTMLMetadataExtractor.extract_metadata("   \n\t  \r\n", fallback_url="https://example.com/ws")
+        self.assertEqual(meta_ws["canonical_url"], "https://example.com/ws")
+        self.assertEqual(meta_ws["title"], "")
+
+        # 3. Comment-only string (triggers lxml.etree.ParserError: Document is empty)
+        meta_comment = HTMLMetadataExtractor.extract_metadata(
+            "<!-- only comments here -->", fallback_url="https://example.com/comment"
+        )
+        self.assertEqual(meta_comment["canonical_url"], "https://example.com/comment")
+        self.assertEqual(meta_comment["title"], "")
+
+        # 4. Malformed XML/HTML fragments with invalid entities and unbalanced tags
+        meta_malformed = HTMLMetadataExtractor.extract_metadata(
+            "<div <<broken>> <title>Valid Title</title> &#999999999;", fallback_url="https://example.com/broken"
+        )
+        self.assertEqual(meta_malformed["canonical_url"], "https://example.com/broken")
+
         # IPv6 transition and mapped loopback/private
         self.assertFalse(is_safe_retrieval_url("http://[::ffff:127.0.0.1]/"))
         self.assertFalse(is_safe_retrieval_url("http://[2002:7f00:1::]/"))

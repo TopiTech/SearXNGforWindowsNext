@@ -596,6 +596,14 @@ class TestWebUIMarkdownPreview(unittest.TestCase):
         self.assertIn('id="ctx-preview"', html)
         self.assertIn("function renderSimpleMarkdown(", html)
 
+    def test_markdown_preview_link_sanitization_and_bracket_escaping(self) -> None:
+        """Verify markdown link sanitization prevents quote breakout and citations escape brackets."""
+        html = webui_next.AI_WORKSPACE_HTML
+        # Double-backslash bracket escaping regression
+        self.assertIn(r"split('[').join('\\[').split(']').join('\\]')", html)
+        # Markdown link sanitization routing through safeHttpUrl
+        self.assertIn(r"safeHttpUrl(rawUrl.replace(/&amp;/g, '&'))", html)
+
 
 class TestWebUIImageGrid(unittest.TestCase):
     """Test responsive image gallery grid for image category."""
@@ -605,6 +613,27 @@ class TestWebUIImageGrid(unittest.TestCase):
         self.assertIn(".image-results-grid {", html)
         self.assertIn(".image-card-thumb", html)
         self.assertIn("state.classicCategory === 'images'", html)
+
+
+class TestWebUIAccessibilityAndResponsiveHygiene(unittest.TestCase):
+    """Test HTML5 validity, screen-reader compliance, and responsive touch layout."""
+
+    def test_no_headings_nested_inside_labels(self) -> None:
+        """HTML5 phrasing content rule: <label> elements must not wrap <h1-6> headings."""
+        html = webui_next.AI_WORKSPACE_HTML
+        # Match <label ...> ... <h[1-6]> pattern
+        heading_inside_label = re.search(r"<label\b[^>]*>\s*<h[1-6]\b", html, re.IGNORECASE)
+        self.assertIsNone(
+            heading_inside_label,
+            f"Found invalid heading nested inside <label>: {heading_inside_label.group(0) if heading_inside_label else ''}",
+        )
+
+    def test_mobile_tabs_horizontal_touch_scroll(self) -> None:
+        """Verify nav-tabs and context-tabs have touch-friendly overflow-x scrolling for narrow viewports."""
+        html = webui_next.AI_WORKSPACE_HTML
+        # Verify overflow-x: auto and touch scrolling are present in tab styles
+        self.assertIn("overflow-x: auto", html)
+        self.assertIn("-webkit-overflow-scrolling: touch", html)
 
 
 if __name__ == "__main__":

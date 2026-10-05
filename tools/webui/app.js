@@ -510,7 +510,10 @@
         text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
         text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
         // Links
-        text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+        text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)\"\']+)\)/g, function (_, label, rawUrl) {
+          var cleanUrl = safeHttpUrl(rawUrl.replace(/&amp;/g, '&'));
+          return '<a href="' + escapeHtml(cleanUrl) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+        });
         // Unordered lists
         text = text.replace(/^\- (.*$)/gim, '<li>$1</li>');
         text = text.replace(/(<li>.*<\/li>)/gim, '<ul>$1</ul>');
@@ -768,7 +771,7 @@
           copyItemBtn.className = 'btn btn-sm';
           copyItemBtn.innerHTML = icon('copy') + '<span>引用コピー</span>';
           copyItemBtn.addEventListener('click', function () {
-            var safeTitle = (item.title || item.url || '').split('[').join('\[').split(']').join('\]');
+            var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
             var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
             var hText = (item.highlights && item.highlights.length) ? item.highlights.join('\n\n') : (item.content || '');
             var citeMd = '### [' + (idx + 1) + '] [' + safeTitle + '](' + safeUrl + ')\n> ' + hText.replace(/\n/g, '\n> ');
@@ -1027,7 +1030,7 @@
           copyBtn.className = 'btn btn-sm';
           copyBtn.innerHTML = icon('copy') + '<span>引用コピー</span>';
           copyBtn.addEventListener('click', function () {
-            var safeTitle = (item.title || item.url || '').split('[').join('\[').split(']').join('\]');
+            var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
             var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
             var citeText = '### [' + safeTitle + '](' + safeUrl + ')\n> ' + (item.content || '').replace(/\n/g, '\n> ');
             copyWithFeedback(citeText, copyBtn, 'コピー済');

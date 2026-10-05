@@ -2658,7 +2658,7 @@ class TestAiWebuiPatches(unittest.TestCase):
         self.assertIn('aria-controls="section-settings-engines"', html_doc)
         self.assertIn('role="tabpanel" aria-labelledby="subtab-engines-btn"', html_doc)
         self.assertIn("e.key === 'Escape'", html_doc)
-        self.assertIn("split('[').join('\\[').split(']').join('\\]')", html_doc)
+        self.assertIn(r"split('[').join('\\[').split(']').join('\\]')", html_doc)
 
     def test_webui_next_javascript_syntax_validity(self):
         """Regression: ensure delivered JavaScript (AI_WORKSPACE_HTML and SIMPLE_EMBED_JS)

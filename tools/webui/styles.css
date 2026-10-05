@@ -538,6 +538,25 @@ main.workspace {
   .kbd-hint { display: none; }
   .search-input { padding-right: 0.95rem; }
   .preset-chips { margin-left: 0; width: 100%; }
+  .nav-tabs {
+    width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .nav-tab {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .context-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .ctx-tab {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
 }
 
 /* Result Cards */

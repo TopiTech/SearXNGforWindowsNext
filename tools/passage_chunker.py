@@ -16,6 +16,7 @@ from typing import Any, ClassVar
 from lexical_rerank import MultilingualTokenizer
 
 try:
+    import lxml.etree
     import lxml.html
 
     _HAS_LXML = True
@@ -140,7 +141,9 @@ class HTMLMetadataExtractor:
             "date_confidence": None,
         }
 
-        if not raw_html:
+        if not raw_html or not raw_html.strip():
+            if fallback_url:
+                out["canonical_url"] = fallback_url
             return out
 
         # 1. Trafilatura metadata extraction
@@ -229,7 +232,7 @@ class HTMLMetadataExtractor:
                     t_el = tree.xpath("//title/text()") or tree.xpath("//meta[@property='og:title']/@content")
                     if t_el:
                         out["title"] = str(t_el[0]).strip()
-            except (AttributeError, KeyError, TypeError, ValueError, IndexError):
+            except (AttributeError, KeyError, TypeError, ValueError, IndexError, lxml.etree.LxmlError):
                 pass
 
         if out["canonical_url"] and fallback_url:

@@ -1996,6 +1996,25 @@ main.workspace {
   .kbd-hint { display: none; }
   .search-input { padding-right: 0.95rem; }
   .preset-chips { margin-left: 0; width: 100%; }
+  .nav-tabs {
+    width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .nav-tab {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .context-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .ctx-tab {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
 }
 
 /* Result Cards */
@@ -3031,7 +3050,7 @@ footer.ws-footer {
         <div class="general-settings-card">
           <div class="settings-row">
             <div class="settings-label-wrap">
-              <label for="pref-default-mode"><h4>デフォルト検索モード</h4></label>
+              <h4><label for="pref-default-mode">デフォルト検索モード</label></h4>
               <p>検索トップ画面にアクセスした際、または外部から検索時の初期モード</p>
             </div>
             <div>
@@ -3045,7 +3064,7 @@ footer.ws-footer {
 
           <div class="settings-row">
             <div class="settings-label-wrap">
-              <label for="pref-safesearch"><h4>セーフサーチ (SafeSearch)</h4></label>
+              <h4><label for="pref-safesearch">セーフサーチ (SafeSearch)</label></h4>
               <p>成人向けコンテンツのフィルタリング設定</p>
             </div>
             <div>
@@ -3059,7 +3078,7 @@ footer.ws-footer {
 
           <div class="settings-row">
             <div class="settings-label-wrap">
-              <label for="pref-default-count"><h4>デフォルト取得件数</h4></label>
+              <h4><label for="pref-default-count">デフォルト取得件数</label></h4>
               <p>検索時に各エンジンから集約・選抜する結果件数の標準値</p>
             </div>
             <div>
@@ -3074,7 +3093,7 @@ footer.ws-footer {
 
           <div class="settings-row">
             <div class="settings-label-wrap">
-              <label for="pref-default-tokens"><h4>トークン予算上限</h4></label>
+              <h4><label for="pref-default-tokens">トークン予算上限</label></h4>
               <p>AI Deep Search時にLLMへ渡すMarkdownコンテキストの上限</p>
             </div>
             <div>
@@ -3628,7 +3647,10 @@ footer.ws-footer {
         text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
         text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
         // Links
-        text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+        text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)\"\']+)\)/g, function (_, label, rawUrl) {
+          var cleanUrl = safeHttpUrl(rawUrl.replace(/&amp;/g, '&'));
+          return '<a href="' + escapeHtml(cleanUrl) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+        });
         // Unordered lists
         text = text.replace(/^\- (.*$)/gim, '<li>$1</li>');
         text = text.replace(/(<li>.*<\/li>)/gim, '<ul>$1</ul>');
@@ -3886,7 +3908,7 @@ footer.ws-footer {
           copyItemBtn.className = 'btn btn-sm';
           copyItemBtn.innerHTML = icon('copy') + '<span>引用コピー</span>';
           copyItemBtn.addEventListener('click', function () {
-            var safeTitle = (item.title || item.url || '').split('[').join('\[').split(']').join('\]');
+            var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
             var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
             var hText = (item.highlights && item.highlights.length) ? item.highlights.join('\n\n') : (item.content || '');
             var citeMd = '### [' + (idx + 1) + '] [' + safeTitle + '](' + safeUrl + ')\n> ' + hText.replace(/\n/g, '\n> ');
@@ -4145,7 +4167,7 @@ footer.ws-footer {
           copyBtn.className = 'btn btn-sm';
           copyBtn.innerHTML = icon('copy') + '<span>引用コピー</span>';
           copyBtn.addEventListener('click', function () {
-            var safeTitle = (item.title || item.url || '').split('[').join('\[').split(']').join('\]');
+            var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
             var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
             var citeText = '### [' + safeTitle + '](' + safeUrl + ')\n> ' + (item.content || '').replace(/\n/g, '\n> ');
             copyWithFeedback(citeText, copyBtn, 'コピー済');
