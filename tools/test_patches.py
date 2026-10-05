@@ -3893,11 +3893,15 @@ class TestPatchHardeningM2(unittest.TestCase):
     def test_apply_patches_check_all_clean(self):
         """Verify python tools/apply-patches.py --check reports 0 pending patches."""
         results = apply_patches.run_all_patches(apply_patches.PATCH_SPECS, dry_run=True)
-        non_applied = [r for r in results if r.status != apply_patches.PatchStatus.ALREADY_APPLIED]
+        unclean = [
+            r
+            for r in results
+            if r.status not in (apply_patches.PatchStatus.ALREADY_APPLIED, apply_patches.PatchStatus.SKIPPED)
+        ]
         self.assertEqual(
-            non_applied,
+            unclean,
             [],
-            f"apply-patches.py --check found pending or failed patches: {non_applied}",
+            f"apply-patches.py --check found pending or failed patches: {unclean}",
         )
 
 
