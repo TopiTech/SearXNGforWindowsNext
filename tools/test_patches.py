@@ -22,7 +22,16 @@ import unittest
 from typing import Any
 from unittest import mock
 
-import idna
+try:
+    import idna
+except ImportError:
+    idna = None  # type: ignore[assignment]
+
+try:
+    import flask
+except ImportError:
+    flask = None  # type: ignore[assignment]
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -1308,8 +1317,10 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
         try:
             import idna
 
+            if idna is None:
+                raise ImportError("idna module is None")
             punycode_host = idna.encode("日本語.jp").decode("ascii")
-        except ImportError:
+        except (ImportError, AttributeError):
             punycode_host = "日本語.jp".encode("idna").decode("ascii")
 
         unicode_host = "日本語.jp"
@@ -1321,9 +1332,11 @@ class TestPatchScrapeRouteEdgeCases(unittest.TestCase):
         try:
             import idna
 
+            if idna is None:
+                raise ImportError("idna module is None")
             enc_h = idna.encode(h_clean).decode("ascii")
             enc_pin = idna.encode(pin_clean).decode("ascii")
-        except ImportError:
+        except (ImportError, AttributeError):
             enc_h = h_clean.encode("idna").decode("ascii")
             enc_pin = pin_clean.encode("idna").decode("ascii")
 
@@ -2514,6 +2527,7 @@ class TestAiWebuiPatches(unittest.TestCase):
         self.assertIn('id="sxng-ai-deep-drawer"', patched)
         self.assertEqual(apply_patches.patch_simple_results_ai_webui(patched, "results.html"), "ALREADY_APPLIED")
 
+    @unittest.skipIf(flask is None, "flask is required for webui_next route tests")
     def test_webui_next_serves_single_charset_content_types(self):
         import webui_next
         from flask import Flask
@@ -2947,13 +2961,14 @@ class TestAiWebuiPatches(unittest.TestCase):
             self.assertEqual(res.get("content"), "ok", f"unexpected error for {url}: {res.get('error')}")
 
         # Non-ASCII IDN hosts must be punycoded so the transport and pin agree.
-        calls[0] = 0
-        requested_urls.clear()
-        captured_pinned.clear()
-        with mock.patch("webui_next.socket.getaddrinfo", side_effect=fake_getaddrinfo):
-            res = webui_next._scrape_url_direct(fake_webapp, "http://例え.example/テスト", max_length=100)
-        self.assertEqual(urllib.parse.urlsplit(requested_urls[0]).hostname, "xn--r8jz45g.example")
-        self.assertEqual(captured_pinned[-1][0], "xn--r8jz45g.example")
+        if idna is not None:
+            calls[0] = 0
+            requested_urls.clear()
+            captured_pinned.clear()
+            with mock.patch("webui_next.socket.getaddrinfo", side_effect=fake_getaddrinfo):
+                res = webui_next._scrape_url_direct(fake_webapp, "http://例え.example/テスト", max_length=100)
+            self.assertEqual(urllib.parse.urlsplit(requested_urls[0]).hostname, "xn--r8jz45g.example")
+            self.assertEqual(captured_pinned[-1][0], "xn--r8jz45g.example")
 
         # Loopback obfuscation with Unicode dots must be statically blocked
         # before any DNS lookup (uses a fake that actually blocks private IPs).
@@ -2975,6 +2990,7 @@ class TestAiWebuiPatches(unittest.TestCase):
             self.assertIn("スクレイピング拒否 (400)", res.get("error", ""))
             ga.assert_not_called()
 
+    @unittest.skipIf(flask is None, "flask is required for webui_next route tests")
     def test_unified_root_serves_ai_first_workspace(self):
         """Verify root / serves the unified AI Search & Context Studio HTML with classic & settings tabs."""
         import webui_next
@@ -2994,6 +3010,7 @@ class TestAiWebuiPatches(unittest.TestCase):
         self.assertIn('data-mode="classic"', body)
         self.assertIn('data-mode="settings"', body)
 
+    @unittest.skipIf(flask is None, "flask is required for webui_next route tests")
     def test_unified_search_browser_redirects_and_api_passes(self):
         """Verify /search redirects HTML browser queries to /?q=... while preserving API json/data output."""
         import webui_next
@@ -3038,6 +3055,7 @@ class TestAiWebuiPatches(unittest.TestCase):
         header_json_resp = client.get("/search?q=machine+learning", headers={"Accept": "application/json"})
         self.assertEqual(header_json_resp.status_code, 200)
 
+    @unittest.skipIf(flask is None, "flask is required for webui_next route tests")
     def test_settings_engines_api_get_and_post(self):
         """Verify /api/settings/engines GET introspects engine data and POST persists cookie settings."""
         import webui_next
@@ -3672,6 +3690,7 @@ class TestPatchHardeningM2(unittest.TestCase):
             ensure_secret_key.set_file_permissions(dummy_path)
             mock_chmod.assert_called_once_with(dummy_path, stat.S_IRUSR | stat.S_IWUSR)
 
+    @unittest.skipIf(importlib.util.find_spec("yaml") is None, "yaml is required for settings_loader tests")
     def test_settings_loader_quoted_path_stripped(self):
         """F2.6: Verify settings_loader.get_user_cfg_folder strips enclosing quotes."""
         from searx import settings_loader
@@ -3696,6 +3715,7 @@ class TestPatchHardeningM2(unittest.TestCase):
         self.assertIn("max_keepalive_connections=0", patched)
         self.assertNotIn("max_keepalive_connections=20", patched)
 
+    @unittest.skipIf(importlib.util.find_spec("yaml") is None, "yaml is required for settings_loader tests")
     def test_settings_loader_whitespace_padded_quotes(self):
         """Verify settings_loader.get_user_cfg_folder handles whitespace around quotes."""
         from searx import settings_loader
@@ -3715,6 +3735,7 @@ class TestPatchHardeningM2(unittest.TestCase):
                 folder = settings_loader.get_user_cfg_folder()
                 self.assertEqual(str(folder), expected_folder, f"Failed on case: {c}")
 
+    @unittest.skipIf(importlib.util.find_spec("yaml") is None, "yaml is required for settings_loader tests")
     def test_settings_loader_quoted_custom_filename_retained(self):
         """Verify load_settings retains custom filename when SEARXNG_SETTINGS_PATH is quoted."""
         from searx import settings_loader

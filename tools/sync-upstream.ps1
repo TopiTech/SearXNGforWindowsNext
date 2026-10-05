@@ -287,6 +287,11 @@ synced_at=$(Get-Date -Format o)
     Write-Host ""
     Write-Host "Verifying AI-First UI and critical patch integrity..." -ForegroundColor Green
     try {
+        $depsReady = & (Join-Path $repoRoot "python\python.exe") -c "import idna, flask; print('OK')" 2>$null
+        if ($depsReady -ne "OK") {
+            Write-Host "  Installing dependencies required for integrity verification..." -ForegroundColor Yellow
+            & (Join-Path $repoRoot "tools\install-requirements.ps1") -Dev
+        }
         & (Join-Path $repoRoot "python\python.exe") (Join-Path $repoRoot "tools\test_patches.py")
         if ($LASTEXITCODE -ne 0) {
             throw "Patch integrity tests exited with code $LASTEXITCODE"

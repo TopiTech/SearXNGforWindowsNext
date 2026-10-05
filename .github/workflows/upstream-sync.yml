@@ -63,6 +63,11 @@ jobs:
           }
           "requested_ref=$ref" >> $env:GITHUB_OUTPUT
 
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          .\tools\install-requirements.ps1 -Dev
+
       - name: Run upstream sync
         id: sync
         continue-on-error: true
