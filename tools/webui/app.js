@@ -77,6 +77,16 @@
         return '#';
       }
 
+      function safeImageUrl(url) {
+        var s = String(url == null ? '' : url).trim();
+        if (!s) return '';
+        if (/^data:image\/(?:png|jpeg|jpg|webp|gif|svg\+xml);base64,[a-z0-9+/=]+$/i.test(s)) {
+          return s;
+        }
+        var http = safeHttpUrl(s);
+        return (http === '#') ? '' : http;
+      }
+
       function escapeShellDoubleQuoted(str) {
         return String(str == null ? '' : str)
           .replace(/[\\$"\\`!]/g, function (ch) { return String.fromCharCode(92) + ch; });
@@ -628,12 +638,12 @@
           return '<a href="' + escapeHtml(cleanUrl) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
         });
 
-        // 6. Restore code blocks and inline code
+        // 6. Restore code blocks and inline code (using function return to prevent $ pattern interpretation)
         for (var k = 0; k < codeBlocks.length; k++) {
-          fullHtml = fullHtml.replace('@@CODE_BLOCK_' + k + '@@', codeBlocks[k]);
+          fullHtml = fullHtml.replace('@@CODE_BLOCK_' + k + '@@', function () { return codeBlocks[k]; });
         }
         for (var j = 0; j < inlineCodes.length; j++) {
-          fullHtml = fullHtml.replace('@@INLINE_CODE_' + j + '@@', inlineCodes[j]);
+          fullHtml = fullHtml.replace('@@INLINE_CODE_' + j + '@@', function () { return inlineCodes[j]; });
         }
 
         return fullHtml;
@@ -850,11 +860,13 @@
           var actions = document.createElement('div');
           actions.className = 'card-actions';
 
+          var drawerId = 'deep-scrape-drawer-' + idx;
           var scrapeBtn = document.createElement('button');
           scrapeBtn.type = 'button';
           scrapeBtn.className = 'btn btn-sm';
           scrapeBtn.innerHTML = icon('fileText') + '<span>本文抽出</span>';
           scrapeBtn.setAttribute('aria-expanded', 'false');
+          scrapeBtn.setAttribute('aria-controls', drawerId);
           scrapeBtn.addEventListener('click', function () {
             var existing = card.querySelector('.inline-scrape-drawer');
             if (existing) {
@@ -865,6 +877,7 @@
             }
             var drawer = document.createElement('div');
             drawer.className = 'inline-scrape-drawer';
+            drawer.id = drawerId;
             drawer.innerHTML = '<span class="ui-spinner"></span> URLから本文を抽出中...';
             card.appendChild(drawer);
             scrapeBtn.setAttribute('aria-expanded', 'true');
@@ -948,7 +961,9 @@
           .then(function (r) { return r.json(); })
           .then(function (res) {
             container.setAttribute('aria-busy', 'false');
+            var telBar = document.getElementById('telemetry-bar');
             if (res.error && (!res.results || !res.results.length)) {
+              if (telBar) telBar.classList.remove('visible');
               container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">' + icon('alert') + ' エラー</h2><p>' + escapeHtml(res.error) + '</p></div>';
               return;
             }
@@ -956,14 +971,15 @@
             state.prompt = res.rag_prompt || '';
             state.jsonStr = JSON.stringify(res, null, 2);
 
-            var telBar = document.getElementById('telemetry-bar');
             var badges = document.getElementById('telemetry-badges');
-            telBar.classList.add('visible');
-            badges.innerHTML =
-              '<span class="pill pill-accent">' + escapeHtml(res.search_depth || depth) + ' (' + escapeHtml(res.intent || 'general') + ')</span>' +
-              '<span class="pill pill-emerald">' + escapeHtml(res.results_count || 0) + '件 (本文抽出: ' + escapeHtml(res.scraped_count || 0) + '件)</span>' +
-              '<span class="pill">~' + escapeHtml(res.estimated_tokens || 0) + ' tokens</span>' +
-              '<span class="pill">' + escapeHtml(res.elapsed_ms || 0) + ' ms</span>';
+            if (telBar) telBar.classList.add('visible');
+            if (badges) {
+              badges.innerHTML =
+                '<span class="pill pill-accent">' + escapeHtml(res.search_depth || depth) + ' (' + escapeHtml(res.intent || 'general') + ')</span>' +
+                '<span class="pill pill-emerald">' + escapeHtml(res.results_count || 0) + '件 (本文抽出: ' + escapeHtml(res.scraped_count || 0) + '件)</span>' +
+                '<span class="pill">~' + escapeHtml(res.estimated_tokens || 0) + ' tokens</span>' +
+                '<span class="pill">' + escapeHtml(res.elapsed_ms || 0) + ' ms</span>';
+            }
 
             renderSearchResults(res.results || [], query);
             updateContextView();
@@ -972,6 +988,8 @@
           .catch(function (err) {
             if (err.name === 'AbortError') return;
             container.setAttribute('aria-busy', 'false');
+            var telBar = document.getElementById('telemetry-bar');
+            if (telBar) telBar.classList.remove('visible');
             container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">' + icon('alert') + ' 通信エラー</h2><p>' + escapeHtml(err) + '</p></div>';
           });
       }
@@ -1003,13 +1021,16 @@
 
             var imgSrc = item.img_src || item.thumbnail_src || item.thumbnail;
             if (imgSrc) {
-              var img = document.createElement('img');
-              img.className = 'image-card-thumb';
-              img.src = safeHttpUrl(imgSrc);
-              img.alt = item.title || '';
-              img.loading = 'lazy';
-              img.onerror = function () { this.style.display = 'none'; };
-              thumbWrap.appendChild(img);
+              var safeSrc = safeImageUrl(imgSrc);
+              if (safeSrc) {
+                var img = document.createElement('img');
+                img.className = 'image-card-thumb';
+                img.src = safeSrc;
+                img.alt = item.title || '';
+                img.loading = 'lazy';
+                img.onerror = function () { this.style.display = 'none'; };
+                thumbWrap.appendChild(img);
+              }
             }
 
             var body = document.createElement('div');
@@ -1187,25 +1208,33 @@
           .then(function (r) { return r.json(); })
           .then(function (res) {
             container.setAttribute('aria-busy', 'false');
+            var ansContainer = document.getElementById('classic-answers-container');
+            var pagBar = document.getElementById('classic-pagination-bar');
             if (res.error && (!res.results || !res.results.length)) {
+              if (telPill) telPill.style.display = 'none';
+              if (ansContainer) ansContainer.innerHTML = '';
+              if (pagBar) pagBar.style.display = 'none';
               container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">' + icon('alert') + ' エラー</h2><p>' + escapeHtml(res.error) + '</p></div>';
               return;
             }
-            telPill.style.display = 'block';
-            telPill.innerHTML = '取得: ' + escapeHtml(res.results_count || 0) + '件 (' + escapeHtml(res.elapsed_ms || 0) + ' ms)' +
-              (cat ? ' &middot; カテゴリー: ' + escapeHtml(cat) : '') +
-              (tr ? ' &middot; 期間: ' + escapeHtml(tr) : '');
+            if (telPill) {
+              telPill.style.display = 'block';
+              telPill.innerHTML = '取得: ' + escapeHtml(res.results_count || 0) + '件 (' + escapeHtml(res.elapsed_ms || 0) + ' ms)' +
+                (cat ? ' &middot; カテゴリー: ' + escapeHtml(cat) : '') +
+                (tr ? ' &middot; 期間: ' + escapeHtml(tr) : '');
+            }
 
             // Direct answers box
-            var ansContainer = document.getElementById('classic-answers-container');
-            ansContainer.innerHTML = '';
-            if (res.answers && res.answers.length) {
-              res.answers.forEach(function (a) {
-                var abox = document.createElement('div');
-                abox.className = 'classic-answer-box';
-                abox.innerHTML = '<strong>ダイレクトアンサー:</strong><br>' + escapeHtml(a);
-                ansContainer.appendChild(abox);
-              });
+            if (ansContainer) {
+              ansContainer.innerHTML = '';
+              if (res.answers && res.answers.length) {
+                res.answers.forEach(function (a) {
+                  var abox = document.createElement('div');
+                  abox.className = 'classic-answer-box';
+                  abox.innerHTML = '<strong>ダイレクトアンサー:</strong><br>' + escapeHtml(a);
+                  ansContainer.appendChild(abox);
+                });
+              }
             }
 
             renderClassicSearchResults(res.results || [], query, page);
@@ -1214,6 +1243,11 @@
           .catch(function (err) {
             if (err.name === 'AbortError') return;
             container.setAttribute('aria-busy', 'false');
+            if (telPill) telPill.style.display = 'none';
+            var ansContainer = document.getElementById('classic-answers-container');
+            if (ansContainer) ansContainer.innerHTML = '';
+            var pagBar = document.getElementById('classic-pagination-bar');
+            if (pagBar) pagBar.style.display = 'none';
             container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">' + icon('alert') + ' 通信エラー</h2><p>' + escapeHtml(err) + '</p></div>';
           });
       }
@@ -1273,7 +1307,9 @@
           .then(function (r) { return r.json(); })
           .then(function (res) {
             container.setAttribute('aria-busy', 'false');
+            var telBar = document.getElementById('telemetry-bar');
             if (res.error) {
+              if (telBar) telBar.classList.remove('visible');
               container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">' + icon('alert') + ' 抽出エラー</h2><p>' + escapeHtml(res.error) + '</p></div>';
               return;
             }
@@ -1281,9 +1317,8 @@
             state.prompt = res.rag_prompt || ('以下のWebページ抽出本文を根拠として要点を解説してください。\n\nURL: ' + targetUrl + '\n\n' + state.markdown);
             state.jsonStr = JSON.stringify(res, null, 2);
 
-            var telBar = document.getElementById('telemetry-bar');
             var badges = document.getElementById('telemetry-badges');
-            telBar.classList.add('visible');
+            if (telBar) telBar.classList.add('visible');
             badges.innerHTML =
               '<span class="pill pill-emerald">' + icon('check', 'ui-icon-sm') + ' 本文抽出完了 (' + escapeHtml(res.char_count || 0) + ' 文字)</span>' +
               '<span class="pill pill-accent">~' + escapeHtml(res.estimated_tokens || 0) + ' tokens</span>' +
@@ -1323,6 +1358,10 @@
           })
           .catch(function (err) {
             if (err.name === 'AbortError') return;
+            var telBar = document.getElementById('telemetry-bar');
+            if (telBar) telBar.classList.remove('visible');
+            var oldBar = document.querySelector('.telemetry-bar');
+            if (oldBar) oldBar.remove();
             container.setAttribute('aria-busy', 'false');
             container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">' + icon('alert') + ' 通信エラー</h2><p>' + escapeHtml(err) + '</p></div>';
           });
@@ -1870,6 +1909,9 @@
           document.querySelectorAll('.inline-scrape-drawer').forEach(function (d) {
             d.style.display = 'none';
           });
+          document.querySelectorAll('button[aria-expanded="true"]').forEach(function (b) {
+            b.setAttribute('aria-expanded', 'false');
+          });
           return;
         }
 
@@ -1915,7 +1957,7 @@
             if (copyBtn) copyBtn.click();
           } else if (e.key === 'Enter' && state.selectedCardIndex >= 0 && state.selectedCardIndex < cards.length) {
             var link = cards[state.selectedCardIndex].querySelector('a');
-            if (link) window.open(link.href, '_blank');
+            if (link) window.open(link.href, '_blank', 'noopener,noreferrer');
           }
         }
       });

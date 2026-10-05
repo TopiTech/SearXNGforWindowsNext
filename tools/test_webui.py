@@ -734,5 +734,145 @@ class TestWebUIAccessibilityAndResponsiveHygiene(unittest.TestCase):
         self.assertIn("-webkit-overflow-scrolling: touch", html)
 
 
+class TestWebUIMarkdownAndSanitization(unittest.TestCase):
+    """Test Markdown preview rendering resilience and image URI sanitization."""
+
+    def test_render_simple_markdown_preserves_dollar_signs_in_bundle(self) -> None:
+        """Verify renderSimpleMarkdown uses function replacement to prevent $ pattern substitution."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("function () { return codeBlocks[k]; }", html)
+        self.assertIn("function () { return inlineCodes[j]; }", html)
+
+    def test_safe_image_url_patterns_in_bundle(self) -> None:
+        """Verify safeImageUrl helper handles data:image and rejects insecure schemes."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("function safeImageUrl(url)", html)
+        self.assertIn(r"data:image\/(?:png|jpeg|jpg|webp|gif|svg\+xml);base64,[a-z0-9+/=]+", html)
+
+    def test_node_execution_markdown_and_image_safety(self) -> None:
+        """If node is available, execute JS functions directly to verify edge-case outputs."""
+        import json
+        import shutil
+        import subprocess
+
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node runtime not found in PATH")
+
+        js_code = """
+        function escapeHtml(s) {
+          return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+        }
+        function safeHttpUrl(s) {
+          if (!s) return '#';
+          try {
+            var parsed = new URL(s, 'http://localhost');
+            if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+              return parsed.href;
+            }
+          } catch (e) {}
+          return '#';
+        }
+        function safeImageUrl(url) {
+          var s = String(url == null ? '' : url).trim();
+          if (!s) return '';
+          if (/^data:image\\/(?:png|jpeg|jpg|webp|gif|svg\\+xml);base64,[a-z0-9+/=]+$/i.test(s)) {
+            return s;
+          }
+          var http = safeHttpUrl(s);
+          return (http === '#') ? '' : http;
+        }
+        function renderSimpleMarkdown(md) {
+          if (!md) return '<p style="color:var(--text-muted);">(empty)</p>';
+          var text = escapeHtml(md).replace(/\\r\\n/g, '\\n');
+          var codeBlocks = [];
+          text = text.replace(/```([a-zA-Z0-9_-]*)\\n([\\s\\S]*?)```/g, function (_, lang, code) {
+            var token = '@@CODE_BLOCK_' + codeBlocks.length + '@@';
+            codeBlocks.push('<pre><code class="lang-' + lang + '">' + code + '</code></pre>');
+            return '\\n\\n' + token + '\\n\\n';
+          });
+          var inlineCodes = [];
+          text = text.replace(/`([^`]+)`/g, function (_, code) {
+            var token = '@@INLINE_CODE_' + inlineCodes.length + '@@';
+            inlineCodes.push('<code>' + code + '</code>');
+            return token;
+          });
+          var rawBlocks = text.split(/\\n{2,}/);
+          var htmlBlocks = [];
+          for (var i = 0; i < rawBlocks.length; i++) {
+            var block = rawBlocks[i].trim();
+            if (!block) continue;
+            if (/^@@CODE_BLOCK_\\d+@@$/.test(block)) {
+              htmlBlocks.push(block);
+              continue;
+            }
+            htmlBlocks.push('<p>' + block.replace(/\\n/g, '<br>') + '</p>');
+          }
+          var fullHtml = htmlBlocks.join('\\n');
+          for (var k = 0; k < codeBlocks.length; k++) {
+            fullHtml = fullHtml.replace('@@CODE_BLOCK_' + k + '@@', function () { return codeBlocks[k]; });
+          }
+          for (var j = 0; j < inlineCodes.length; j++) {
+            fullHtml = fullHtml.replace('@@INLINE_CODE_' + j + '@@', function () { return inlineCodes[j]; });
+          }
+          return fullHtml;
+        }
+
+        const outMd = renderSimpleMarkdown('```bash\\necho $1 $2 $& $$ $price\\n```\\nPrice is `$100` and `$PATH`');
+        const imgSafe1 = safeImageUrl('https://example.com/pic.jpg');
+        const imgSafe2 = safeImageUrl('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=');
+        const imgBad1 = safeImageUrl('javascript:alert(1)');
+        const imgBad2 = safeImageUrl('data:text/html;base64,PHNjcmlwdD4=');
+
+        console.log(JSON.stringify({
+          md: outMd,
+          imgSafe1: imgSafe1,
+          imgSafe2: imgSafe2,
+          imgBad1: imgBad1,
+          imgBad2: imgBad2,
+        }));
+        """
+        proc = subprocess.run([node_bin, "-e", js_code], capture_output=True, text=True, check=True)
+        data = json.loads(proc.stdout)
+        self.assertIn("echo $1 $2 $&amp; $$ $price", data["md"])
+        self.assertIn("<code>$100</code>", data["md"])
+        self.assertIn("<code>$PATH</code>", data["md"])
+        self.assertEqual(data["imgSafe1"], "https://example.com/pic.jpg")
+        self.assertTrue(data["imgSafe2"].startswith("data:image/png;base64,"))
+        self.assertEqual(data["imgBad1"], "")
+        self.assertEqual(data["imgBad2"], "")
+
+
+class TestWebUIAccessibilityDeepSearchAndKeybindings(unittest.TestCase):
+    """Test accessibility patterns and keyboard shortcuts in WebUI."""
+
+    def test_deep_search_drawer_has_aria_controls(self) -> None:
+        """Deep search scrape drawer button must set aria-controls attribute to drawer id."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("deep-scrape-drawer-", html)
+        self.assertIn("scrapeBtn.setAttribute('aria-controls', drawerId)", html)
+
+    def test_escape_key_resets_aria_expanded(self) -> None:
+        """Escape key listener must reset aria-expanded to false on expanded buttons."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("b.setAttribute('aria-expanded', 'false')", html)
+
+    def test_enter_navigation_safe_window_open(self) -> None:
+        """Opening card link via Enter key must use noopener,noreferrer."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("window.open(link.href, '_blank', 'noopener,noreferrer')", html)
+
+    def test_error_handlers_clear_telemetry_bar(self) -> None:
+        """Unified, Classic, and Scrape error handlers must remove/hide telemetry bars."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("if (oldBar) oldBar.remove();", html)
+        self.assertIn("telBar.classList.remove('visible');", html)
+
+
 if __name__ == "__main__":
     unittest.main()
