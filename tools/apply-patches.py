@@ -914,15 +914,19 @@ def patch_preferences_validation(content, path):
     if (
         "self.value = [x for x in elements if x in self.choices]" in content
         and "except ValidationException as e:" in content
-        and "favicons, logger" in content
+        and (
+            "favicons, logger" in content
+            or "from searx import get_setting, settings, autocomplete, favicons" not in content
+        )
     ):
         return "ALREADY_APPLIED"
 
     # 0. Ensure logger is imported for debug logging in parse_dict
-    if "from searx import get_setting, settings, autocomplete, favicons\n" in content:
+    target_import = "from searx import get_setting, settings, autocomplete, favicons"
+    if target_import in content and "favicons, logger" not in content:
         content = content.replace(
-            "from searx import get_setting, settings, autocomplete, favicons\n",
-            "from searx import get_setting, settings, autocomplete, favicons, logger\n",
+            target_import,
+            "from searx import get_setting, settings, autocomplete, favicons, logger",
             1,
         )
 

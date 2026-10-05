@@ -3446,6 +3446,16 @@ class TestPatchDiagnosticsAndResilience(unittest.TestCase):
         # Verify idempotency
         self.assertEqual(apply_patches.patch_preferences_validation(patched, "preferences.py"), "ALREADY_APPLIED")
 
+        # Test with import line present
+        sample_with_import = "from searx import get_setting, settings, autocomplete, favicons\n" + sample
+        patched_with_import = apply_patches.patch_preferences_validation(sample_with_import, "preferences.py")
+        self.assertIn("from searx import get_setting, settings, autocomplete, favicons, logger", patched_with_import)
+        self.assertIn("self.value = [x for x in elements if x in self.choices]", patched_with_import)
+        self.assertIn("except ValidationException as e:", patched_with_import)
+        self.assertEqual(
+            apply_patches.patch_preferences_validation(patched_with_import, "preferences.py"), "ALREADY_APPLIED"
+        )
+
     def test_patch_webadapter_categories(self):
         sample = (
             "    for categ in category_list:\n"
