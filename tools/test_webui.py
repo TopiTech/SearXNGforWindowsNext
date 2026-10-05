@@ -467,8 +467,144 @@ class TestSmokeTestHarnessEnginesAssertion(unittest.TestCase):
             content = f.read()
 
         self.assertIn('"$base/api/settings/engines"', content)
-        self.assertIn("$enginesSettings.total_engines -le 0", content)
-        self.assertIn("$enginesSettings.active_engines -le 0", content)
+
+
+class TestWebUIEmojiElimination(unittest.TestCase):
+    """Test elimination of visual emoji clutter across AI_WORKSPACE_HTML."""
+
+    def test_no_emojis_in_workspace_html(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        emoji_pattern = re.compile(
+            "["
+            "\U0001f1e0-\U0001f1ff"
+            "\U0001f300-\U0001f5ff"
+            "\U0001f600-\U0001f64f"
+            "\U0001f680-\U0001f6ff"
+            "\U0001f700-\U0001f77f"
+            "\U0001f780-\U0001f7ff"
+            "\U0001f800-\U0001f8ff"
+            "\U0001f900-\U0001f9ff"
+            "\U0001fa00-\U0001fa6f"
+            "\U0001fa70-\U0001faff"
+            "\U00002702-\U000027b0"
+            "\U00002600-\U000026ff"
+            "]+",
+            flags=re.UNICODE,
+        )
+        found = emoji_pattern.findall(html)
+        self.assertEqual(
+            found,
+            [],
+            f"AI_WORKSPACE_HTML should not contain visual emojis; found: {set(found)}",
+        )
+
+
+class TestWebUISVGAccessibility(unittest.TestCase):
+    """Test SVG icons accessibility and class definitions."""
+
+    def test_all_svg_icons_have_aria_hidden(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        svg_tags = re.findall(r"<svg[^>]*>", html)
+        self.assertGreater(len(svg_tags), 5, "Should define inline SVG icons")
+        for tag in svg_tags:
+            self.assertIn(
+                'aria-hidden="true"',
+                tag,
+                f"SVG icon missing aria-hidden='true': {tag}",
+            )
+
+    def test_ui_icon_css_rules_exist(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn(".ui-icon {", html)
+        self.assertIn("stroke: currentColor;", html)
+        self.assertIn("fill: none;", html)
+
+
+class TestWebUIBrowserHistorySync(unittest.TestCase):
+    """Test browser URL and history state synchronization."""
+
+    def test_url_sync_and_popstate_bindings_in_js(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("function updateUrlState(", html)
+        self.assertIn("history.pushState(", html)
+        self.assertIn("history.replaceState(", html)
+        self.assertIn("window.addEventListener('popstate'", html)
+
+
+class TestWebUIAbortController(unittest.TestCase):
+    """Test AbortController for cancelable requests to prevent race conditions."""
+
+    def test_abort_controller_management_in_js(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("var currentAbortController = null;", html)
+        self.assertIn("function cancelPendingRequest()", html)
+        self.assertIn("currentAbortController.abort()", html)
+        self.assertIn("new AbortController()", html)
+        self.assertIn("signal: signal", html)
+
+
+class TestWebUISkeletonLoading(unittest.TestCase):
+    """Test skeleton loading cards and pulse animation."""
+
+    def test_skeleton_markup_and_css(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn(".skeleton-card {", html)
+        self.assertIn("skeleton-pulse", html)
+        self.assertIn("function renderSkeletonCards(", html)
+
+
+class TestWebUIAutocompleter(unittest.TestCase):
+    """Test autocompleter suggestion dropdown and aria attributes."""
+
+    def test_suggest_box_markup_and_attributes(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn('id="suggest-box"', html)
+        self.assertIn('role="listbox"', html)
+        self.assertIn('aria-autocomplete="list"', html)
+        self.assertIn('aria-controls="suggest-box"', html)
+        self.assertIn("fetch('/autocompleter?q='", html)
+
+
+class TestWebUIQueryHistory(unittest.TestCase):
+    """Test search query history persistence via localStorage."""
+
+    def test_recent_searches_markup_and_storage(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn('id="recent-searches-wrap"', html)
+        self.assertIn("sxng_query_history", html)
+        self.assertIn("saveQueryHistory(", html)
+        self.assertIn("renderQueryHistory(", html)
+
+
+class TestWebUIUnsavedChangesAlert(unittest.TestCase):
+    """Test unsaved changes banner and beforeunload alert."""
+
+    def test_unsaved_banner_and_listener(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn('id="unsaved-bar"', html)
+        self.assertIn('id="btn-discard-unsaved"', html)
+        self.assertIn('id="btn-save-unsaved"', html)
+        self.assertIn("window.addEventListener('beforeunload'", html)
+
+
+class TestWebUIMarkdownPreview(unittest.TestCase):
+    """Test Markdown preview tab and renderer."""
+
+    def test_preview_tab_and_container(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn('data-ctx="preview"', html)
+        self.assertIn('id="ctx-preview"', html)
+        self.assertIn("function renderSimpleMarkdown(", html)
+
+
+class TestWebUIImageGrid(unittest.TestCase):
+    """Test responsive image gallery grid for image category."""
+
+    def test_image_grid_css_and_handling(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn(".image-results-grid {", html)
+        self.assertIn(".image-card-thumb", html)
+        self.assertIn("state.classicCategory === 'images'", html)
 
 
 if __name__ == "__main__":

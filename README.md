@@ -21,7 +21,7 @@
 
 - ⚡ **Windows Native**: 組み込みPython環境により、DockerなしでWindows上で直接動作。
 - 🧠 **GenAI Retrieval API (`/api/retrieval` & `json_ai`)**: LLM や AI エージェントが根拠・引用として利用できる高品質な検索結果と見出し単位の根拠パッセージ（Evidence Passages）を提供する検索基盤。Reciprocal Rank Fusion、多言語 BM25 字句再ランキング、決定論的クエリ展開、SSRF 防御を統合。
-- 🎨 **AI-First Dedicated WebUI (`/`)**: 従来のレガシーClassic UIを完全廃止し、AI Search & Context Studioに一本化。4つの専用モード（⚡ AI Deep Search / 🔍 Classic 検索 / 🤖 Agent & MCP Hub / ⚙️ 設定）を統合し、全エンジンの稼働状況や信頼性をリアルタイムに監視・設定可能。
+- 🎨 **AI-First Dedicated WebUI (`/`)**: 従来のレガシーClassic UIを完全廃止し、AI Search & Context Studioに一本化。4つの専用モード（AI Deep Search / Classic 検索 / Agent & MCP Hub / 設定）を統合し、全エンジンの稼働状況や信頼性をリアルタイムに監視・設定可能。
 - 📦 **GenAI Optimized**: LLMのトークン消費を抑える専用の `json_lite`、新世代 `json_ai` / `evidence_json` フォーマット、および HTTP `/deep_search` エンドポイントを搭載。
 - 🔍 **High-Quality Engines**: Bing, DuckDuckGo, Mojeekなどの信頼性の高いエンジンを標準で最適化。
 - 🔄 **Auto-Sync Architecture**: `searxng/searxng` 本家の最新コードを追従しつつ、Windows固有のパッチを自動適用。レガシーUIの誤復活を阻止する多層防御を完備。
@@ -42,10 +42,10 @@
 ### 2. 起動
 `SearXNG for Windows.bat` を実行します。起動後、ブラウザで以下にアクセスできます：
 - **AI-First Search & Context Studio (統合UI)**: [http://127.0.0.1:8888](http://127.0.0.1:8888)（または `/ai`）
-  - ⚡ **AI Deep Search**: BM25 + 並列スクレイピング + トークン推定 + RAGプロンプト生成
-  - 🔍 **Classic 検索**: カテゴリタブ・時間フィルタ・エンジンバッジを備えた軽快な1カラム検索＆1クリックAI深掘り
-  - 🤖 **Agent & MCP Hub**: Claude Code, Cursor, OpenCode 連携設定・ワンクリックコピー
-  - ⚙️ **設定**: 全260+エンジンのリアルタイム稼働状態（Online/Suspended/Disabled）、応答速度(ms)、信頼性(%)の可視化とトグル切り替え
+  - **AI Deep Search**: BM25 + 並列スクレイピング + トークン推定 + RAGプロンプト生成 + Markdownプレビュー
+  - **Classic 検索**: カテゴリタブ・時間フィルタ・ファビコン・画像グリッド・1クリックAI深掘り
+  - **Agent & MCP Hub**: Claude Code, Cursor, OpenCode 連携設定・ワンクリックコピー
+  - **設定**: 全260+エンジンのリアルタイム稼働状態（Online/Suspended/Disabled）、個別Pingテスト、未保存変更通知
 
 ### 3. 動作確認 (Testing)
 以下のコマンドを実行して、特に `json_lite` 形式や `/deep_search` のレスポンスが正しく返ってくるか確認できます。
@@ -125,23 +125,42 @@ SearXNG for Windows Next は、AI モデル自身が回答を生成するため�
 
 ## 🖥️ AI-First Dedicated WebUI (`/`)
 
-SearXNG for Windows Next では、旧来の Jinja2 `simple` テーマ画面を完全に廃止し、**AI Search & Context Studio** を単一のプライマリWebインターフェースとして一本化しました。外部CDNや重量級JSフレームワークに一切依存せず（完全ローカル完結）、人間とAIコーディングエージェントの双方にとって最高峰の操作性と情報密度を提供します。
+SearXNG for Windows Next では、旧来の Jinja2 `simple` テーマ画面を完全に廃止し、**AI Search & Context Studio** を単一のプライマリWebインターフェースとして一本化しました。外部CDNや重量級JSフレームワークに一切依存せず（完全ローカル完結・ゼロ外部依存）、洗練されたタイポグラフィとインライン SVG アイコン、キーボードショートカット、リアルタイム支援機能を備えたモダンなワークスペースを提供します。
 
 ### 4つの専用モード
 
-1. **⚡ AI Deep Search (`mode=deep`)**:
+1. **AI Deep Search (`mode=deep`)**:
    - ワンストップでメタ検索＋並列スクレイピング＋多言語BM25パッセージ抽出を実行。
-   - 推定トークン数メーター、`📋 AI用Markdown`、`💬 RAGプロンプト`、`{ } JSON`、`💾 .md 保存` をワンクリックで提供。
-2. **🔍 Classic 検索 (`mode=classic`)**:
+   - 推定トークン数メーター、AI用Markdown、RAGプロンプト生成、JSONエクスポート、`.md` ファイル保存をワンクリックで提供。
+   - Context Inspector に軽量 Markdown プレビュー機能を統合（HTML/Raw/Markdown タブ切り替え可能）。
+2. **Classic 検索 (`mode=classic`)**:
    - 従来の検索エンジンの軽快さを好むユーザー向けの高速・軽量1カラム検索モード。
-   - カテゴリタブ（IT, 科学, ニュース, ソーシャル等）、時間フィルタ（全期間, 1日, 1週間, 1か月, 1年）、各結果カードのエンジン識別バッジ、ページネーションを完備。
-   - 各検索結果カードからワンクリックで「⚡ AIで深掘り」を実行でき、瞬時に Deep Search モードへ連携可能。
-3. **🤖 Agent & MCP Hub (`mode=agent`)**:
+   - カテゴリタブ（IT, 科学, ニュース, ソーシャル等）、時間フィルタ（全期間, 1日, 1週間, 1か月, 1年）、ドメイン横ファビコン、エンジン識別バッジ、ページネーションを完備。
+   - 画像カテゴリ (`images`) 選択時はレスポンシブな画像ギャラリーグリッド表示に自動切り替え。
+   - 各検索結果カードからワンクリックで「AIで深掘り」を実行でき、瞬時に Deep Search モードへ連携可能。
+3. **Agent & MCP Hub (`mode=agent`)**:
    - Claude Code / Cursor / Windsurf / OpenCode / CLI 向けの設定JSONや登録コマンドを、現在のサーバーホストURLに合わせて自動生成・ワンクリックコピー。
-4. **⚙️ 設定ダッシュボード (`mode=settings`)**:
-   - 全260以上のエンジンのリアルタイム稼働状態（🟢 Online / 🟡 Suspended (レート制限等) / ⚪ Disabled）、応答時間(ms)、信頼性(%)を一目で把握できる一覧グリッド。
-   - カテゴリ別フィルタリング、エンジン名リアルタイム絞り込み、個別トグルスイッチおよび一括「全有効 / 全無効 / デフォルトに戻す」ボタンを搭載。
+4. **設定ダッシュボード (`mode=settings`)**:
+   - 全260以上のエンジンのリアルタイム稼働状態（Online / Suspended / Disabled）、応答時間(ms)、信頼性(%)を一目で把握できる一覧グリッド。
+   - カテゴリ別フィルタリング、エンジン名リアルタイム絞り込み、個別Ping/テスト実行ボタン、個別トグルスイッチおよび一括「全有効 / 全無効 / デフォルトに戻す」ボタンを搭載。
+   - 変更がある場合は画面下部に「未保存の変更があります」フローティングバーが表示され、ページ離脱時の確認（`beforeunload`）も完備。
    - 設定は `disabled_engines` / `enabled_engines` Cookie および `localStorage` に保存され、ブラウザとAPIリクエストの双方で永続化。
+
+### 先進的な UX / 操作性機能
+
+- **インライン SVG & クリーンデザイン**: 絵文字に頼らない幾何学的かつ直感的な軽量インライン SVG アイコンセットと視認性の高いタイポグラフィを採用。
+- **SearXNG Autocompleter 連携**: 検索窓入力時に `/autocompleter` API からリアルタイムで候補を取得し、ドロップダウン表示（キーボード上下キーで選択可能）。
+- **直近の検索履歴**: 過去の検索クエリをローカルストレージに保持し、検索窓下にクイック再検索チップとして表示（ワンクリックで再実行・個別/一括消去）。
+- **キーボードナビゲーション**:
+  - `j` / `k` (または `↓` / `↑`): 検索結果カードの上下移動
+  - `Enter`: 選択中カードのリンクを開く
+  - `c`: 選択中カードのタイトル＋URLを Markdown 形式でクリップボードへコピー
+  - `Alt + 1` 〜 `4`: モード切替（AI Deep Search / Classic / Agent Hub / 設定）
+  - `/`: 検索入力フォーカス
+  - `Esc`: サジェストやモーダルを閉じる
+- **スケルトンローディング & レースコンディション制御**: 検索中にパルスアニメーション付きプレースホルダーを表示。先行する未完了リクエストは `AbortController` で安全に自動キャンセル。
+- **URL & ブラウザ履歴同期**: モード切替や検索クエリが URL（`?mode=...&q=...`）に同期され、ブラウザの「戻る」「進む」に完全対応。
+- **モジュール化アーキテクチャ**: `tools/webui/` 配下に CSS, HTML, JS を整理・モジュール分離し、保守性と堅牢性を両立。単一ファイル配布（`webui_next.py`）への自動バンドル機構も内蔵。
 
 ### 既存URLからの自動ルーティング & アップストリーム防御
 
