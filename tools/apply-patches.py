@@ -2390,7 +2390,7 @@ def patch_settings_loader(content: str, path: str) -> str:
     target2_pattern = (
         r'([ \t]*)settings_yml\s*=\s*os\.environ\.get\(\s*["\']SEARXNG_SETTINGS_PATH["\']'
         r'(?:\s*,\s*["\'][^"\']*["\'])?\s*\)\r?\n'
-        r'[ \t]*if settings_yml and Path\(settings_yml\)\.is_file\(\):'
+        r"[ \t]*if settings_yml and Path\(settings_yml\)\.is_file\(\):"
     )
 
     def _replace_load_settings(m: re.Match[str]) -> str:

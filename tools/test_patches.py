@@ -3774,9 +3774,7 @@ class TestPatchHardeningM2(unittest.TestCase):
         self.assertIn('raw_path = os.environ.get("SEARXNG_SETTINGS_PATH", "").strip()', patched_upstream)
         self.assertIn("settings_path = raw_path.strip('\"\\'').strip()", patched_upstream)
         self.assertIn("settings_yml = settings_yml.strip().strip('\"\\'').strip()", patched_upstream)
-        self.assertEqual(
-            apply_patches.patch_settings_loader(patched_upstream, "settings_loader.py"), "ALREADY_APPLIED"
-        )
+        self.assertEqual(apply_patches.patch_settings_loader(patched_upstream, "settings_loader.py"), "ALREADY_APPLIED")
 
     def test_ensure_secret_key_multiprocess_concurrency(self):
         """Verify concurrent processes can initialize secret key without WinError 5/32."""
