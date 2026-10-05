@@ -3758,6 +3758,26 @@ class TestPatchHardeningM2(unittest.TestCase):
         reapplied = apply_patches.patch_settings_loader(patched, "settings_loader.py")
         self.assertEqual(reapplied, "ALREADY_APPLIED")
 
+        # Test upstream syntax without second argument and CRLF
+        upstream_sample = (
+            "def get_user_cfg_folder() -> Path | None:\r\n"
+            "    folder = None\r\n"
+            '    settings_path = os.environ.get("SEARXNG_SETTINGS_PATH")\r\n\r\n'
+            "    if settings_path:\r\n"
+            "        pass\r\n\r\n"
+            "def load_settings():\r\n"
+            '    settings_yml = os.environ.get("SEARXNG_SETTINGS_PATH")\r\n'
+            "    if settings_yml and Path(settings_yml).is_file():\r\n"
+            "        pass\r\n"
+        )
+        patched_upstream = apply_patches.patch_settings_loader(upstream_sample, "settings_loader.py")
+        self.assertIn('raw_path = os.environ.get("SEARXNG_SETTINGS_PATH", "").strip()', patched_upstream)
+        self.assertIn("settings_path = raw_path.strip('\"\\'').strip()", patched_upstream)
+        self.assertIn("settings_yml = settings_yml.strip().strip('\"\\'').strip()", patched_upstream)
+        self.assertEqual(
+            apply_patches.patch_settings_loader(patched_upstream, "settings_loader.py"), "ALREADY_APPLIED"
+        )
+
     def test_ensure_secret_key_multiprocess_concurrency(self):
         """Verify concurrent processes can initialize secret key without WinError 5/32."""
         import concurrent.futures

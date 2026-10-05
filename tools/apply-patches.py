@@ -2365,15 +2365,22 @@ def patch_settings_loader(content: str, path: str) -> str:
         return "ALREADY_APPLIED"
 
     # 1. get_user_cfg_folder normalization
-    target1_pattern = r'settings_path\s*=\s*os\.environ\.get\(\s*["\']SEARXNG_SETTINGS_PATH["\']\s*,\s*["\']["\']\s*\)(\.strip\([^\)]*\))?'
-    replacement1 = (
-        'raw_path = os.environ.get("SEARXNG_SETTINGS_PATH", "").strip()\n'
-        "    settings_path = raw_path.strip('\"\\'').strip()\n"
-        "    while settings_path.startswith(('\"', \"'\")) or settings_path.endswith(('\"', \"'\")):\n"
-        "        settings_path = settings_path.strip('\"\\'').strip()"
+    target1_pattern = (
+        r'([ \t]*)settings_path\s*=\s*os\.environ\.get\(\s*["\']SEARXNG_SETTINGS_PATH["\']'
+        r'(?:\s*,\s*["\'][^"\']*["\'])?\s*\)(?:\.strip\([^\)]*\))?'
     )
+
+    def _replace_user_cfg(m: re.Match[str]) -> str:
+        indent = m.group(1)
+        return (
+            f'{indent}raw_path = os.environ.get("SEARXNG_SETTINGS_PATH", "").strip()\n'
+            f"{indent}settings_path = raw_path.strip('\"\\'').strip()\n"
+            f"{indent}while settings_path.startswith(('\"', \"'\")) or settings_path.endswith(('\"', \"'\")):\n"
+            f"{indent}    settings_path = settings_path.strip('\"\\'').strip()"
+        )
+
     if 'raw_path = os.environ.get("SEARXNG_SETTINGS_PATH", "").strip()' not in content:
-        content, count1 = re.subn(target1_pattern, lambda _m: replacement1, content, count=1)
+        content, count1 = re.subn(target1_pattern, _replace_user_cfg, content, count=1)
         if count1 == 0:
             raise RuntimeError(
                 f"Patch failed for {path}: Could not locate settings_path assignment in get_user_cfg_folder."
@@ -2381,14 +2388,15 @@ def patch_settings_loader(content: str, path: str) -> str:
 
     # 2. load_settings normalization
     target2_pattern = (
-        r'settings_yml\s*=\s*os\.environ\.get\(\s*["\']SEARXNG_SETTINGS_PATH["\']\s*\)\n'
-        r"(\s*)if settings_yml and Path\(settings_yml\)\.is_file\(\):"
+        r'([ \t]*)settings_yml\s*=\s*os\.environ\.get\(\s*["\']SEARXNG_SETTINGS_PATH["\']'
+        r'(?:\s*,\s*["\'][^"\']*["\'])?\s*\)\r?\n'
+        r'[ \t]*if settings_yml and Path\(settings_yml\)\.is_file\(\):'
     )
 
     def _replace_load_settings(m: re.Match[str]) -> str:
         indent = m.group(1)
         return (
-            'settings_yml = os.environ.get("SEARXNG_SETTINGS_PATH")\n'
+            f'{indent}settings_yml = os.environ.get("SEARXNG_SETTINGS_PATH")\n'
             f"{indent}if settings_yml:\n"
             f"{indent}    settings_yml = settings_yml.strip().strip('\"\\'').strip()\n"
             f"{indent}    while settings_yml.startswith(('\"', \"'\")) or settings_yml.endswith(('\"', \"'\")):\n"
