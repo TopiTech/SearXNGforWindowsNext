@@ -45,6 +45,7 @@ jobs:
       - name: Configure Git identity
         shell: pwsh
         run: |
+          git config --global core.autocrlf false
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
