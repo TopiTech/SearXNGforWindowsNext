@@ -59,7 +59,7 @@ workspace/
 This project **stays synchronized with upstream SearXNG** while maintaining Windows compatibility and AI-first unification via **idempotent patches**. Patches are applied after every upstream sync and are safe to run multiple times.
 The `webapp_ai_webui` patch is elevated to `CRITICAL` severity to guarantee that any upstream modification that breaks UI unification halts the sync process immediately rather than silently reviving the legacy Jinja2 UI.
 
-### Patch Targets (26 Patch Specs across Target Files)
+### Patch Targets (27 Patch Specs across Target Files)
 
 | # | File | Patch Spec | Severity | Purpose |
 |---|------|------------|:---:|---------|
@@ -89,6 +89,7 @@ The `webapp_ai_webui` patch is elevated to `CRITICAL` severity to guarantee that
 | 24 | `preferences.py` | `preferences_validation` | CRITICAL | Safe category validation & graceful non-fatal `parse_dict` handling |
 | 25 | `webadapter.py` | `webadapter_categories` | CRITICAL | Safe categories lookup using `.get()` to prevent KeyError |
 | 26 | `webapp.py` | `webapp_preferences_validation` | CRITICAL | Tab categories in Preferences & safe pre_request validation handling |
+| 27 | `settings_loader.py` | `settings_loader_quotes` | CRITICAL | Quoted and whitespace-padded `SEARXNG_SETTINGS_PATH` handling |
 
 ### Patch Execution Flow
 
@@ -125,7 +126,8 @@ sync-upstream.ps1
   │    ├─ Patch 23: config_settings_yml_suspended_times (config/settings.yml) [OPTIONAL] ✓
   │    ├─ Patch 24: preferences_validation (preferences.py) [CRITICAL] ✓
   │    ├─ Patch 25: webadapter_categories (webadapter.py) [CRITICAL] ✓
-  │    └─ Patch 26: webapp_preferences_validation (webapp.py) [CRITICAL] ✓
+  │    ├─ Patch 26: webapp_preferences_validation (webapp.py) [CRITICAL] ✓
+  │    └─ Patch 27: settings_loader_quotes (settings_loader.py) [CRITICAL] ✓
   └─ Post-Sync Verification (tools/test_patches.py)
        └─ Validates root AI Studio, legacy redirects, API passthrough, and Settings API
 ```

@@ -65,6 +65,17 @@ def _parse_int(val: Any, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(n, maximum))
 
 
+def _parse_float(val: Any, default: float, minimum: float, maximum: float) -> float:
+    """Parse float parameter within [minimum, maximum] bounds."""
+    if val is None or val == "":
+        return default
+    try:
+        n = float(val)
+    except (ValueError, TypeError):
+        return default
+    return max(minimum, min(n, maximum))
+
+
 def _parse_domain_list(val: Any) -> list[str]:
     """Normalize comma-separated string or list of domains."""
     return agentic_search.parse_domain_list(val)
@@ -3274,6 +3285,11 @@ footer.ws-footer {
         }, 2400);
       }
 
+      function addListener(id, event, fn) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener(event, fn);
+      }
+
       // Theme initialization
       var savedTheme = localStorage.getItem('sxng_ai_theme') || 'dark';
       document.documentElement.setAttribute('data-theme', savedTheme);
@@ -3285,7 +3301,7 @@ footer.ws-footer {
       }
       updateThemeIcon(savedTheme);
 
-      document.getElementById('theme-toggle-btn').addEventListener('click', function () {
+      addListener('theme-toggle-btn', 'click', function () {
         var cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
         document.documentElement.setAttribute('data-theme', cur);
         localStorage.setItem('sxng_ai_theme', cur);
@@ -3722,35 +3738,97 @@ footer.ws-footer {
        * ------------------------------------------------------------- */
       function renderSimpleMarkdown(md) {
         if (!md) return '<p style="color:var(--text-muted);">(コンテキストが空です)</p>';
-        var text = escapeHtml(md);
+        var text = escapeHtml(md).replace(/\r\n/g, '\n');
 
-        // Code blocks
+        // 1. Extract fenced code blocks with unique tokens
+        var codeBlocks = [];
         text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, function (_, lang, code) {
-          return '<pre><code class="lang-' + lang + '">' + code + '</code></pre>';
+          var token = '@@CODE_BLOCK_' + codeBlocks.length + '@@';
+          codeBlocks.push('<pre><code class="lang-' + lang + '">' + code + '</code></pre>');
+          return '\n\n' + token + '\n\n';
         });
-        // Inline code
-        text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-        // Headings
-        text = text.replace(/^### (.*$)/gim, '<h3>$1</h3>');
-        text = text.replace(/^## (.*$)/gim, '<h2>$1</h2>');
-        text = text.replace(/^# (.*$)/gim, '<h1>$1</h1>');
-        // Blockquotes
-        text = text.replace(/^\> (.*$)/gim, '<blockquote>$1</blockquote>');
-        // Bold & Italic
-        text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-        text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-        // Links
-        text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)\"\']+)\)/g, function (_, label, rawUrl) {
+
+        // 2. Extract inline code with tokens
+        var inlineCodes = [];
+        text = text.replace(/`([^`]+)`/g, function (_, code) {
+          var token = '@@INLINE_CODE_' + inlineCodes.length + '@@';
+          inlineCodes.push('<code>' + code + '</code>');
+          return token;
+        });
+
+        // 3. Process blocks (split by double newlines)
+        var rawBlocks = text.split(/\n{2,}/);
+        var htmlBlocks = [];
+
+        for (var i = 0; i < rawBlocks.length; i++) {
+          var block = rawBlocks[i].trim();
+          if (!block) continue;
+
+          // Check if block is a preserved code block token
+          if (/^@@CODE_BLOCK_\d+@@$/.test(block)) {
+            htmlBlocks.push(block);
+            continue;
+          }
+
+          // Check if block is heading
+          if (/^### (.*$)/.test(block)) {
+            htmlBlocks.push(block.replace(/^### (.*$)/, '<h3>$1</h3>'));
+            continue;
+          }
+          if (/^## (.*$)/.test(block)) {
+            htmlBlocks.push(block.replace(/^## (.*$)/, '<h2>$1</h2>'));
+            continue;
+          }
+          if (/^# (.*$)/.test(block)) {
+            htmlBlocks.push(block.replace(/^# (.*$)/, '<h1>$1</h1>'));
+            continue;
+          }
+
+          // Check if block is blockquote
+          if (/^&gt; (.*$)/m.test(block)) {
+            var bqLines = block.split(/\n/).map(function (line) {
+              return line.replace(/^&gt;\s?/, '');
+            });
+            htmlBlocks.push('<blockquote>' + bqLines.join('<br>') + '</blockquote>');
+            continue;
+          }
+
+          // Check if block is an unordered list (lines starting with - or *)
+          var lines = block.split(/\n/);
+          var isList = lines.length > 0 && lines.every(function (l) { return /^[\-\*]\s+/.test(l.trim()); });
+          if (isList) {
+            var listItems = lines.map(function (l) {
+              return '<li>' + l.trim().replace(/^[\-\*]\s+/, '') + '</li>';
+            });
+            htmlBlocks.push('<ul>' + listItems.join('') + '</ul>');
+            continue;
+          }
+
+          // Regular paragraph: replace single newlines with <br>
+          htmlBlocks.push('<p>' + block.replace(/\n/g, '<br>') + '</p>');
+        }
+
+        var fullHtml = htmlBlocks.join('\n');
+
+        // 4. Bold & Italic (applied outside code blocks)
+        fullHtml = fullHtml.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        fullHtml = fullHtml.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+        // 5. Links
+        fullHtml = fullHtml.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)\"\']+)\)/g, function (_, label, rawUrl) {
           var cleanUrl = safeHttpUrl(rawUrl.replace(/&amp;/g, '&'));
           return '<a href="' + escapeHtml(cleanUrl) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
         });
-        // Unordered lists
-        text = text.replace(/^\- (.*$)/gim, '<li>$1</li>');
-        text = text.replace(/(<li>.*<\/li>)/gim, '<ul>$1</ul>');
-        // Paragraph breaks
-        text = text.replace(/\n\n+/g, '</p><p>');
 
-        return '<p>' + text + '</p>';
+        // 6. Restore code blocks and inline code
+        for (var k = 0; k < codeBlocks.length; k++) {
+          fullHtml = fullHtml.replace('@@CODE_BLOCK_' + k + '@@', codeBlocks[k]);
+        }
+        for (var j = 0; j < inlineCodes.length; j++) {
+          fullHtml = fullHtml.replace('@@INLINE_CODE_' + j + '@@', inlineCodes[j]);
+        }
+
+        return fullHtml;
       }
 
       function updateContextView() {
@@ -4332,13 +4410,13 @@ footer.ws-footer {
           });
       }
 
-      document.getElementById('classic-prev-btn').addEventListener('click', function () {
+      addListener('classic-prev-btn', 'click', function () {
         if (state.classicPage > 1) {
           var qVal = document.getElementById('q').value.trim();
           if (qVal) runClassicSearch(qVal, state.classicPage - 1);
         }
       });
-      document.getElementById('classic-next-btn').addEventListener('click', function () {
+      addListener('classic-next-btn', 'click', function () {
         var qVal = document.getElementById('q').value.trim();
         if (qVal) runClassicSearch(qVal, state.classicPage + 1);
       });
@@ -4355,11 +4433,11 @@ footer.ws-footer {
           runUnifiedSearch(qVal);
         });
       }
-      document.getElementById('classic-time-range').addEventListener('change', function () {
+      addListener('classic-time-range', 'change', function () {
         var qVal = document.getElementById('q').value.trim();
         if (qVal && state.mode === 'classic') runClassicSearch(qVal, 1);
       });
-      document.getElementById('classic-count').addEventListener('change', function () {
+      addListener('classic-count', 'change', function () {
         var qVal = document.getElementById('q').value.trim();
         if (qVal && state.mode === 'classic') runClassicSearch(qVal, 1);
       });
@@ -4461,14 +4539,15 @@ footer.ws-footer {
         }
       });
 
-      document.getElementById('btn-discard-unsaved').addEventListener('click', function () {
+      addListener('btn-discard-unsaved', 'click', function () {
         loadSettingsDashboard(true);
         setUnsavedChanges(false);
         showToast('変更を破棄しました');
       });
 
-      document.getElementById('btn-save-unsaved').addEventListener('click', function () {
-        document.getElementById('btn-save-settings-engines').click();
+      addListener('btn-save-unsaved', 'click', function () {
+        var saveEngBtn = document.getElementById('btn-save-settings-engines');
+        if (saveEngBtn) saveEngBtn.click();
         setUnsavedChanges(false);
       });
 
@@ -4719,14 +4798,14 @@ footer.ws-footer {
         }
       }
 
-      document.getElementById('subtab-engines-btn').addEventListener('click', function () {
+      addListener('subtab-engines-btn', 'click', function () {
         selectSettingsSubtab('engines');
       });
-      document.getElementById('subtab-general-btn').addEventListener('click', function () {
+      addListener('subtab-general-btn', 'click', function () {
         selectSettingsSubtab('general');
       });
 
-      var subtabBtns = [document.getElementById('subtab-engines-btn'), document.getElementById('subtab-general-btn')];
+      var subtabBtns = [document.getElementById('subtab-engines-btn'), document.getElementById('subtab-general-btn')].filter(Boolean);
       subtabBtns.forEach(function (btn, idx) {
         btn.addEventListener('keydown', function (e) {
           if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
@@ -4743,12 +4822,12 @@ footer.ws-footer {
         });
       });
 
-      document.getElementById('engine-search-input').addEventListener('input', function () {
+      addListener('engine-search-input', 'input', function () {
         state.settingsSearch = this.value;
         renderSettingsEngineCards();
       });
 
-      document.getElementById('btn-enable-all-cat').addEventListener('click', function () {
+      addListener('btn-enable-all-cat', 'click', function () {
         var cat = state.settingsCurrentCat;
         state.settingsEngines.forEach(function (e) {
           if (!cat || (e.categories && e.categories.indexOf(cat) !== -1)) {
@@ -4762,7 +4841,7 @@ footer.ws-footer {
         showToast('カテゴリー内をすべて有効化しました');
       });
 
-      document.getElementById('btn-disable-all-cat').addEventListener('click', function () {
+      addListener('btn-disable-all-cat', 'click', function () {
         var cat = state.settingsCurrentCat;
         state.settingsEngines.forEach(function (e) {
           if (!cat || (e.categories && e.categories.indexOf(cat) !== -1)) {
@@ -4776,7 +4855,7 @@ footer.ws-footer {
         showToast('カテゴリー内をすべて無効化しました');
       });
 
-      document.getElementById('btn-reset-engines-def').addEventListener('click', function () {
+      addListener('btn-reset-engines-def', 'click', function () {
         state.settingsEngines.forEach(function (e) {
           e.enabled = !!e.default_enabled;
           e.status = e.enabled ? 'online' : 'disabled';
@@ -4787,7 +4866,7 @@ footer.ws-footer {
         showToast('デフォルト構成を復元しました');
       });
 
-      document.getElementById('btn-save-settings-engines').addEventListener('click', function () {
+      addListener('btn-save-settings-engines', 'click', function () {
         var disabled = [];
         var enabled = [];
         state.settingsEngines.forEach(function (e) {
@@ -4825,11 +4904,11 @@ footer.ws-footer {
       }
       loadGeneralPreferences();
 
-      document.getElementById('btn-save-general-prefs').addEventListener('click', function () {
-        var mode = document.getElementById('pref-default-mode').value;
-        var ss = document.getElementById('pref-safesearch').value;
-        var count = document.getElementById('pref-default-count').value;
-        var tok = document.getElementById('pref-default-tokens').value;
+      addListener('btn-save-general-prefs', 'click', function () {
+        var mode = document.getElementById('pref-default-mode') ? document.getElementById('pref-default-mode').value : 'deep';
+        var ss = document.getElementById('pref-safesearch') ? document.getElementById('pref-safesearch').value : '1';
+        var count = document.getElementById('pref-default-count') ? document.getElementById('pref-default-count').value : '10';
+        var tok = document.getElementById('pref-default-tokens') ? document.getElementById('pref-default-tokens').value : '3000';
         var ac = document.getElementById('pref-autocomplete') ? document.getElementById('pref-autocomplete').value : 'duckduckgo';
 
         localStorage.setItem('sxng_pref_mode', mode);
@@ -4847,10 +4926,10 @@ footer.ws-footer {
         });
       });
 
-      document.getElementById('btn-reset-general-prefs').addEventListener('click', function () {
-        document.getElementById('pref-default-mode').value = 'deep';
-        document.getElementById('pref-safesearch').value = '1';
-        document.getElementById('pref-default-count').value = '10';
+      addListener('btn-reset-general-prefs', 'click', function () {
+        if (document.getElementById('pref-default-mode')) document.getElementById('pref-default-mode').value = 'deep';
+        if (document.getElementById('pref-safesearch')) document.getElementById('pref-safesearch').value = '1';
+        if (document.getElementById('pref-default-count')) document.getElementById('pref-default-count').value = '10';
         document.getElementById('pref-default-tokens').value = '3000';
         if (document.getElementById('pref-autocomplete')) {
           document.getElementById('pref-autocomplete').value = 'duckduckgo';
@@ -4965,7 +5044,7 @@ footer.ws-footer {
         }
       }
 
-      document.getElementById('ws-form').addEventListener('submit', function (e) {
+      addListener('ws-form', 'submit', function (e) {
         e.preventDefault();
         executeCurrentAction();
       });
@@ -5071,13 +5150,20 @@ footer.ws-footer {
           b.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
         });
       }
+      if (initPage > 1) {
+        state.classicPage = initPage;
+      }
       if (initMode && ['deep', 'classic', 'agent', 'settings'].indexOf(initMode) !== -1) {
         setMode(initMode, true);
       }
       if (initQ) {
         document.getElementById('q').value = initQ;
         syncInputOptionsVisibility();
-        executeCurrentAction();
+        if (state.mode === 'classic' && initPage > 1) {
+          runClassicSearch(initQ, initPage);
+        } else {
+          executeCurrentAction();
+        }
       }
     })();
 
@@ -5286,6 +5372,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         url = request.values.get("url") or payload.get("url") or ""
         query = request.values.get("q") or request.values.get("query") or payload.get("q") or payload.get("query") or ""
         max_len = _parse_int(request.values.get("max_length") or payload.get("max_length"), 8000, 500, 50000)
+        timeout = _parse_float(request.values.get("timeout") or payload.get("timeout"), 10.0, 1.0, 60.0)
 
         if not isinstance(url, str) or not url.strip():
             return jsonify({"error": "No URL provided", "url": "", "content": ""}), 400
@@ -5295,6 +5382,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             query=str(query) if query else "",
             max_length=max_len,
             webapp_mod=webapp_mod,
+            timeout=timeout,
         )
         err = str(res.get("error") or "")
         err_lower = err.lower()
@@ -5376,6 +5464,10 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         categories = request.values.get("categories") or payload.get("categories") or ""
         engines = request.values.get("engines") or payload.get("engines") or ""
         time_range = request.values.get("time_range") or payload.get("time_range") or ""
+        raw_timeout = request.values.get("timeout") or payload.get("timeout")
+        timeout = _parse_float(raw_timeout, 15.0, 1.0, 60.0) if raw_timeout is not None else None
+        raw_base_url = request.values.get("base_url") or payload.get("base_url")
+        base_url = str(raw_base_url).strip() if raw_base_url else None
         inc_hl = _parse_bool(
             request.values.get("include_highlights", payload.get("include_highlights")),
             default=True,
@@ -5406,6 +5498,8 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                 time_range=str(time_range),
                 include_domains=inc_domains or None,
                 exclude_domains=exc_domains or None,
+                base_url=base_url,
+                timeout=timeout,
             )
             if out_fmt in ("markdown", "md"):
                 return Response(res.get("markdown", ""), status=200, mimetype="text/markdown")
@@ -5427,6 +5521,8 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             focus_query=str(focus_query),
             max_scrape_length=max_scrape_length,
             pageno=pageno,
+            base_url=base_url,
+            timeout=timeout,
         )
 
         if out_fmt in ("markdown", "md"):
@@ -5450,6 +5546,10 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         categories = request.values.get("categories") or payload.get("categories") or ""
         engines = request.values.get("engines") or payload.get("engines") or ""
         time_range = request.values.get("time_range") or payload.get("time_range") or ""
+        raw_timeout = request.values.get("timeout") or payload.get("timeout")
+        timeout = _parse_float(raw_timeout, 15.0, 1.0, 60.0) if raw_timeout is not None else None
+        raw_base_url = request.values.get("base_url") or payload.get("base_url")
+        base_url = str(raw_base_url).strip() if raw_base_url else None
         inc_domains = _parse_domain_list(
             request.values.getlist("site")
             or request.values.get("include_domains")
@@ -5474,6 +5574,8 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             time_range=str(time_range),
             include_domains=inc_domains or None,
             exclude_domains=exc_domains or None,
+            base_url=base_url,
+            timeout=timeout,
         )
 
         if out_fmt in ("markdown", "md"):

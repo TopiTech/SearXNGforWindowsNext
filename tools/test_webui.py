@@ -25,6 +25,7 @@ import unittest
 import urllib.parse
 from html.parser import HTMLParser
 from typing import Any
+from unittest.mock import patch
 
 from flask import Flask, Response
 
@@ -629,6 +630,77 @@ class TestWebUIMarkdownPreview(unittest.TestCase):
         self.assertIn(r"split('[').join('\\[').split(']').join('\\]')", html)
         # Markdown link sanitization routing through safeHttpUrl
         self.assertIn(r"safeHttpUrl(rawUrl.replace(/&amp;/g, '&'))", html)
+
+    def test_markdown_preview_code_block_tokenization_and_list_grouping(self) -> None:
+        """Verify code blocks and inline code are protected by placeholders and list items are grouped."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("@@CODE_BLOCK_", html)
+        self.assertIn("@@INLINE_CODE_", html)
+        self.assertIn("'<ul>' + listItems.join('') + '</ul>'", html)
+
+
+class TestWebUIClassicPaginationAndListenerHygiene(unittest.TestCase):
+    """Test classic pagination state synchronization and resilient listener attachment."""
+
+    def test_pagination_state_sync_on_init(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("state.classicPage = initPage", html)
+        self.assertIn("runClassicSearch(initQ, initPage)", html)
+
+    def test_add_listener_null_guard_helper(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("function addListener(id, event, fn)", html)
+        self.assertIn("el.addEventListener(event, fn)", html)
+
+
+class TestWebUIRouteParameterForwarding(unittest.TestCase):
+    """Test query and payload parameter forwarding (base_url, timeout) in API routes."""
+
+    def setUp(self) -> None:
+        self.app = Flask(__name__)
+        webui_next.register_next_webui(self.app, None)
+        self.client = self.app.test_client()
+
+    def test_deep_search_forwards_base_url_and_timeout(self) -> None:
+        recorded_args: dict[str, Any] = {}
+
+        def mock_deep(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            recorded_args.update(kwargs)
+            return {"query": kwargs.get("query"), "results": []}
+
+        with patch.object(webui_next, "execute_server_deep_search", side_effect=mock_deep):
+            resp = self.client.get("/deep_search?q=test_query&base_url=http://127.0.0.1:9999&timeout=12.5")
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(recorded_args.get("base_url"), "http://127.0.0.1:9999")
+            self.assertEqual(recorded_args.get("timeout"), 12.5)
+
+    def test_retrieval_api_forwards_base_url_and_timeout(self) -> None:
+        recorded_args: dict[str, Any] = {}
+
+        def mock_ret(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            recorded_args.update(kwargs)
+            return {"query": kwargs.get("query"), "schema_version": "1.0", "results": []}
+
+        with patch.object(webui_next, "execute_server_retrieval_search", side_effect=mock_ret):
+            resp = self.client.post(
+                "/api/retrieval",
+                json={"q": "rag test", "base_url": "http://127.0.0.1:7777", "timeout": 8.0},
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(recorded_args.get("base_url"), "http://127.0.0.1:7777")
+            self.assertEqual(recorded_args.get("timeout"), 8.0)
+
+    def test_scrape_analyze_forwards_timeout(self) -> None:
+        recorded_args: dict[str, Any] = {}
+
+        def mock_sc(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            recorded_args.update(kwargs)
+            return {"url": kwargs.get("url"), "content": "mock text", "error": ""}
+
+        with patch.object(webui_next, "execute_scrape_analyze", side_effect=mock_sc):
+            resp = self.client.get("/api/scrape_analyze?url=https://example.com/article&timeout=14.0")
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(recorded_args.get("timeout"), 14.0)
 
 
 class TestWebUIImageGrid(unittest.TestCase):
