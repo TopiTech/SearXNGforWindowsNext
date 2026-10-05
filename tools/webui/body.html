@@ -324,6 +324,22 @@
 
           <div class="settings-row">
             <div class="settings-label-wrap">
+              <h4><label for="pref-autocomplete">サジェスト候補検索 (Autocomplete)</label></h4>
+              <p>検索窓入力時にリアルタイムで検索キーワード候補を取得するエンジン</p>
+            </div>
+            <div>
+              <select id="pref-autocomplete" class="opt-select" style="min-width:14rem;" aria-label="サジェスト候補検索 (Autocomplete)">
+                <option value="duckduckgo" selected>DuckDuckGo (推奨・プライバシー保護)</option>
+                <option value="google">Google (高精度・多言語)</option>
+                <option value="brave">Brave Search</option>
+                <option value="wikipedia">Wikipedia</option>
+                <option value="off">無効 (オフ)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-label-wrap">
               <h4><label for="pref-default-count">デフォルト取得件数</label></h4>
               <p>検索時に各エンジンから集約・選抜する結果件数の標準値</p>
             </div>

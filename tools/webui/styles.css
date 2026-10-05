@@ -314,10 +314,24 @@ main.workspace {
   color: var(--text-main);
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  border-bottom: 1px solid rgba(255,255,255,0.03);
+  gap: 0.6rem;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  transition: background 0.12s ease, color 0.12s ease;
 }
-.suggest-item .ui-icon { color: var(--text-muted); }
+.suggest-item:last-child {
+  border-bottom: none;
+}
+.suggest-item span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.suggest-item .ui-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: color 0.12s ease;
+}
 .suggest-item:hover, .suggest-item.active {
   background: var(--accent-soft);
   color: var(--accent-hover);

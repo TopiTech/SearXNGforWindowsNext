@@ -285,26 +285,75 @@
         activeSuggestIndex = -1;
       }
 
+      function extractSuggestions(data) {
+        if (!data) return [];
+        var raw = [];
+        if (Array.isArray(data)) {
+          // OpenSearch 5-tuple format: [query, [sug1, sug2, ...], ...]
+          if (data.length >= 2 && Array.isArray(data[1])) {
+            raw = data[1];
+          } else {
+            // Flat list format: [sug1, sug2, ...]
+            raw = data;
+          }
+        } else if (typeof data === 'object' && Array.isArray(data.suggestions)) {
+          raw = data.suggestions;
+        }
+
+        var results = [];
+        var seen = Object.create(null);
+        for (var i = 0; i < raw.length; i++) {
+          var item = raw[i];
+          if (typeof item === 'string') {
+            var trimmed = item.trim();
+            if (trimmed && trimmed !== '[object Object]' && !seen[trimmed]) {
+              seen[trimmed] = true;
+              results.push(trimmed);
+            }
+          }
+        }
+        return results;
+      }
+
+      function getActiveAutocompleteBackend() {
+        var ac = localStorage.getItem('sxng_pref_autocomplete');
+        if (ac) return ac;
+        var sel = document.getElementById('pref-autocomplete');
+        return sel ? sel.value : 'duckduckgo';
+      }
+
       function fetchSuggestions(query) {
-        if (!query || query.length < 2 || isUrlText(query)) {
+        if (!query || query.length < 2 || isUrlText(query) || getActiveAutocompleteBackend() === 'off') {
           closeSuggest();
           return;
         }
-        fetch('/autocompleter?q=' + encodeURIComponent(query))
+        fetch('/autocompleter?q=' + encodeURIComponent(query), {
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest',
+            'Accept': 'application/json'
+          }
+        })
           .then(function (r) { return r.json(); })
-          .then(function (list) {
-            if (!Array.isArray(list) || !list.length) {
+          .then(function (data) {
+            var curQ = document.getElementById('q').value.trim();
+            if (!curQ || isUrlText(curQ)) {
+              closeSuggest();
+              return;
+            }
+            var list = extractSuggestions(data);
+            if (!list.length) {
               closeSuggest();
               return;
             }
             suggestBox.innerHTML = '';
             activeSuggestIndex = -1;
-            list.slice(0, 6).forEach(function (item, idx) {
+            list.slice(0, 8).forEach(function (item) {
               var div = document.createElement('div');
               div.className = 'suggest-item';
               div.setAttribute('role', 'option');
               div.innerHTML = icon('search') + '<span>' + escapeHtml(item) + '</span>';
-              div.addEventListener('click', function () {
+              div.addEventListener('mousedown', function (e) {
+                e.preventDefault();
                 document.getElementById('q').value = item;
                 closeSuggest();
                 executeCurrentAction();
@@ -1578,21 +1627,38 @@
           });
       });
 
+      function loadGeneralPreferences() {
+        var mode = localStorage.getItem('sxng_pref_mode');
+        var ss = localStorage.getItem('sxng_pref_safesearch');
+        var count = localStorage.getItem('sxng_pref_count');
+        var tok = localStorage.getItem('sxng_pref_tokens');
+        var ac = localStorage.getItem('sxng_pref_autocomplete');
+
+        if (mode && document.getElementById('pref-default-mode')) document.getElementById('pref-default-mode').value = mode;
+        if (ss && document.getElementById('pref-safesearch')) document.getElementById('pref-safesearch').value = ss;
+        if (count && document.getElementById('pref-default-count')) document.getElementById('pref-default-count').value = count;
+        if (tok && document.getElementById('pref-default-tokens')) document.getElementById('pref-default-tokens').value = tok;
+        if (ac && document.getElementById('pref-autocomplete')) document.getElementById('pref-autocomplete').value = ac;
+      }
+      loadGeneralPreferences();
+
       document.getElementById('btn-save-general-prefs').addEventListener('click', function () {
         var mode = document.getElementById('pref-default-mode').value;
         var ss = document.getElementById('pref-safesearch').value;
         var count = document.getElementById('pref-default-count').value;
         var tok = document.getElementById('pref-default-tokens').value;
+        var ac = document.getElementById('pref-autocomplete') ? document.getElementById('pref-autocomplete').value : 'duckduckgo';
 
         localStorage.setItem('sxng_pref_mode', mode);
         localStorage.setItem('sxng_pref_safesearch', ss);
         localStorage.setItem('sxng_pref_count', count);
         localStorage.setItem('sxng_pref_tokens', tok);
+        localStorage.setItem('sxng_pref_autocomplete', ac);
 
         fetch('/api/settings/engines', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ safesearch: ss, default_mode: mode })
+          body: JSON.stringify({ safesearch: ss, default_mode: mode, autocomplete: ac })
         }).finally(function () {
           showToast('一般設定を保存しました');
         });
@@ -1603,10 +1669,14 @@
         document.getElementById('pref-safesearch').value = '1';
         document.getElementById('pref-default-count').value = '10';
         document.getElementById('pref-default-tokens').value = '3000';
+        if (document.getElementById('pref-autocomplete')) {
+          document.getElementById('pref-autocomplete').value = 'duckduckgo';
+        }
         localStorage.removeItem('sxng_pref_mode');
         localStorage.removeItem('sxng_pref_safesearch');
         localStorage.removeItem('sxng_pref_count');
         localStorage.removeItem('sxng_pref_tokens');
+        localStorage.removeItem('sxng_pref_autocomplete');
         showToast('初期設定を復元しました');
       });
 

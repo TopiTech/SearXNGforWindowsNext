@@ -563,6 +563,32 @@ class TestWebUIAutocompleter(unittest.TestCase):
         self.assertIn('aria-autocomplete="list"', html)
         self.assertIn('aria-controls="suggest-box"', html)
         self.assertIn("fetch('/autocompleter?q='", html)
+        self.assertIn("extractSuggestions(", html)
+        self.assertIn("'X-Requested-With': 'XMLHttpRequest'", html)
+
+    def test_autocomplete_general_settings_markup(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn('id="pref-autocomplete"', html)
+        self.assertIn('value="duckduckgo"', html)
+        self.assertIn('value="google"', html)
+        self.assertIn('value="off"', html)
+        self.assertIn("sxng_pref_autocomplete", html)
+
+    def test_autocompleter_endpoint_with_app(self) -> None:
+        app = Flask("test_autocompleter_app")
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        # Empty query returns []
+        resp_empty = client.get("/autocompleter?q=")
+        self.assertEqual(resp_empty.status_code, 200)
+        self.assertEqual(resp_empty.get_json(), [])
+
+        # Disabled via cookie returns []
+        client.set_cookie("autocomplete", "off")
+        resp_off = client.get("/autocompleter?q=claude", headers={"X-Requested-With": "XMLHttpRequest"})
+        self.assertEqual(resp_off.status_code, 200)
+        self.assertEqual(resp_off.get_json(), [])
 
 
 class TestWebUIQueryHistory(unittest.TestCase):

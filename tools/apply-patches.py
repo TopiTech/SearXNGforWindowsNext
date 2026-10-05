@@ -914,8 +914,17 @@ def patch_preferences_validation(content, path):
     if (
         "self.value = [x for x in elements if x in self.choices]" in content
         and "except ValidationException as e:" in content
+        and "favicons, logger" in content
     ):
         return "ALREADY_APPLIED"
+
+    # 0. Ensure logger is imported for debug logging in parse_dict
+    if "from searx import get_setting, settings, autocomplete, favicons\n" in content:
+        content = content.replace(
+            "from searx import get_setting, settings, autocomplete, favicons\n",
+            "from searx import get_setting, settings, autocomplete, favicons, logger\n",
+            1,
+        )
 
     # 1. Update MultipleChoiceSetting.parse to filter choices instead of raising ValidationException
     old_parse = (

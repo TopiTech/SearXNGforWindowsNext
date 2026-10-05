@@ -835,6 +835,7 @@ def get_engines_settings_data(
         "avg_reliability": avg_rel,
         "categories": category_names,
         "engines": engine_items,
+        "autocomplete": str(cookies.get("autocomplete") or "").strip() or "duckduckgo",
     }
 
 
@@ -866,6 +867,11 @@ def save_engines_settings_data(
             response.set_cookie("enabled_engines", en_str, max_age=cookie_max_age, path="/")
         if "safesearch" in payload:
             response.set_cookie("safesearch", str(payload["safesearch"]), max_age=cookie_max_age, path="/")
+        if "autocomplete" in payload:
+            ac_val = str(payload["autocomplete"]).strip().lower()
+            if ac_val in ("off", "none", "0", "false"):
+                ac_val = "off"
+            response.set_cookie("autocomplete", ac_val, max_age=cookie_max_age, path="/")
 
     return {
         "success": True,
@@ -1772,10 +1778,24 @@ main.workspace {
   color: var(--text-main);
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  border-bottom: 1px solid rgba(255,255,255,0.03);
+  gap: 0.6rem;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  transition: background 0.12s ease, color 0.12s ease;
 }
-.suggest-item .ui-icon { color: var(--text-muted); }
+.suggest-item:last-child {
+  border-bottom: none;
+}
+.suggest-item span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.suggest-item .ui-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: color 0.12s ease;
+}
 .suggest-item:hover, .suggest-item.active {
   background: var(--accent-soft);
   color: var(--accent-hover);
@@ -3078,6 +3098,22 @@ footer.ws-footer {
 
           <div class="settings-row">
             <div class="settings-label-wrap">
+              <h4><label for="pref-autocomplete">サジェスト候補検索 (Autocomplete)</label></h4>
+              <p>検索窓入力時にリアルタイムで検索キーワード候補を取得するエンジン</p>
+            </div>
+            <div>
+              <select id="pref-autocomplete" class="opt-select" style="min-width:14rem;" aria-label="サジェスト候補検索 (Autocomplete)">
+                <option value="duckduckgo" selected>DuckDuckGo (推奨・プライバシー保護)</option>
+                <option value="google">Google (高精度・多言語)</option>
+                <option value="brave">Brave Search</option>
+                <option value="wikipedia">Wikipedia</option>
+                <option value="off">無効 (オフ)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-label-wrap">
               <h4><label for="pref-default-count">デフォルト取得件数</label></h4>
               <p>検索時に各エンジンから集約・選抜する結果件数の標準値</p>
             </div>
@@ -3422,26 +3458,75 @@ footer.ws-footer {
         activeSuggestIndex = -1;
       }
 
+      function extractSuggestions(data) {
+        if (!data) return [];
+        var raw = [];
+        if (Array.isArray(data)) {
+          // OpenSearch 5-tuple format: [query, [sug1, sug2, ...], ...]
+          if (data.length >= 2 && Array.isArray(data[1])) {
+            raw = data[1];
+          } else {
+            // Flat list format: [sug1, sug2, ...]
+            raw = data;
+          }
+        } else if (typeof data === 'object' && Array.isArray(data.suggestions)) {
+          raw = data.suggestions;
+        }
+
+        var results = [];
+        var seen = Object.create(null);
+        for (var i = 0; i < raw.length; i++) {
+          var item = raw[i];
+          if (typeof item === 'string') {
+            var trimmed = item.trim();
+            if (trimmed && trimmed !== '[object Object]' && !seen[trimmed]) {
+              seen[trimmed] = true;
+              results.push(trimmed);
+            }
+          }
+        }
+        return results;
+      }
+
+      function getActiveAutocompleteBackend() {
+        var ac = localStorage.getItem('sxng_pref_autocomplete');
+        if (ac) return ac;
+        var sel = document.getElementById('pref-autocomplete');
+        return sel ? sel.value : 'duckduckgo';
+      }
+
       function fetchSuggestions(query) {
-        if (!query || query.length < 2 || isUrlText(query)) {
+        if (!query || query.length < 2 || isUrlText(query) || getActiveAutocompleteBackend() === 'off') {
           closeSuggest();
           return;
         }
-        fetch('/autocompleter?q=' + encodeURIComponent(query))
+        fetch('/autocompleter?q=' + encodeURIComponent(query), {
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest',
+            'Accept': 'application/json'
+          }
+        })
           .then(function (r) { return r.json(); })
-          .then(function (list) {
-            if (!Array.isArray(list) || !list.length) {
+          .then(function (data) {
+            var curQ = document.getElementById('q').value.trim();
+            if (!curQ || isUrlText(curQ)) {
+              closeSuggest();
+              return;
+            }
+            var list = extractSuggestions(data);
+            if (!list.length) {
               closeSuggest();
               return;
             }
             suggestBox.innerHTML = '';
             activeSuggestIndex = -1;
-            list.slice(0, 6).forEach(function (item, idx) {
+            list.slice(0, 8).forEach(function (item) {
               var div = document.createElement('div');
               div.className = 'suggest-item';
               div.setAttribute('role', 'option');
               div.innerHTML = icon('search') + '<span>' + escapeHtml(item) + '</span>';
-              div.addEventListener('click', function () {
+              div.addEventListener('mousedown', function (e) {
+                e.preventDefault();
                 document.getElementById('q').value = item;
                 closeSuggest();
                 executeCurrentAction();
@@ -4715,21 +4800,38 @@ footer.ws-footer {
           });
       });
 
+      function loadGeneralPreferences() {
+        var mode = localStorage.getItem('sxng_pref_mode');
+        var ss = localStorage.getItem('sxng_pref_safesearch');
+        var count = localStorage.getItem('sxng_pref_count');
+        var tok = localStorage.getItem('sxng_pref_tokens');
+        var ac = localStorage.getItem('sxng_pref_autocomplete');
+
+        if (mode && document.getElementById('pref-default-mode')) document.getElementById('pref-default-mode').value = mode;
+        if (ss && document.getElementById('pref-safesearch')) document.getElementById('pref-safesearch').value = ss;
+        if (count && document.getElementById('pref-default-count')) document.getElementById('pref-default-count').value = count;
+        if (tok && document.getElementById('pref-default-tokens')) document.getElementById('pref-default-tokens').value = tok;
+        if (ac && document.getElementById('pref-autocomplete')) document.getElementById('pref-autocomplete').value = ac;
+      }
+      loadGeneralPreferences();
+
       document.getElementById('btn-save-general-prefs').addEventListener('click', function () {
         var mode = document.getElementById('pref-default-mode').value;
         var ss = document.getElementById('pref-safesearch').value;
         var count = document.getElementById('pref-default-count').value;
         var tok = document.getElementById('pref-default-tokens').value;
+        var ac = document.getElementById('pref-autocomplete') ? document.getElementById('pref-autocomplete').value : 'duckduckgo';
 
         localStorage.setItem('sxng_pref_mode', mode);
         localStorage.setItem('sxng_pref_safesearch', ss);
         localStorage.setItem('sxng_pref_count', count);
         localStorage.setItem('sxng_pref_tokens', tok);
+        localStorage.setItem('sxng_pref_autocomplete', ac);
 
         fetch('/api/settings/engines', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ safesearch: ss, default_mode: mode })
+          body: JSON.stringify({ safesearch: ss, default_mode: mode, autocomplete: ac })
         }).finally(function () {
           showToast('一般設定を保存しました');
         });
@@ -4740,10 +4842,14 @@ footer.ws-footer {
         document.getElementById('pref-safesearch').value = '1';
         document.getElementById('pref-default-count').value = '10';
         document.getElementById('pref-default-tokens').value = '3000';
+        if (document.getElementById('pref-autocomplete')) {
+          document.getElementById('pref-autocomplete').value = 'duckduckgo';
+        }
         localStorage.removeItem('sxng_pref_mode');
         localStorage.removeItem('sxng_pref_safesearch');
         localStorage.removeItem('sxng_pref_count');
         localStorage.removeItem('sxng_pref_tokens');
+        localStorage.removeItem('sxng_pref_autocomplete');
         showToast('初期設定を復元しました');
       });
 
@@ -4982,6 +5088,79 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
 
     from flask import Response, jsonify, redirect, request
 
+    orig_search = app.view_functions.get("search")
+    orig_preferences = app.view_functions.get("preferences")
+    orig_about = app.view_functions.get("about")
+    orig_autocompleter = app.view_functions.get("autocompleter")
+
+    def unified_autocompleter_view() -> Any:
+        q = (request.args.get("q") or request.form.get("q") or "").strip()
+        if not q or len(q) < 1:
+            return Response("[]", mimetype="application/json")
+
+        if "autocomplete" in request.cookies:
+            cookie_ac = request.cookies.get("autocomplete", "").strip().lower()
+            if not cookie_ac or cookie_ac in ("off", "none", "0", "false"):
+                return Response("[]", mimetype="application/json")
+        else:
+            cookie_ac = ""
+
+        results: list[str] = []
+        if orig_autocompleter is not None:
+            with contextlib.suppress(Exception):
+                upstream_resp = orig_autocompleter()
+                if hasattr(upstream_resp, "get_data"):
+                    raw_data = upstream_resp.get_data(as_text=True)
+                    parsed = json.loads(raw_data)
+                    if isinstance(parsed, list):
+                        if len(parsed) >= 2 and isinstance(parsed[1], list):
+                            results = [str(x) for x in parsed[1] if isinstance(x, str) and x.strip()]
+                        else:
+                            results = [
+                                str(x)
+                                for x in parsed
+                                if isinstance(x, str) and x.strip() and x != "[object Object]"
+                            ]
+
+        if not results:
+            with contextlib.suppress(Exception):
+                import searx.autocomplete as sxng_ac
+
+                backends_dict = getattr(sxng_ac, "backends", {})
+                preferred = cookie_ac if cookie_ac and cookie_ac in backends_dict else "duckduckgo"
+                fallback_backends = [preferred]
+                if "duckduckgo" not in fallback_backends:
+                    fallback_backends.append("duckduckgo")
+                if "google" not in fallback_backends:
+                    fallback_backends.append("google")
+
+                for backend in fallback_backends:
+                    with contextlib.suppress(Exception):
+                        cand = sxng_ac.search_autocomplete(backend, q, "auto")
+                        if cand and isinstance(cand, list):
+                            clean_cand = [
+                                str(x).strip()
+                                for x in cand
+                                if isinstance(x, str) and x.strip() and str(x).strip() != q
+                            ]
+                            if clean_cand:
+                                results = clean_cand
+                                break
+
+        is_ajax = (
+            request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            or "application/json" in (request.headers.get("Accept") or "")
+            or request.args.get("format") == "json"
+        )
+        if is_ajax:
+            return Response(json.dumps(results), mimetype="application/json")
+
+        relevances = {"google:suggestrelevance": [600 - i for i in range(len(results))]}
+        return Response(
+            json.dumps([q, results, [], [], relevances]),
+            mimetype="application/x-suggestions+json",
+        )
+
     # --- Tier A: app.before_request hook (Earliest Interception) ---
     @app.before_request
     def sxng_ui_unification_guard() -> Any:
@@ -5007,12 +5186,16 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             # 4. Browser /about -> redirect to Agent Hub
             if path == "/about":
                 return redirect("/?mode=agent", code=302)
+            # 5. /autocompleter -> unified autocompleter handler with resilient fallback
+            if path == "/autocompleter":
+                return unified_autocompleter_view()
         return None
 
     # --- Tier B: app.view_functions replacement ---
     orig_search = app.view_functions.get("search")
     orig_preferences = app.view_functions.get("preferences")
     orig_about = app.view_functions.get("about")
+    orig_autocompleter = app.view_functions.get("autocompleter")
 
     def unified_index_view() -> Any:
         return Response(AI_WORKSPACE_HTML, mimetype="text/html")
@@ -5040,6 +5223,8 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         app.view_functions["preferences"] = unified_preferences_view
     if orig_about is not None:
         app.view_functions["about"] = lambda: redirect("/?mode=agent", code=302)
+    if orig_autocompleter is not None:
+        app.view_functions["autocompleter"] = unified_autocompleter_view
 
     @app.route("/ai", methods=["GET"])
     @app.route("/next", methods=["GET"])
