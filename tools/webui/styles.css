@@ -549,6 +549,7 @@ main.workspace {
   main.workspace { padding: 0.9rem 0.9rem 2rem; }
   .search-bar-row { flex-wrap: wrap; }
   .search-bar-row #run-btn { width: 100%; justify-content: center; }
+  #classic-deep-btn { width: 100%; justify-content: center; }
   .kbd-hint { display: none; }
   .search-input { padding-right: 0.95rem; }
   .preset-chips { margin-left: 0; width: 100%; }

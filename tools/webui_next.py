@@ -2013,6 +2013,7 @@ main.workspace {
   main.workspace { padding: 0.9rem 0.9rem 2rem; }
   .search-bar-row { flex-wrap: wrap; }
   .search-bar-row #run-btn { width: 100%; justify-content: center; }
+  #classic-deep-btn { width: 100%; justify-content: center; }
   .kbd-hint { display: none; }
   .search-input { padding-right: 0.95rem; }
   .preset-chips { margin-left: 0; width: 100%; }
@@ -2908,6 +2909,13 @@ footer.ws-footer {
               <option value="20">20件</option>
               <option value="30">30件</option>
             </select>
+          </div>
+
+          <div class="opt-group" style="margin-left: auto;">
+            <button type="button" class="btn btn-primary btn-sm" id="classic-deep-btn" title="Deep Searchモードに切り替えて、本文抽出とBM25スコアリングで深掘り検索を実行します">
+              <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+              <span>Deep Searchで深掘り</span>
+            </button>
           </div>
         </div>
 
@@ -4210,16 +4218,6 @@ footer.ws-footer {
           var actRow = document.createElement('div');
           actRow.className = 'classic-actions-row';
 
-          var deepBtn = document.createElement('button');
-          deepBtn.type = 'button';
-          deepBtn.className = 'btn btn-primary btn-sm';
-          deepBtn.innerHTML = icon('sparkles') + '<span>AIで深掘り</span>';
-          deepBtn.addEventListener('click', function () {
-            document.getElementById('q').value = query;
-            setMode('deep');
-            runUnifiedSearch(query);
-          });
-
           var scrapeBtn = document.createElement('button');
           scrapeBtn.type = 'button';
           scrapeBtn.className = 'btn btn-sm';
@@ -4258,7 +4256,6 @@ footer.ws-footer {
             copyWithFeedback(citeText, copyBtn, 'コピー済');
           });
 
-          actRow.appendChild(deepBtn);
           actRow.appendChild(scrapeBtn);
           actRow.appendChild(copyBtn);
           card.appendChild(actRow);
@@ -4345,6 +4342,19 @@ footer.ws-footer {
         var qVal = document.getElementById('q').value.trim();
         if (qVal) runClassicSearch(qVal, state.classicPage + 1);
       });
+      var classicDeepBtn = document.getElementById('classic-deep-btn');
+      if (classicDeepBtn) {
+        classicDeepBtn.addEventListener('click', function () {
+          var qVal = document.getElementById('q').value.trim();
+          if (!qVal) {
+            showToast('検索キーワードを入力してください');
+            document.getElementById('q').focus();
+            return;
+          }
+          setMode('deep');
+          runUnifiedSearch(qVal);
+        });
+      }
       document.getElementById('classic-time-range').addEventListener('change', function () {
         var qVal = document.getElementById('q').value.trim();
         if (qVal && state.mode === 'classic') runClassicSearch(qVal, 1);
@@ -5117,9 +5127,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                             results = [str(x) for x in parsed[1] if isinstance(x, str) and x.strip()]
                         else:
                             results = [
-                                str(x)
-                                for x in parsed
-                                if isinstance(x, str) and x.strip() and x != "[object Object]"
+                                str(x) for x in parsed if isinstance(x, str) and x.strip() and x != "[object Object]"
                             ]
 
         if not results:
@@ -5139,9 +5147,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                         cand = sxng_ac.search_autocomplete(backend, q, "auto")
                         if cand and isinstance(cand, list):
                             clean_cand = [
-                                str(x).strip()
-                                for x in cand
-                                if isinstance(x, str) and x.strip() and str(x).strip() != q
+                                str(x).strip() for x in cand if isinstance(x, str) and x.strip() and str(x).strip() != q
                             ]
                             if clean_cand:
                                 results = clean_cand

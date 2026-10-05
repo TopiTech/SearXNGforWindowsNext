@@ -1037,16 +1037,6 @@
           var actRow = document.createElement('div');
           actRow.className = 'classic-actions-row';
 
-          var deepBtn = document.createElement('button');
-          deepBtn.type = 'button';
-          deepBtn.className = 'btn btn-primary btn-sm';
-          deepBtn.innerHTML = icon('sparkles') + '<span>AIで深掘り</span>';
-          deepBtn.addEventListener('click', function () {
-            document.getElementById('q').value = query;
-            setMode('deep');
-            runUnifiedSearch(query);
-          });
-
           var scrapeBtn = document.createElement('button');
           scrapeBtn.type = 'button';
           scrapeBtn.className = 'btn btn-sm';
@@ -1085,7 +1075,6 @@
             copyWithFeedback(citeText, copyBtn, 'コピー済');
           });
 
-          actRow.appendChild(deepBtn);
           actRow.appendChild(scrapeBtn);
           actRow.appendChild(copyBtn);
           card.appendChild(actRow);
@@ -1172,6 +1161,19 @@
         var qVal = document.getElementById('q').value.trim();
         if (qVal) runClassicSearch(qVal, state.classicPage + 1);
       });
+      var classicDeepBtn = document.getElementById('classic-deep-btn');
+      if (classicDeepBtn) {
+        classicDeepBtn.addEventListener('click', function () {
+          var qVal = document.getElementById('q').value.trim();
+          if (!qVal) {
+            showToast('検索キーワードを入力してください');
+            document.getElementById('q').focus();
+            return;
+          }
+          setMode('deep');
+          runUnifiedSearch(qVal);
+        });
+      }
       document.getElementById('classic-time-range').addEventListener('change', function () {
         var qVal = document.getElementById('q').value.trim();
         if (qVal && state.mode === 'classic') runClassicSearch(qVal, 1);
