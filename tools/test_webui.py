@@ -884,6 +884,17 @@ class TestWebUIImageGrid(unittest.TestCase):
         self.assertIn("state.classicCategory === 'images'", html)
 
 
+class TestWebUIVideoCards(unittest.TestCase):
+    """Test dedicated video cards layout for video category."""
+
+    def test_video_cards_css_and_handling(self) -> None:
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn(".video-results-list {", html)
+        self.assertIn(".video-card {", html)
+        self.assertIn(".video-thumb-wrap", html)
+        self.assertIn("state.classicCategory === 'videos'", html)
+
+
 class TestWebUIAccessibilityAndResponsiveHygiene(unittest.TestCase):
     """Test HTML5 validity, screen-reader compliance, and responsive touch layout."""
 

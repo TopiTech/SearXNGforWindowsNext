@@ -726,7 +726,7 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
                     pub = str(pub)
             elif not isinstance(pub, str):
                 pub = str(pub)
-        return {
+        r_item = {
             'title': d.get('title') or '',
             'url': d.get('url') or '',
             'content': d.get('content') or '',
@@ -736,6 +736,11 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
             'author': d.get('author') or '',
             'category': d.get('category') or '',
         }
+        for k in ('img_src', 'thumbnail_src', 'thumbnail', 'resolution', 'iframe_src', 'length', 'template', 'engine'):
+            val = d.get(k)
+            if val is not None and str(val).strip():
+                r_item[k] = str(val)
+        return r_item
 
     raw_results = []
     if hasattr(rc, 'get_ordered_results'):
@@ -757,7 +762,7 @@ def get_json_lite_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
 
     data = {
         'query': getattr(sq, 'query', '') or '',
-        'results': [_r(r) for r in raw_results[:20]],
+        'results': [_r(r) for r in raw_results[:50]],
         'suggestions': sugg,
         'corrections': corr,
     }

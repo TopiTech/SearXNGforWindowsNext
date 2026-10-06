@@ -197,6 +197,15 @@ class SearchResultItem:
     score_components: dict[str, float] = field(default_factory=dict)
     evidence: list[dict[str, Any]] = field(default_factory=list)
     security_flags: list[str] = field(default_factory=list)
+    img_src: str = ""
+    thumbnail_src: str = ""
+    thumbnail: str = ""
+    resolution: str = ""
+    iframe_src: str = ""
+    length: str = ""
+    template: str = ""
+    category: str = ""
+    engine: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Convert item to serializable dictionary."""
@@ -228,6 +237,24 @@ class SearchResultItem:
             data["published_date"] = self.published_date
         if self.scrape_error:
             data["scrape_error"] = self.scrape_error
+        if self.img_src:
+            data["img_src"] = self.img_src
+        if self.thumbnail_src:
+            data["thumbnail_src"] = self.thumbnail_src
+        if self.thumbnail:
+            data["thumbnail"] = self.thumbnail
+        if self.resolution:
+            data["resolution"] = self.resolution
+        if self.iframe_src:
+            data["iframe_src"] = self.iframe_src
+        if self.length:
+            data["length"] = self.length
+        if self.template:
+            data["template"] = self.template
+        if self.category:
+            data["category"] = self.category
+        if self.engine:
+            data["engine"] = self.engine
         return data
 
 
@@ -535,6 +562,15 @@ class DomainScorer:
             dom_weight = self.get_domain_weight(dom)
             final_score = base_score * dom_weight
 
+            # Auto-detect youtube thumbnail if missing
+            thumb = str(r.get("thumbnail") or "").strip()
+            thumb_src = str(r.get("thumbnail_src") or "").strip()
+            img_src = str(r.get("img_src") or "").strip()
+            if not (thumb or thumb_src or img_src):
+                yt_match = re.search(r"(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
+                if yt_match:
+                    thumb = f"https://i.ytimg.com/vi/{yt_match.group(1)}/hqdefault.jpg"
+
             item = SearchResultItem(
                 title=str(r.get("title") or "").strip() or "Untitled",
                 url=url,
@@ -543,6 +579,15 @@ class DomainScorer:
                 source=str(r.get("source") or "").strip(),
                 score=final_score,
                 published_date=str(r.get("published_date") or r.get("publishedDate") or "").strip(),
+                img_src=img_src,
+                thumbnail_src=thumb_src,
+                thumbnail=thumb,
+                resolution=str(r.get("resolution") or "").strip(),
+                iframe_src=str(r.get("iframe_src") or "").strip(),
+                length=str(r.get("length") or "").strip(),
+                template=str(r.get("template") or "").strip(),
+                category=str(r.get("category") or "").strip(),
+                engine=str(r.get("engine") or "").strip(),
             )
             items.append(item)
 
@@ -1197,14 +1242,14 @@ def execute_unified_search(
     eng_str = (engines or "").strip()
     tr_str = (time_range or "").strip()
 
-    # In fast/classic mode, only use explicit categories/engines unless none are specified
-    if norm_mode in ("fast", "classic") and not (cat_str or eng_str):
-        target_cats = ""
-        target_engs = ""
+    # In fast/classic mode, only use explicit categories/engines
+    if norm_mode in ("fast", "classic"):
+        target_cats = cat_str
+        target_engs = eng_str
         fetch_count = max_res if not (final_inc or final_exc) else max(max_res * 2, 10)
     else:
         target_cats = cat_str or routed_cats
-        target_engs = eng_str or routed_engs
+        target_engs = eng_str or ("" if cat_str else routed_engs)
         fetch_count = max(max_res * 3, 15)
 
     search_kwargs: dict[str, Any] = {

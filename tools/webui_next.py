@@ -471,8 +471,9 @@ def _search_in_process(
                 data = _run_form(form)
                 results = data.get("results", [])
 
-                # If specialized routing returned 0 results, retry once with user's default enabled engines
-                if not results and (categories.strip() or engines.strip()):
+                # If specialized engine routing returned 0 results, retry once with user's default enabled engines
+                # (Only when engines were explicitly specified without categories, never override a specific user category)
+                if not results and engines.strip() and not categories.strip():
                     fallback_form = {"q": clean_query}
                     if time_range.strip():
                         fallback_form["time_range"] = time_range.strip()
@@ -531,7 +532,7 @@ def execute_server_deep_search(
     if depth not in ("basic", "advanced", "code", "fast"):
         depth = "advanced"
 
-    max_res = _parse_int(max_results, default=5, minimum=1, maximum=20)
+    max_res = _parse_int(max_results, default=5, minimum=1, maximum=50)
     max_tok = _parse_int(max_tokens, default=3000, minimum=500, maximum=16000)
     page_num = _parse_int(pageno, default=1, minimum=1, maximum=100)
 
@@ -2494,12 +2495,48 @@ main.workspace {
   background: var(--bg-elevated);
   position: relative;
   overflow: hidden;
+  display: block;
+  text-decoration: none;
 }
 .image-card-thumb {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+  transition: transform 0.2s ease;
+}
+.image-card:hover .image-card-thumb {
+  transform: scale(1.03);
+}
+.image-res-badge {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+.image-card-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  background: var(--bg-elevated);
+}
+.image-card-placeholder svg {
+  width: 1.5rem;
+  height: 1.5rem;
+  opacity: 0.6;
 }
 .image-card-body {
   padding: 0.55rem 0.7rem;
@@ -2518,9 +2555,162 @@ main.workspace {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
+.image-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.15rem;
+}
 .image-card-domain {
   font-size: 0.7rem;
   color: var(--text-secondary);
+}
+.image-full-link {
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  transition: color 0.15s ease;
+}
+.image-full-link:hover {
+  color: var(--accent);
+}
+
+/* Video Results List & Cards */
+.video-results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  margin-top: 0.6rem;
+}
+.video-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 0.75rem;
+  padding: 0.85rem;
+  display: flex;
+  gap: 1.15rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.video-card:hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow);
+}
+.video-thumb-wrap {
+  width: 220px;
+  min-width: 220px;
+  height: 124px;
+  background: var(--bg-elevated);
+  border-radius: 0.55rem;
+  position: relative;
+  overflow: hidden;
+  display: block;
+  flex-shrink: 0;
+  text-decoration: none;
+}
+.video-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.2s ease;
+}
+.video-card:hover .video-thumb-img {
+  transform: scale(1.03);
+}
+.video-thumb-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  background: var(--bg-elevated);
+}
+.video-play-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 38px;
+  height: 38px;
+  background: rgba(0, 0, 0, 0.65);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  opacity: 0.85;
+  transition: all 0.2s ease;
+  pointer-events: none;
+}
+.video-card:hover .video-play-overlay {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.1);
+  background: var(--accent);
+}
+.video-play-overlay svg {
+  width: 16px;
+  height: 16px;
+  margin-left: 2px;
+}
+.video-duration-badge {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+.video-card-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.video-title-link {
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--accent-hover);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.video-title-link:hover {
+  text-decoration: underline;
+}
+.video-snippet-text {
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+@media (max-width: 640px) {
+  .video-card {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .video-thumb-wrap {
+    width: 100%;
+    min-width: 0;
+    height: 190px;
+  }
 }
 
 /* Settings Dashboard View */
@@ -3277,7 +3467,9 @@ footer.ws-footer {
         clock: '<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
         sun: '<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path></svg>',
         moon: '<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>',
-        zap: '<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>'
+        zap: '<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>',
+        play: '<svg class="ui-icon" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>',
+        image: '<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect><circle cx="9" cy="9" r="2"></circle><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path></svg>'
       };
 
       function icon(name, extraClass) {
@@ -4310,21 +4502,53 @@ footer.ws-footer {
             var card = document.createElement('article');
             card.className = 'image-card';
 
-            var thumbWrap = document.createElement('div');
+            var thumbWrap = document.createElement('a');
             thumbWrap.className = 'image-card-thumb-wrap';
+            thumbWrap.href = safeHttpUrl(item.url);
+            thumbWrap.target = '_blank';
+            thumbWrap.rel = 'noopener noreferrer';
+            thumbWrap.title = item.title || '';
 
-            var imgSrc = item.img_src || item.thumbnail_src || item.thumbnail;
-            if (imgSrc) {
-              var safeSrc = safeImageUrl(imgSrc);
+            var thumbSrc = item.thumbnail_src || item.thumbnail;
+            var fullSrc = item.img_src || thumbSrc;
+            var displaySrc = thumbSrc || fullSrc;
+
+            if (displaySrc) {
+              var safeSrc = safeImageUrl(displaySrc);
               if (safeSrc) {
                 var img = document.createElement('img');
                 img.className = 'image-card-thumb';
                 img.src = safeSrc;
                 img.alt = item.title || '';
                 img.loading = 'lazy';
-                img.onerror = function () { this.style.display = 'none'; };
+                img.referrerPolicy = 'no-referrer';
+                img.onerror = function () {
+                  if (fullSrc && safeSrc !== safeImageUrl(fullSrc)) {
+                    this.src = safeImageUrl(fullSrc);
+                  } else {
+                    this.style.display = 'none';
+                    if (!thumbWrap.querySelector('.image-card-placeholder')) {
+                      var ph = document.createElement('div');
+                      ph.className = 'image-card-placeholder';
+                      ph.innerHTML = icon('image') + '<span>画像を表示できません</span>';
+                      thumbWrap.appendChild(ph);
+                    }
+                  }
+                };
                 thumbWrap.appendChild(img);
               }
+            } else {
+              var ph = document.createElement('div');
+              ph.className = 'image-card-placeholder';
+              ph.innerHTML = icon('image') + '<span>画像プレビューなし</span>';
+              thumbWrap.appendChild(ph);
+            }
+
+            if (item.resolution) {
+              var resBadge = document.createElement('span');
+              resBadge.className = 'image-res-badge';
+              resBadge.textContent = item.resolution;
+              thumbWrap.appendChild(resBadge);
             }
 
             var body = document.createElement('div');
@@ -4337,20 +4561,190 @@ footer.ws-footer {
             a.rel = 'noopener noreferrer';
             a.textContent = item.title || item.url;
 
+            var domRow = document.createElement('div');
+            domRow.className = 'image-card-meta';
+
             var dom = document.createElement('span');
             dom.className = 'image-card-domain';
             dom.textContent = item.domain || (function () {
               try { return new URL(item.url).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
             })();
 
+            domRow.appendChild(dom);
+
+            if (item.img_src) {
+              var fullLink = document.createElement('a');
+              fullLink.className = 'image-full-link';
+              fullLink.href = safeHttpUrl(item.img_src);
+              fullLink.target = '_blank';
+              fullLink.rel = 'noopener noreferrer';
+              fullLink.title = '元画像を別タブで開く';
+              fullLink.innerHTML = icon('externalLink');
+              domRow.appendChild(fullLink);
+            }
+
             body.appendChild(a);
-            body.appendChild(dom);
+            body.appendChild(domRow);
 
             card.appendChild(thumbWrap);
             card.appendChild(body);
             grid.appendChild(card);
           });
           container.appendChild(grid);
+
+          var pagBar = document.getElementById('classic-pagination-bar');
+          pagBar.style.display = 'flex';
+          document.getElementById('classic-page-indicator').textContent = 'ページ ' + page;
+          document.getElementById('classic-prev-btn').disabled = (page <= 1);
+          var countVal = parseInt((document.getElementById('classic-count') || {}).value || '10', 10);
+          document.getElementById('classic-next-btn').disabled = (items.length < countVal);
+          return;
+        }
+
+        // Dedicated Video list mode
+        if (state.classicCategory === 'videos') {
+          var vList = document.createElement('div');
+          vList.className = 'video-results-list';
+          items.forEach(function (item, idx) {
+            var card = document.createElement('article');
+            card.className = 'video-card';
+            card.dataset.index = String(idx);
+
+            var thumbWrap = document.createElement('a');
+            thumbWrap.className = 'video-thumb-wrap';
+            thumbWrap.href = safeHttpUrl(item.url);
+            thumbWrap.target = '_blank';
+            thumbWrap.rel = 'noopener noreferrer';
+            thumbWrap.title = item.title || '';
+
+            var videoThumb = item.thumbnail || item.thumbnail_src || item.img_src;
+            if (!videoThumb) {
+              var yt = (item.url || '').match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+              if (yt) videoThumb = 'https://i.ytimg.com/vi/' + yt[1] + '/hqdefault.jpg';
+            }
+
+            if (videoThumb) {
+              var safeSrc = safeImageUrl(videoThumb);
+              if (safeSrc) {
+                var img = document.createElement('img');
+                img.className = 'video-thumb-img';
+                img.src = safeSrc;
+                img.alt = item.title || '';
+                img.loading = 'lazy';
+                img.referrerPolicy = 'no-referrer';
+                img.onerror = function () {
+                  this.style.display = 'none';
+                  if (!thumbWrap.querySelector('.video-thumb-placeholder')) {
+                    var ph = document.createElement('div');
+                    ph.className = 'video-thumb-placeholder';
+                    ph.innerHTML = icon('play') + '<span>動画プレビュー</span>';
+                    thumbWrap.appendChild(ph);
+                  }
+                };
+                thumbWrap.appendChild(img);
+              }
+            } else {
+              var ph = document.createElement('div');
+              ph.className = 'video-thumb-placeholder';
+              ph.innerHTML = icon('play') + '<span>動画</span>';
+              thumbWrap.appendChild(ph);
+            }
+
+            var playOverlay = document.createElement('div');
+            playOverlay.className = 'video-play-overlay';
+            playOverlay.innerHTML = icon('play');
+            thumbWrap.appendChild(playOverlay);
+
+            if (item.length) {
+              var durBadge = document.createElement('span');
+              durBadge.className = 'video-duration-badge';
+              durBadge.textContent = item.length;
+              thumbWrap.appendChild(durBadge);
+            }
+
+            var contentDiv = document.createElement('div');
+            contentDiv.className = 'video-card-content';
+
+            var metaRow = document.createElement('div');
+            metaRow.className = 'classic-meta-row';
+
+            var urlSpan = document.createElement('span');
+            urlSpan.className = 'classic-url-tag';
+            var domain = item.domain || (function () {
+              try { return new URL(item.url).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
+            })();
+            if (domain) {
+              var fav = document.createElement('img');
+              fav.className = 'card-favicon';
+              fav.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(domain) + '&sz=32';
+              fav.alt = '';
+              fav.loading = 'lazy';
+              fav.onerror = function () { this.style.display = 'none'; };
+              urlSpan.appendChild(fav);
+            }
+            var dName = document.createElement('span');
+            dName.textContent = domain || item.url;
+            urlSpan.appendChild(dName);
+
+            var badgeGroup = document.createElement('div');
+            badgeGroup.style.display = 'flex';
+            badgeGroup.style.gap = '0.35rem';
+
+            var engName = item.engine || item.source;
+            if (engName) {
+              var engPill = document.createElement('span');
+              engPill.className = 'pill pill-accent';
+              engPill.textContent = engName;
+              badgeGroup.appendChild(engPill);
+            }
+
+            metaRow.appendChild(urlSpan);
+            metaRow.appendChild(badgeGroup);
+            contentDiv.appendChild(metaRow);
+
+            var titleLink = document.createElement('a');
+            titleLink.className = 'video-title-link';
+            titleLink.href = safeHttpUrl(item.url);
+            titleLink.target = '_blank';
+            titleLink.rel = 'noopener noreferrer';
+            titleLink.textContent = item.title || item.url;
+            contentDiv.appendChild(titleLink);
+
+            if (item.content) {
+              var descDiv = document.createElement('div');
+              descDiv.className = 'video-snippet-text';
+              descDiv.textContent = item.content;
+              contentDiv.appendChild(descDiv);
+            }
+
+            var actRow = document.createElement('div');
+            actRow.className = 'classic-actions-row';
+
+            var watchBtn = document.createElement('a');
+            watchBtn.className = 'btn btn-sm btn-primary';
+            watchBtn.href = safeHttpUrl(item.url);
+            watchBtn.target = '_blank';
+            watchBtn.rel = 'noopener noreferrer';
+            watchBtn.innerHTML = icon('play') + '<span>動画を再生</span>';
+            actRow.appendChild(watchBtn);
+
+            var copyBtn = document.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'btn btn-sm';
+            copyBtn.innerHTML = icon('copy') + '<span>URLコピー</span>';
+            copyBtn.addEventListener('click', function () {
+              navigator.clipboard.writeText(item.url);
+              showToast('URLをコピーしました');
+            });
+            actRow.appendChild(copyBtn);
+
+            contentDiv.appendChild(actRow);
+
+            card.appendChild(thumbWrap);
+            card.appendChild(contentDiv);
+            vList.appendChild(card);
+          });
+          container.appendChild(vList);
 
           var pagBar = document.getElementById('classic-pagination-bar');
           pagBar.style.display = 'flex';
@@ -4499,6 +4893,7 @@ footer.ws-footer {
           q: query,
           mode: 'classic',
           categories: cat,
+          category: cat,
           time_range: tr,
           count: count,
           page: String(page)
@@ -5699,7 +6094,13 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             or payload.get("max_length")
         )
         max_scrape_length = _parse_int(raw_scrape_len, 8000, 500, 50000)
-        categories = request.values.get("categories") or payload.get("categories") or ""
+        categories = (
+            request.values.get("categories")
+            or request.values.get("category")
+            or payload.get("categories")
+            or payload.get("category")
+            or ""
+        )
         engines = request.values.get("engines") or payload.get("engines") or ""
         time_range = request.values.get("time_range") or payload.get("time_range") or ""
         raw_timeout = request.values.get("timeout") or payload.get("timeout")

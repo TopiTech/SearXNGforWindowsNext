@@ -784,6 +784,77 @@ class TestRegressionHardening(unittest.TestCase):
         res = scraper.fetch_pages(items, max_fetch=1, timeout=0.01)
         self.assertEqual(len(res), 1)
 
+    def test_media_category_routing_does_not_force_general_engines(self) -> None:
+        """Verify explicit category routing (videos, images) in classic mode does not inject general text engines."""
+        recorded_kwargs = {}
+
+        def mock_search(**kwargs):
+            recorded_kwargs.update(kwargs)
+            return {
+                "results": [
+                    {
+                        "title": "Video 1",
+                        "url": "https://www.youtube.com/watch?v=12345678901",
+                        "content": "A video snippet",
+                        "thumbnail": "https://th.bing.com/th/id/OVP.123",
+                        "length": "03:45",
+                        "template": "videos.html",
+                        "category": "videos",
+                        "source": "bing videos",
+                    }
+                ]
+            }
+
+        res = agentic_search.execute_unified_search(
+            query="test video",
+            search_func=mock_search,
+            scrape_func=lambda *a, **k: {},
+            mode="classic",
+            categories="videos",
+        )
+        self.assertEqual(recorded_kwargs.get("categories"), "videos")
+        self.assertEqual(recorded_kwargs.get("engines"), "")  # Must NOT be 'bing,brave,google'
+        self.assertEqual(len(res.get("results", [])), 1)
+        r0 = res["results"][0]
+        self.assertEqual(r0.get("thumbnail"), "https://th.bing.com/th/id/OVP.123")
+        self.assertEqual(r0.get("length"), "03:45")
+        self.assertEqual(r0.get("template"), "videos.html")
+        self.assertEqual(r0.get("category"), "videos")
+
+    def test_image_category_preserves_img_src_and_resolution(self) -> None:
+        """Verify image results preserve img_src, thumbnail_src, resolution, and template."""
+
+        def mock_search(**kwargs):
+            return {
+                "results": [
+                    {
+                        "title": "Image 1",
+                        "url": "https://example.com/view/1",
+                        "content": "An image description",
+                        "img_src": "https://example.com/full.jpg",
+                        "thumbnail_src": "https://example.com/thumb.jpg",
+                        "resolution": "1920x1080",
+                        "template": "images.html",
+                        "category": "images",
+                        "source": "bing images",
+                    }
+                ]
+            }
+
+        res = agentic_search.execute_unified_search(
+            query="test image",
+            search_func=mock_search,
+            scrape_func=lambda *a, **k: {},
+            mode="classic",
+            categories="images",
+        )
+        self.assertEqual(len(res.get("results", [])), 1)
+        r0 = res["results"][0]
+        self.assertEqual(r0.get("img_src"), "https://example.com/full.jpg")
+        self.assertEqual(r0.get("thumbnail_src"), "https://example.com/thumb.jpg")
+        self.assertEqual(r0.get("resolution"), "1920x1080")
+        self.assertEqual(r0.get("template"), "images.html")
+
 
 if __name__ == "__main__":
     unittest.main()
