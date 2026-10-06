@@ -628,6 +628,54 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
     def setUp(self):
         self.fn = apply_patches.patch_webapp_scrape_route
 
+    def test_strip_html_to_text_function_unit(self):
+        """v20 ReDoS regression: the real helper in webui_next.py must be the
+        O(n) HTMLParser-based implementation with correct tag/script handling.
+
+        This also pins the algorithm contract shared with the injected copy in
+        apply-patches.py, so any behavioral drift between the two copies is
+        caught here.
+        """
+        import time as _time
+        import importlib.util as _ilu
+
+        _spec = _ilu.spec_from_file_location(
+            "webui_next_for_test", os.path.join(os.path.dirname(os.path.abspath(__file__)), "webui_next.py")
+        )
+        assert _spec is not None and _spec.loader is not None
+        _wn = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_wn)  # noqa: S102 - test harness
+
+        strip = _wn._strip_html_to_text
+
+        # Correctness: tags stripped, script/style/noscript content dropped.
+        out = strip("<p>Hello <b>world</b></p><script>evil()</script><style>.x{}</style>")
+        self.assertIn("Hello", out)
+        self.assertIn("world", out)
+        self.assertNotIn("evil()", out)
+        self.assertNotIn(".x{}", out)
+        self.assertEqual(strip("<script>only bad</script><!-- c -->"), "")
+        self.assertEqual(strip(""), "")
+        self.assertEqual(strip(None), "")  # type: ignore[arg-type]
+
+        # Entities are decoded (convert_charrefs=True).
+        self.assertEqual(strip("a &amp; b &lt;c&gt;"), "a & b <c>")
+
+        # Linearity guard: 2x adversarial input must not blow up super-linearly.
+        chunk = "<div><script>x" + "a" * 40 + "</script><span>t</span></div>"
+        small = chunk * 5000
+        big = small + small
+
+        t0 = _time.perf_counter()
+        r_small = strip(small)
+        t_small = _time.perf_counter() - t0
+        t0 = _time.perf_counter()
+        r_big = strip(big)
+        t_big = _time.perf_counter() - t0
+
+        self.assertLess(t_big, max(t_small * 3.5, 0.05))
+        self.assertEqual(len(r_small), len(r_big) // 2)
+
     def test_already_applied(self):
         content = (
             "def scrape()\n"
@@ -648,11 +696,12 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "max_keepalive_connections=0\n"
             "_searxng_original_getaddrinfo\n"
             "v19-bulletproof-scrape-fix\n"
+            "v20-redosos-scrape-fix\n"
             "host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B'))\n"
             ".localdomain\n"
             ".arpa\n"
-            "(?si)<script\n"
-            "(?si)<iframe\n"
+            "html.parser.HTMLParser\n"
+            "_strip_html_to_text\n"
             "SEARXNG_SCRAPE_MAX_DURATION\n"
             "import urllib\n"
             "import re\n"
@@ -705,9 +754,13 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertIn(".private", res)
         self.assertIn(".arpa", res)
         self.assertIn("resolves to a private/reserved IP", res)
-        self.assertIn("html.unescape", res)
-        self.assertIn("(?si)<script", res)
-        self.assertIn("(?si)<iframe", res)
+        self.assertIn("_strip_html_to_text", res)
+        self.assertIn("html.parser.HTMLParser", res)
+        self.assertIn("v20-redosos-scrape-fix", res)
+        # v20 ReDoS fix: the linear-time HTMLParser-based tag stripping
+        # replaced the chained `(?si)` regex substitutions.
+        self.assertNotIn("(?si)<script", res)
+        self.assertNotIn("(?si)<iframe", res)
         self.assertIn("SEARXNG_SCRAPE_MAX_DURATION", res)
         # R6 regression: host normalization + safe URL rebuild to keep the
         # DNS pin effective (Unicode dot / trailing dot / IDNA pin bypass).
@@ -719,14 +772,18 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         # direct, DNS-pinned connections instead of delegating DNS to a proxy.
         self.assertIn("trust_env=False", res)
         # R5 regression: whitespace regex collapsing and hex IP SSRF blocking
-        self.assertIn(r"re.sub(r'\s+', ' ', raw_text).strip()", res)
-        self.assertNotIn(r"re.sub(r'\\s+'", res)
+        # (v20: whitespace collapse now lives inside _strip_html_to_text, so
+        # assert the helper call instead of the inline re.sub form.)
+        self.assertIn("_strip_html_to_text(sample_html)", res)
+        self.assertIn("re.sub(r'\\s+', ' ', extractor.get_text()).strip()", res)
+        self.assertNotIn("re.sub(r'\\s+', ' ', raw_text).strip()", res)
 
     def test_scrape_hex_ip_and_whitespace_collapse(self):
         content = "import warnings\nfrom flask import Flask\n\n@app.route('/search')\ndef search():\n    pass\n"
         res = self.fn(content, "webapp.py")
-        self.assertIn(r"re.sub(r'\s+', ' ', raw_text).strip()", res)
-        self.assertNotIn(r"re.sub(r'\\s+'", res)
+        self.assertIn("_strip_html_to_text(sample_html)", res)
+        self.assertIn("re.sub(r'\\s+', ' ', extractor.get_text()).strip()", res)
+        self.assertNotIn("re.sub(r'\\s+', ' ', raw_text).strip()", res)
         self.assertIn("host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B'))", res)
         self.assertIn("ip_int = int(host_clean, 0)", res)
         self.assertIn("v4_ips = [ip for ip in valid_ips if ':' not in ip]", res)
@@ -872,6 +929,63 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         # Public global hosts must not be blocked statically
         self.assertFalse(is_blocked("example.com", resolve_dns=False))
         self.assertFalse(is_blocked("93.184.216.34", resolve_dns=False))
+
+    def test_strip_html_to_text_is_linear_and_correct(self):
+        """v20 ReDoS regression: the injected scrape fallback extractor must
+        be the HTMLParser-based helper, must strip script/style content, and
+        must run in linear time (no super-linear regex backtracking blowup).
+        """
+        import time as time_mod
+
+        content = "import warnings\nfrom flask import Flask\n\n@app.route('/search')\ndef search():\n    pass\n"
+        patched = self.fn(content, "webapp.py")
+
+        # The old regex-based fallback must be gone; the new helper must be used.
+        self.assertIn("def _strip_html_to_text(sample_html):", patched)
+        self.assertIn("raw_text = _strip_html_to_text(sample_html)", patched)
+        self.assertNotIn("(?si)<script", patched)
+        self.assertNotIn("(?si)<iframe", patched)
+
+        # Extract and exec the helper (extractor class + strip function).
+        helpers_code = re_mod.search(
+            r"(class _SxngHTMLTextExtractor.*?return re\.sub\(r'\\s\+', ' ', extractor\.get_text\(\)\)\.strip\(\))",
+            patched,
+            re_mod.DOTALL,
+        )
+        self.assertIsNotNone(helpers_code)
+        assert helpers_code is not None
+        namespace: dict[str, Any] = {
+            "re": re_mod,
+            "_SxngHTMLParser": __import__("html.parser", fromlist=["HTMLParser"]).HTMLParser,
+        }
+        exec(helpers_code.group(1), namespace)  # noqa: S102 - static test input
+        strip: Any = namespace["_strip_html_to_text"]
+
+        # Correctness: tags stripped, script content dropped, text kept.
+        out = strip("<p>Hello <b>world</b></p><script>evil()</script><style>.x{}</style>")
+        self.assertIn("Hello", out)
+        self.assertIn("world", out)
+        self.assertNotIn("evil()", out)
+        self.assertNotIn(".x{}", out)
+        self.assertEqual(strip("<script>only bad stuff</script>"), "")
+
+        # Linearity: doubling adversarial input must roughly double the time,
+        # not explode. Compare a large nested-ish document against 2x of it.
+        chunk = "<div><script>x" + "a" * 40 + "</script><span>t</span></div>"
+        small = chunk * 5000  # ~1 MB-scale adversarial document
+        big = small + small
+
+        t0 = time_mod.perf_counter()
+        r_small = strip(small)
+        t_small = time_mod.perf_counter() - t0
+        t0 = time_mod.perf_counter()
+        r_big = strip(big)
+        t_big = time_mod.perf_counter() - t0
+
+        # Linear behavior: 2x input must not take more than ~3.5x the time.
+        # (The old regex chain exhibited super-linear blowup on such input.)
+        self.assertLess(t_big, max(t_small * 3.5, 0.05))
+        self.assertEqual(len(r_small), len(r_big) // 2)
 
 
 class TestPatchProcessorsInit(unittest.TestCase):

@@ -20,14 +20,16 @@ Provides:
 from __future__ import annotations
 
 import contextlib
-import html
 import ipaddress
 import json
 import os
 import re
 import socket
 import sys
+import threading
+import time
 import urllib.parse
+from html.parser import HTMLParser
 from typing import Any
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +40,75 @@ if TOOLS_DIR not in sys.path:
 import agentic_search
 import retrieval_service
 import searxng_client
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """Linear-time HTML-to-text extractor used by the scrape fallback path.
+
+    Replaces the former regex-based tag stripping (case-insensitive
+    ``<script>``/``<style>``-style substitutions and a catch-all tag regex)
+    with a ``html.parser.HTMLParser`` driven walker so that adversarial HTML
+    cannot trigger catastrophic backtracking or super-linear regex work
+    (ReDoS / CPU-exhaustion DoS) while holding the scraper thread lock.
+    """
+
+    _IGNORE_DEPTH_TAGS = frozenset({"script", "style", "noscript", "iframe", "template", "svg", "head"})
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._ignore_depth = 0
+        self._ignore_tag: str = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag_l = tag.lower()
+        if self._ignore_depth:
+            if tag_l == self._ignore_tag and tag_l not in ("br", "img", "hr", "meta", "link", "input"):
+                self._ignore_depth += 1
+            return
+        if tag_l in self._IGNORE_DEPTH_TAGS:
+            self._ignore_depth = 1
+            self._ignore_tag = tag_l
+            return
+        if tag_l in ("br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"):
+            self._parts.append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag_l = tag.lower()
+        if self._ignore_depth:
+            if tag_l == self._ignore_tag:
+                self._ignore_depth -= 1
+            return
+        if tag_l in ("p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"):
+            self._parts.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        if self._ignore_depth:
+            return
+        self._parts.append(data)
+
+    def get_text(self) -> str:
+        return "".join(self._parts)
+
+
+def _strip_html_to_text(sample_html: str) -> str:
+    """Linear-time tag stripping for the scrape fallback text extractor.
+
+    Uses :class:`_HTMLTextExtractor` instead of chained regex substitutions so
+    worst-case cost stays O(n) in the (already size-capped) input length. This
+    prevents ReDoS/DoS via crafted HTML (unclosed ``<script>`` floods etc.).
+    """
+    if not sample_html:
+        return ""
+    extractor = _HTMLTextExtractor()
+    try:
+        extractor.feed(sample_html)
+        extractor.close()
+    except Exception:  # noqa: BLE001 - parser must never break scraping
+        # Defensive fallback: collapse to plain whitespace-only text so the
+        # caller treats it as "no extractable content" instead of crashing.
+        return ""
+    return re.sub(r"\s+", " ", extractor.get_text()).strip()
 
 
 def _parse_bool(val: Any, default: bool = True) -> bool:
@@ -302,16 +373,11 @@ def _scrape_url_direct(
                 content_text = None
 
         if not content_text and downloaded:
+            # Fallback to linear-time HTML text extraction (ReDoS-safe; the
+            # former chained case-insensitive tag-stripping regex calls had
+            # super-linear worst-case cost on adversarial HTML).
             sample_html = downloaded[:1_000_000]
-            raw_text = re.sub(r"(?si)<!--.*?-->", " ", sample_html)
-            raw_text = re.sub(r"(?si)<script.*?>.*?</script>", " ", raw_text)
-            raw_text = re.sub(r"(?si)<style.*?>.*?</style>", " ", raw_text)
-            raw_text = re.sub(r"(?si)<noscript.*?>.*?</noscript>", " ", raw_text)
-            raw_text = re.sub(r"(?si)<iframe.*?>.*?</iframe>", " ", raw_text)
-            raw_text = re.sub(r"(?si)<template.*?>.*?</template>", " ", raw_text)
-            raw_text = re.sub(r"<[^>]+>", " ", raw_text)
-            raw_text = html.unescape(raw_text)
-            raw_text = re.sub(r"\s+", " ", raw_text).strip()
+            raw_text = _strip_html_to_text(sample_html)
             if raw_text:
                 content_text = raw_text[:5000]
 
@@ -1486,7 +1552,7 @@ _EMBEDDED_AI_WORKSPACE_HTML = r"""<!DOCTYPE html>
   --border-hover: #4f46e5;
   --text-main: #f1f5f9;
   --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --text-muted: #8494ac;
   --accent: #6366f1;
   --accent-hover: #818cf8;
   --accent-soft: rgba(99, 102, 241, 0.14);
@@ -1507,7 +1573,7 @@ _EMBEDDED_AI_WORKSPACE_HTML = r"""<!DOCTYPE html>
   --border-hover: #4f46e5;
   --text-main: #0f172a;
   --text-secondary: #475569;
-  --text-muted: #64748b;
+  --text-muted: #475569;
   --accent: #4f46e5;
   --accent-hover: #4338ca;
   --accent-soft: rgba(79, 70, 229, 0.09);
@@ -1736,7 +1802,7 @@ main.workspace {
 .search-input-wrap .search-icon-left {
   position: absolute;
   left: 0.85rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   pointer-events: none;
 }
 .search-input {
@@ -1758,7 +1824,7 @@ main.workspace {
   position: absolute;
   right: 0.75rem;
   font-size: 0.72rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   background: var(--bg-elevated);
   border: 1px solid var(--border-color);
   padding: 0.15rem 0.4rem;
@@ -1803,7 +1869,7 @@ main.workspace {
   white-space: nowrap;
 }
 .suggest-item .ui-icon {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   flex-shrink: 0;
   transition: color 0.12s ease;
 }
@@ -1825,7 +1891,7 @@ main.workspace {
   font-size: 0.76rem;
 }
 .recent-label {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-weight: 600;
   margin-right: 0.2rem;
   display: inline-flex;
@@ -1853,7 +1919,7 @@ main.workspace {
 .recent-clear-btn {
   background: transparent;
   border: none;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 0.72rem;
   margin-left: 0.2rem;
@@ -2314,7 +2380,7 @@ main.workspace {
   flex-direction: column;
   gap: 0.3rem;
   font-size: 0.74rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 .token-bar-bg {
   width: 100%;
@@ -2359,7 +2425,7 @@ main.workspace {
 }
 .classic-url-tag {
   font-size: 0.76rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -2452,7 +2518,7 @@ main.workspace {
 }
 .image-card-domain {
   font-size: 0.7rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* Settings Dashboard View */
@@ -2481,7 +2547,7 @@ main.workspace {
 .stat-card-label {
   font-size: 0.74rem;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -2776,7 +2842,7 @@ footer.ws-footer {
   text-align: center;
   padding: 1rem;
   font-size: 0.76rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   border-top: 1px solid var(--border-color);
   background: var(--bg-surface);
 }
@@ -2822,9 +2888,11 @@ footer.ws-footer {
               name="q"
               type="text"
               class="search-input"
+              role="combobox"
               aria-label="Search query or target URL"
               aria-autocomplete="list"
               aria-controls="suggest-box"
+              aria-expanded="false"
               placeholder="キーワード・質問 または URL (https://...) を入力 — URLは自動で本文抽出モードに切替..."
               autocomplete="off"
               autofocus
@@ -3490,6 +3558,25 @@ footer.ws-footer {
         suggestBox.classList.remove('show');
         suggestBox.innerHTML = '';
         activeSuggestIndex = -1;
+        var qEl = document.getElementById('q');
+        if (qEl) {
+          qEl.setAttribute('aria-expanded', 'false');
+          qEl.removeAttribute('aria-activedescendant');
+        }
+      }
+
+      function setActiveSuggestAria() {
+        var qEl = document.getElementById('q');
+        if (!qEl) return;
+        qEl.setAttribute('aria-expanded', 'true');
+        if (activeSuggestIndex >= 0) {
+          var items = suggestBox.querySelectorAll('.suggest-item');
+          if (items[activeSuggestIndex]) {
+            qEl.setAttribute('aria-activedescendant', items[activeSuggestIndex].id);
+          }
+        } else {
+          qEl.removeAttribute('aria-activedescendant');
+        }
       }
 
       function extractSuggestions(data) {
@@ -3554,10 +3641,12 @@ footer.ws-footer {
             }
             suggestBox.innerHTML = '';
             activeSuggestIndex = -1;
-            list.slice(0, 8).forEach(function (item) {
+            list.slice(0, 8).forEach(function (item, idx) {
               var div = document.createElement('div');
               div.className = 'suggest-item';
               div.setAttribute('role', 'option');
+              div.id = 'suggest-opt-' + idx;
+              div.setAttribute('aria-selected', 'false');
               div.innerHTML = icon('search') + '<span>' + escapeHtml(item) + '</span>';
               div.addEventListener('mousedown', function (e) {
                 e.preventDefault();
@@ -3568,6 +3657,7 @@ footer.ws-footer {
               suggestBox.appendChild(div);
             });
             suggestBox.classList.add('show');
+            setActiveSuggestAria();
           })
           .catch(function () { closeSuggest(); });
       }
@@ -3588,15 +3678,23 @@ footer.ws-footer {
         if (e.key === 'ArrowDown') {
           e.preventDefault();
           activeSuggestIndex = (activeSuggestIndex + 1) % items.length;
-          items.forEach(function (el, i) { el.classList.toggle('active', i === activeSuggestIndex); });
+          items.forEach(function (el, i) {
+            el.classList.toggle('active', i === activeSuggestIndex);
+            el.setAttribute('aria-selected', i === activeSuggestIndex ? 'true' : 'false');
+          });
           var selText = items[activeSuggestIndex].querySelector('span').textContent;
           document.getElementById('q').value = selText;
+          setActiveSuggestAria();
         } else if (e.key === 'ArrowUp') {
           e.preventDefault();
           activeSuggestIndex = (activeSuggestIndex - 1 + items.length) % items.length;
-          items.forEach(function (el, i) { el.classList.toggle('active', i === activeSuggestIndex); });
+          items.forEach(function (el, i) {
+            el.classList.toggle('active', i === activeSuggestIndex);
+            el.setAttribute('aria-selected', i === activeSuggestIndex ? 'true' : 'false');
+          });
           var selText2 = items[activeSuggestIndex].querySelector('span').textContent;
           document.getElementById('q').value = selText2;
+          setActiveSuggestAria();
         } else if (e.key === 'Escape') {
           closeSuggest();
         }
@@ -5216,6 +5314,62 @@ footer.ws-footer {
 
 AI_WORKSPACE_HTML = _load_ai_workspace_html()
 
+# --- Tier 0: Per-client rate limiting state (module level for testability) ---
+_RATE_CAPACITY = 15.0  # burst size
+_RATE_REFILL_PER_SEC = 0.5  # sustained: 30 requests / minute
+_RATE_MAX_BUCKETS = 1024  # bound memory against IP spoof floods
+_RATELOCK = threading.Lock()
+_RATE_BUCKETS: dict[str, _TokenBucket] = {}
+_RATE_LIMITED_PATHS = frozenset(
+    {
+        "/deep_search",
+        "/api/search",
+        "/api/retrieval",
+        "/api/scrape_analyze",
+    }
+)
+
+
+class _TokenBucket:
+    """Thread-safe token-bucket rate limiter state keyed by client IP.
+
+    Refills continuously at ``_RATE_REFILL_PER_SEC`` tokens per second up to
+    ``_RATE_CAPACITY``; each request consumes one token. Prevents
+    resource-exhaustion DoS via the expensive search/scrape endpoints
+    (network fan-out, HTML scraping).
+    """
+
+    __slots__ = ("tokens", "updated")
+
+    def __init__(self, tokens: float, updated: float) -> None:
+        self.tokens = tokens
+        self.updated = updated
+
+
+def _rate_limit_check(client_id: str) -> bool:
+    """Take one token for ``client_id``; return True when allowed."""
+    now = time.monotonic()
+    with _RATELOCK:
+        bucket = _RATE_BUCKETS.get(client_id)
+        if bucket is None:
+            if len(_RATE_BUCKETS) >= _RATE_MAX_BUCKETS:
+                # Evict stalest entries (oldest refill timestamps first)
+                # to keep the table bounded under address churn.
+                stale_cutoff = now - (_RATE_CAPACITY / _RATE_REFILL_PER_SEC)
+                for stale_key in [k for k, v in _RATE_BUCKETS.items() if v.updated < stale_cutoff]:
+                    del _RATE_BUCKETS[stale_key]
+                if len(_RATE_BUCKETS) >= _RATE_MAX_BUCKETS and client_id not in _RATE_BUCKETS:
+                    return False  # under flood: reject unknown clients
+            bucket = _TokenBucket(_RATE_CAPACITY, now)
+            _RATE_BUCKETS[client_id] = bucket
+        elapsed = now - bucket.updated
+        bucket.tokens = min(_RATE_CAPACITY, bucket.tokens + elapsed * _RATE_REFILL_PER_SEC)
+        bucket.updated = now
+        if bucket.tokens >= 1.0:
+            bucket.tokens -= 1.0
+            return True
+        return False
+
 
 def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
     """Register SearXNG Next AI-First WebUI and API routes onto the Flask app idempotently."""
@@ -5294,6 +5448,38 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             json.dumps([q, results, [], [], relevances]),
             mimetype="application/x-suggestions+json",
         )
+
+    # --- Tier 0: Per-client rate limiting for expensive API routes ---
+    def _rate_limit_client_id() -> str:
+        """Best-effort client identity: REMOTE_ADDR only.
+
+        ``X-Forwarded-For`` is intentionally NOT trusted: this app binds to
+        localhost (per DEVELOPMENT.md) and any header can be forged by a
+        direct client to exhaust distinct bucket keys (memory DoS). Behind a
+        trusted reverse proxy, the proxy address is the stable identity and
+        the proxy itself should enforce per-client limits (see DEVELOPMENT.md
+        nginx ``limit_req_zone`` guidance).
+        """
+        addr = request.remote_addr or "unknown"
+        return ipaddress.ip_address(addr).compressed if _is_valid_ip(addr) else addr
+
+    def _is_valid_ip(addr: str) -> bool:
+        with contextlib.suppress(ValueError):
+            ipaddress.ip_address(addr)
+            return True
+        return False
+
+    @app.before_request
+    def sxng_rate_limit_guard() -> Any:
+        if request.path in _RATE_LIMITED_PATHS:
+            client_id = _rate_limit_client_id()
+            if not _rate_limit_check(client_id):
+                retry_after = max(1, round(1.0 / _RATE_REFILL_PER_SEC))
+                resp = jsonify({"error": "Rate limit exceeded", "retry_after": retry_after})
+                resp.status_code = 429
+                resp.headers["Retry-After"] = str(retry_after)
+                return resp
+        return None
 
     # --- Tier A: app.before_request hook (Earliest Interception) ---
     @app.before_request

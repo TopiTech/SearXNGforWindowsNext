@@ -11,7 +11,7 @@
   --border-hover: #4f46e5;
   --text-main: #f1f5f9;
   --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --text-muted: #8494ac;
   --accent: #6366f1;
   --accent-hover: #818cf8;
   --accent-soft: rgba(99, 102, 241, 0.14);
@@ -32,7 +32,7 @@
   --border-hover: #4f46e5;
   --text-main: #0f172a;
   --text-secondary: #475569;
-  --text-muted: #64748b;
+  --text-muted: #475569;
   --accent: #4f46e5;
   --accent-hover: #4338ca;
   --accent-soft: rgba(79, 70, 229, 0.09);
@@ -261,7 +261,7 @@ main.workspace {
 .search-input-wrap .search-icon-left {
   position: absolute;
   left: 0.85rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   pointer-events: none;
 }
 .search-input {
@@ -283,7 +283,7 @@ main.workspace {
   position: absolute;
   right: 0.75rem;
   font-size: 0.72rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   background: var(--bg-elevated);
   border: 1px solid var(--border-color);
   padding: 0.15rem 0.4rem;
@@ -328,7 +328,7 @@ main.workspace {
   white-space: nowrap;
 }
 .suggest-item .ui-icon {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   flex-shrink: 0;
   transition: color 0.12s ease;
 }
@@ -350,7 +350,7 @@ main.workspace {
   font-size: 0.76rem;
 }
 .recent-label {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-weight: 600;
   margin-right: 0.2rem;
   display: inline-flex;
@@ -378,7 +378,7 @@ main.workspace {
 .recent-clear-btn {
   background: transparent;
   border: none;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 0.72rem;
   margin-left: 0.2rem;
@@ -839,7 +839,7 @@ main.workspace {
   flex-direction: column;
   gap: 0.3rem;
   font-size: 0.74rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 .token-bar-bg {
   width: 100%;
@@ -884,7 +884,7 @@ main.workspace {
 }
 .classic-url-tag {
   font-size: 0.76rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -977,7 +977,7 @@ main.workspace {
 }
 .image-card-domain {
   font-size: 0.7rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* Settings Dashboard View */
@@ -1006,7 +1006,7 @@ main.workspace {
 .stat-card-label {
   font-size: 0.74rem;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -1301,7 +1301,7 @@ footer.ws-footer {
   text-align: center;
   padding: 1rem;
   font-size: 0.76rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   border-top: 1px solid var(--border-color);
   background: var(--bg-surface);
 }

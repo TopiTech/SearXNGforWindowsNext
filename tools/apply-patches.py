@@ -1130,11 +1130,12 @@ def patch_webapp_scrape_route(content, path):
         "max_keepalive_connections=0",
         "_searxng_original_getaddrinfo",
         "v19-bulletproof-scrape-fix",
+        "v20-redosos-scrape-fix",
         "host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B'))",
         ".localdomain",
         ".arpa",
-        "(?si)<script",
-        "(?si)<iframe",
+        "html.parser.HTMLParser",
+        "_strip_html_to_text",
         "SEARXNG_SCRAPE_MAX_DURATION",
         "import urllib",
         "import re",
@@ -1215,6 +1216,69 @@ def patch_webapp_scrape_route(content, path):
     scrape_route_code = r'''
 
 # --- GenAI Scrape Helpers ---
+# v20-redosos-scrape-fix: the former chained regex tag substitutions
+# (case-insensitive script/style/noscript/iframe/template removal plus a
+# catch-all tag regex) had super-linear worst-case cost on adversarial HTML.
+# Tag stripping is now driven by html.parser.HTMLParser, keeping worst-case
+# cost linear in input size.
+from html.parser import HTMLParser as _SxngHTMLParser
+
+
+class _SxngHTMLTextExtractor(_SxngHTMLParser):
+    """Linear-time HTML-to-text extractor (ReDoS-safe replacement for regex stripping)."""
+
+    _IGNORE_DEPTH_TAGS = frozenset({'script', 'style', 'noscript', 'iframe', 'template', 'svg', 'head'})
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._parts = []
+        self._ignore_depth = 0
+        self._ignore_tag = ''
+
+    def handle_starttag(self, tag, attrs):
+        tag_l = tag.lower()
+        if self._ignore_depth:
+            if tag_l == self._ignore_tag and tag_l not in ('br', 'img', 'hr', 'meta', 'link', 'input'):
+                self._ignore_depth += 1
+            return
+        if tag_l in self._IGNORE_DEPTH_TAGS:
+            self._ignore_depth = 1
+            self._ignore_tag = tag_l
+            return
+        if tag_l in ('br', 'p', 'div', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+            self._parts.append(' ')
+
+    def handle_endtag(self, tag):
+        tag_l = tag.lower()
+        if self._ignore_depth:
+            if tag_l == self._ignore_tag:
+                self._ignore_depth -= 1
+            return
+        if tag_l in ('p', 'div', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+            self._parts.append(' ')
+
+    def handle_data(self, data):
+        if self._ignore_depth:
+            return
+        self._parts.append(data)
+
+    def get_text(self):
+        return ''.join(self._parts)
+
+
+def _strip_html_to_text(sample_html):
+    """Linear-time tag stripping for the scrape fallback text extractor."""
+    if not sample_html:
+        return ''
+    extractor = _SxngHTMLTextExtractor()
+    try:
+        extractor.feed(sample_html)
+        extractor.close()
+    except Exception:
+        return ''
+    return re.sub(r'\s+', ' ', extractor.get_text()).strip()
+
+
 class _ScrapeBlockedError(Exception):
     """Raised by /scrape when a request is denied for security reasons."""
 
@@ -1706,17 +1770,12 @@ def scrape():
             content_text = None
 
         if not content_text and downloaded:
-            # Fallback to basic HTML text extraction if trafilatura returns None/empty
+            # Fallback to linear-time HTML text extraction (ReDoS-safe).
+            # The former chained case-insensitive tag-stripping regex calls
+            # had super-linear worst-case cost on adversarial HTML, so tag
+            # stripping is now driven by `html.parser.HTMLParser` (O(n)).
             sample_html = downloaded[:1_000_000]
-            raw_text = re.sub(r'(?si)<!--.*?-->', ' ', sample_html)
-            raw_text = re.sub(r'(?si)<script.*?>.*?</script>', ' ', raw_text)
-            raw_text = re.sub(r'(?si)<style.*?>.*?</style>', ' ', raw_text)
-            raw_text = re.sub(r'(?si)<noscript.*?>.*?</noscript>', ' ', raw_text)
-            raw_text = re.sub(r'(?si)<iframe.*?>.*?</iframe>', ' ', raw_text)
-            raw_text = re.sub(r'(?si)<template.*?>.*?</template>', ' ', raw_text)
-            raw_text = re.sub(r'<[^>]+>', ' ', raw_text)
-            raw_text = html.unescape(raw_text)
-            raw_text = re.sub(r'\s+', ' ', raw_text).strip()
+            raw_text = _strip_html_to_text(sample_html)
             if raw_text:
                 content_text = raw_text[:5000]
 

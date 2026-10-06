@@ -298,6 +298,25 @@
         suggestBox.classList.remove('show');
         suggestBox.innerHTML = '';
         activeSuggestIndex = -1;
+        var qEl = document.getElementById('q');
+        if (qEl) {
+          qEl.setAttribute('aria-expanded', 'false');
+          qEl.removeAttribute('aria-activedescendant');
+        }
+      }
+
+      function setActiveSuggestAria() {
+        var qEl = document.getElementById('q');
+        if (!qEl) return;
+        qEl.setAttribute('aria-expanded', 'true');
+        if (activeSuggestIndex >= 0) {
+          var items = suggestBox.querySelectorAll('.suggest-item');
+          if (items[activeSuggestIndex]) {
+            qEl.setAttribute('aria-activedescendant', items[activeSuggestIndex].id);
+          }
+        } else {
+          qEl.removeAttribute('aria-activedescendant');
+        }
       }
 
       function extractSuggestions(data) {
@@ -362,10 +381,12 @@
             }
             suggestBox.innerHTML = '';
             activeSuggestIndex = -1;
-            list.slice(0, 8).forEach(function (item) {
+            list.slice(0, 8).forEach(function (item, idx) {
               var div = document.createElement('div');
               div.className = 'suggest-item';
               div.setAttribute('role', 'option');
+              div.id = 'suggest-opt-' + idx;
+              div.setAttribute('aria-selected', 'false');
               div.innerHTML = icon('search') + '<span>' + escapeHtml(item) + '</span>';
               div.addEventListener('mousedown', function (e) {
                 e.preventDefault();
@@ -376,6 +397,7 @@
               suggestBox.appendChild(div);
             });
             suggestBox.classList.add('show');
+            setActiveSuggestAria();
           })
           .catch(function () { closeSuggest(); });
       }
@@ -396,15 +418,23 @@
         if (e.key === 'ArrowDown') {
           e.preventDefault();
           activeSuggestIndex = (activeSuggestIndex + 1) % items.length;
-          items.forEach(function (el, i) { el.classList.toggle('active', i === activeSuggestIndex); });
+          items.forEach(function (el, i) {
+            el.classList.toggle('active', i === activeSuggestIndex);
+            el.setAttribute('aria-selected', i === activeSuggestIndex ? 'true' : 'false');
+          });
           var selText = items[activeSuggestIndex].querySelector('span').textContent;
           document.getElementById('q').value = selText;
+          setActiveSuggestAria();
         } else if (e.key === 'ArrowUp') {
           e.preventDefault();
           activeSuggestIndex = (activeSuggestIndex - 1 + items.length) % items.length;
-          items.forEach(function (el, i) { el.classList.toggle('active', i === activeSuggestIndex); });
+          items.forEach(function (el, i) {
+            el.classList.toggle('active', i === activeSuggestIndex);
+            el.setAttribute('aria-selected', i === activeSuggestIndex ? 'true' : 'false');
+          });
           var selText2 = items[activeSuggestIndex].querySelector('span').textContent;
           document.getElementById('q').value = selText2;
+          setActiveSuggestAria();
         } else if (e.key === 'Escape') {
           closeSuggest();
         }

@@ -334,6 +334,58 @@ class TestWebUIColorContrast(unittest.TestCase):
         darker = min(l1, l2)
         return (lighter + 0.05) / (darker + 0.05)
 
+    def test_light_theme_muted_text_contrast(self) -> None:
+        """Light theme --text-muted must meet WCAG AA (>= 4.5:1) against light backgrounds."""
+        html = webui_next.AI_WORKSPACE_HTML
+        light_theme_match = re.search(r'\[data-theme=["\']light["\']\]\s*\{(.*?)\}', html, re.DOTALL)
+        self.assertIsNotNone(light_theme_match, "Light theme CSS block not found")
+        assert light_theme_match is not None
+        theme_css = light_theme_match.group(1)
+
+        muted_match = re.search(r"--text-muted:\s*(#[0-9a-fA-F]{6});", theme_css)
+        self.assertIsNotNone(muted_match, "--text-muted variable not defined in light theme")
+        assert muted_match is not None
+        muted_hex = muted_match.group(1).lower()
+        self.assertEqual(muted_hex, "#475569", f"Expected #475569, got {muted_hex}")
+
+        for bg in ("#ffffff", "#f8fafc", "#f1f5f9"):
+            ratio = self._contrast_ratio(muted_hex, bg)
+            self.assertGreaterEqual(
+                ratio,
+                4.5,
+                f"--text-muted {muted_hex} on {bg} contrast ratio {ratio:.2f}:1 must meet WCAG AA (>= 4.5:1)",
+            )
+
+        # The old value must stay non-compliant on #f1f5f9 so a regression is detectable.
+        old_ratio = self._contrast_ratio("#64748b", "#f1f5f9")
+        self.assertLess(old_ratio, 4.5, f"Old muted #64748b on #f1f5f9 should fail AA, got {old_ratio:.2f}:1")
+
+    def test_dark_theme_muted_text_contrast(self) -> None:
+        """Dark theme --text-muted must meet WCAG AA (>= 4.5:1) against dark backgrounds."""
+        html = webui_next.AI_WORKSPACE_HTML
+        dark_match = re.search(r':root,\s*\[data-theme=["\']dark["\']\]\s*\{(.*?)\}', html, re.DOTALL)
+        self.assertIsNotNone(dark_match, "Dark theme CSS block not found")
+        assert dark_match is not None
+        theme_css = dark_match.group(1)
+
+        muted_match = re.search(r"--text-muted:\s*(#[0-9a-fA-F]{6});", theme_css)
+        self.assertIsNotNone(muted_match, "--text-muted variable not defined in dark theme")
+        assert muted_match is not None
+        muted_hex = muted_match.group(1).lower()
+        self.assertEqual(muted_hex, "#8494ac", f"Expected #8494ac, got {muted_hex}")
+
+        for bg in ("#0b0f19", "#111827", "#1e293b"):
+            ratio = self._contrast_ratio(muted_hex, bg)
+            self.assertGreaterEqual(
+                ratio,
+                4.5,
+                f"--text-muted {muted_hex} on {bg} contrast ratio {ratio:.2f}:1 must meet WCAG AA (>= 4.5:1)",
+            )
+
+        # The old value must stay non-compliant on #1e293b so a regression is detectable.
+        old_ratio = self._contrast_ratio("#64748b", "#1e293b")
+        self.assertLess(old_ratio, 4.5, f"Old muted #64748b on #1e293b should fail AA, got {old_ratio:.2f}:1")
+
     def test_light_theme_amber_value(self) -> None:
         html = webui_next.AI_WORKSPACE_HTML
         light_theme_match = re.search(r'\[data-theme=["\']light["\']\]\s*\{(.*?)\}', html, re.DOTALL)
@@ -567,6 +619,18 @@ class TestWebUIAutocompleter(unittest.TestCase):
         self.assertIn("extractSuggestions(", html)
         self.assertIn("'X-Requested-With': 'XMLHttpRequest'", html)
 
+    def test_combobox_aria_pattern(self) -> None:
+        """Input must expose combobox pattern with expand state and activedescendant sync (F3.x)."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn('role="combobox"', html)
+        self.assertIn('aria-expanded="false"', html)
+        self.assertIn("aria-expanded', 'true'", html)
+        self.assertIn("aria-activedescendant", html)
+        self.assertIn("'suggest-opt-'", html)
+        self.assertIn("aria-selected", html)
+        self.assertIn("function setActiveSuggestAria()", html)
+        self.assertGreaterEqual(html.count("setActiveSuggestAria()"), 3)
+
     def test_autocomplete_general_settings_markup(self) -> None:
         html = webui_next.AI_WORKSPACE_HTML
         self.assertIn('id="pref-autocomplete"', html)
@@ -701,6 +765,113 @@ class TestWebUIRouteParameterForwarding(unittest.TestCase):
             resp = self.client.get("/api/scrape_analyze?url=https://example.com/article&timeout=14.0")
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(recorded_args.get("timeout"), 14.0)
+
+
+class TestWebUIRateLimiting(unittest.TestCase):
+    """Test per-client token-bucket rate limiting on expensive API routes (F3.12)."""
+
+    LIMITED_DUMMY = "/_rl_limited_dummy"
+    FREE_DUMMY = "/_rl_free_dummy"
+
+    def setUp(self) -> None:
+        self.app = Flask(__name__)
+        self.app.route(self.LIMITED_DUMMY)(self._limited_view)
+        self.app.route(self.FREE_DUMMY)(self._free_view)
+        self._original_paths = webui_next._RATE_LIMITED_PATHS
+        webui_next._RATE_LIMITED_PATHS = frozenset({self.LIMITED_DUMMY})
+        self._original_buckets = dict(webui_next._RATE_BUCKETS)
+        webui_next.register_next_webui(self.app, None)
+        self.client = self.app.test_client()
+
+    def _limited_view(self) -> str:
+        return "ok"
+
+    def _free_view(self) -> str:
+        return "ok"
+
+    def tearDown(self) -> None:
+        webui_next._RATE_LIMITED_PATHS = self._original_paths
+        webui_next._RATE_BUCKETS.clear()
+        webui_next._RATE_BUCKETS.update(self._original_buckets)
+
+    def test_rate_limited_paths_cover_expensive_routes(self) -> None:
+        self.assertIn(
+            "/deep_search",
+            self._original_paths,
+            "/deep_search must be rate limited (expensive network fan-out)",
+        )
+        self.assertIn(
+            "/api/search",
+            self._original_paths,
+            "/api/search must be rate limited (expensive network fan-out)",
+        )
+        self.assertIn(
+            "/api/retrieval",
+            self._original_paths,
+            "/api/retrieval must be rate limited (expensive network fan-out)",
+        )
+        self.assertIn(
+            "/api/scrape_analyze",
+            self._original_paths,
+            "/api/scrape_analyze must be rate limited (expensive HTML scraping)",
+        )
+
+    def _exhaust_then_verify_429(self, path: str, max_requests: int) -> None:
+        """Send requests until 429 appears, and assert it does within bounds."""
+        codes = []
+        for _ in range(max_requests):
+            resp = self.client.get(path)
+            codes.append(resp.status_code)
+            if resp.status_code == 429:
+                break
+        self.assertIn(
+            429,
+            codes,
+            f"Expected a 429 response within {max_requests} requests to {path}",
+        )
+        last_resp = self.client.get(path)
+        self.assertEqual(last_resp.status_code, 429)
+        self.assertIn("Retry-After", last_resp.headers)
+        self.assertGreaterEqual(int(last_resp.headers["Retry-After"]), 1)
+
+    def test_rate_limit_bounded_burst_then_429(self) -> None:
+        self._exhaust_then_verify_429(self.LIMITED_DUMMY, 25)
+
+    def test_rate_limit_recovers_after_refill(self) -> None:
+        # Drain the bucket
+        for _ in range(25):
+            resp = self.client.get(self.LIMITED_DUMMY)
+            if resp.status_code == 429:
+                break
+        # Force token refill by back-dating the bucket timestamp
+        buckets = webui_next._RATE_BUCKETS
+        self.assertTrue(buckets, "Expected at least one rate bucket to exist")
+        for bucket in buckets.values():
+            bucket.updated -= 100.0  # 100s * 0.5 tokens/s = +50 tokens (capped)
+        resp = self.client.get(self.LIMITED_DUMMY)
+        self.assertEqual(resp.status_code, 200)
+
+    def test_rate_limit_scope_is_only_limited_routes(self) -> None:
+        # Unlisted (cheap) routes must never be rate limited and must not consume tokens
+        tokens_before = [bucket.tokens for bucket in webui_next._RATE_BUCKETS.values()]
+        for _ in range(30):
+            resp = self.client.get(self.FREE_DUMMY)
+            self.assertEqual(resp.status_code, 200)
+        tokens_after = [bucket.tokens for bucket in webui_next._RATE_BUCKETS.values()]
+        self.assertEqual(tokens_before, tokens_after, "Free routes must not consume rate-limit tokens")
+
+    def test_rate_limit_ignores_forwarded_for_header(self) -> None:
+        # Forged X-Forwarded-For must not grant fresh buckets (identity = REMOTE_ADDR)
+        seen_429 = False
+        for i in range(30):
+            resp = self.client.get(
+                self.LIMITED_DUMMY,
+                headers={"X-Forwarded-For": f"10.0.0.{i}"},
+            )
+            if resp.status_code == 429:
+                seen_429 = True
+                break
+        self.assertTrue(seen_429, "Spoofed XFF headers must not bypass the limiter")
 
 
 class TestWebUIImageGrid(unittest.TestCase):
