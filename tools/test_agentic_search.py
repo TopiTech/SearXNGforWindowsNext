@@ -241,6 +241,26 @@ class TestSpeculativeFetcher(unittest.TestCase):
         self.assertTrue(updated[0].is_scraped)
         self.assertEqual(observed, [True], "scrape workers must run as daemon threads")
 
+    def test_fetch_pages_caps_max_fetch_to_ten(self) -> None:
+        """Verify speculative scraping is safely capped at 10 pages maximum."""
+        scraped_urls: list[str] = []
+
+        def tracking_scrape(url: str, **kwargs):
+            scraped_urls.append(url)
+            return {"content": f"content of {url}"}
+
+        fetcher = agentic_search.SpeculativeFetcher(scrape_func=tracking_scrape, max_workers=2)
+        items = [
+            agentic_search.SearchResultItem(
+                title=f"Page {i}", url=f"https://example.com/{i}", domain="example.com", content=""
+            )
+            for i in range(25)
+        ]
+        updated = fetcher.fetch_pages(items, max_fetch=25, timeout=5.0)
+        self.assertEqual(len(updated), 25)
+        self.assertLessEqual(len(scraped_urls), 10)
+        self.assertEqual(sum(1 for it in updated if it.is_scraped), 10)
+
 
 class TestTokenBudgeter(unittest.TestCase):
     """Test token estimation and markdown packing."""

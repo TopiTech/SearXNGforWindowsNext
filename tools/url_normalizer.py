@@ -362,8 +362,8 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
     except ValueError:
         return False
 
-    # Block credentials in URL
-    if parsed.username or parsed.password:
+    # Block credentials or userinfo in URL (mitigates SSRF parser confusion)
+    if parsed.username or parsed.password or "@" in (parsed.netloc or ""):
         return False
 
     raw_host = parsed.hostname or ""

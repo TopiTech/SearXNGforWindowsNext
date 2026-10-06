@@ -2490,6 +2490,10 @@ main.workspace {
   transform: translateY(-2px);
   border-color: var(--border-hover);
 }
+.image-card.selected-card {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
 .image-card-thumb-wrap {
   width: 100%;
   height: 135px;
@@ -2595,6 +2599,10 @@ main.workspace {
 .video-card:hover {
   border-color: var(--border-hover);
   box-shadow: var(--shadow);
+}
+.video-card.selected-card {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .video-thumb-wrap {
   width: 220px;
@@ -3532,8 +3540,9 @@ footer.ws-footer {
       function safeHttpUrl(url) {
         var s = String(url == null ? '' : url).trim();
         if (!s) return '#';
+        if (!/^https?:\/\//i.test(s)) return '#';
         try {
-          var parsed = new URL(s, window.location.origin);
+          var parsed = new URL(s);
           if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
             return parsed.href;
           }
@@ -3544,7 +3553,7 @@ footer.ws-footer {
       function safeImageUrl(url) {
         var s = String(url == null ? '' : url).trim();
         if (!s) return '';
-        if (/^data:image\/(?:png|jpeg|jpg|webp|gif|svg\+xml);base64,[a-z0-9+/=]+$/i.test(s)) {
+        if (/^data:image\/(?:png|jpeg|jpg|webp|gif);base64,[a-z0-9+/=]+$/i.test(s)) {
           return s;
         }
         var http = safeHttpUrl(s);
@@ -3876,6 +3885,7 @@ footer.ws-footer {
       });
 
       document.getElementById('q').addEventListener('keydown', function (e) {
+        if (e.isComposing || e.keyCode === 229) return;
         var items = suggestBox.querySelectorAll('.suggest-item');
         if (!items.length || !suggestBox.classList.contains('show')) return;
 
@@ -3899,6 +3909,14 @@ footer.ws-footer {
           var selText2 = items[activeSuggestIndex].querySelector('span').textContent;
           document.getElementById('q').value = selText2;
           setActiveSuggestAria();
+        } else if (e.key === 'Enter') {
+          if (activeSuggestIndex >= 0 && items[activeSuggestIndex]) {
+            e.preventDefault();
+            var chosen = items[activeSuggestIndex].querySelector('span').textContent;
+            document.getElementById('q').value = chosen;
+            closeSuggest();
+            executeCurrentAction();
+          }
         } else if (e.key === 'Escape') {
           closeSuggest();
         }
@@ -4126,10 +4144,14 @@ footer.ws-footer {
         fullHtml = fullHtml.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
         fullHtml = fullHtml.replace(/\*([^*]+)\*/g, '<em>$1</em>');
 
-        // 5. Links
-        fullHtml = fullHtml.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)\"\']+)\)/g, function (_, label, rawUrl) {
+        // 5. Links (handles escaped brackets in titles from escape_markdown_link)
+        fullHtml = fullHtml.replace(/\[((?:\\\]|[^\]])+)\]\((https?:\/\/[^\s\)\"\']+)\)/g, function (_, label, rawUrl) {
           var cleanUrl = safeHttpUrl(rawUrl.replace(/&amp;/g, '&'));
-          return '<a href="' + escapeHtml(cleanUrl) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+          var displayLabel = label.replace(/\\([\[\]])/g, '$1');
+          if (cleanUrl === '#') {
+            return displayLabel;
+          }
+          return '<a href="' + escapeHtml(cleanUrl) + '" target="_blank" rel="noopener noreferrer">' + displayLabel + '</a>';
         });
 
         // 6. Restore code blocks and inline code (using function return to prevent $ pattern interpretation)
@@ -5658,21 +5680,32 @@ footer.ws-footer {
           var cards = Array.prototype.slice.call(document.querySelectorAll('#' + containerId + ' article'));
           if (!cards.length) return;
 
-          if (e.key === 'j' || e.key === 'ArrowDown') {
+          function activateCard(targetIdx) {
+            state.selectedCardIndex = targetIdx;
+            cards.forEach(function (c, idx) {
+              var isSel = (idx === state.selectedCardIndex);
+              c.classList.toggle('selected-card', isSel);
+              c.setAttribute('aria-selected', isSel ? 'true' : 'false');
+            });
+            var targetCard = cards[state.selectedCardIndex];
+            if (targetCard) {
+              targetCard.setAttribute('tabindex', '-1');
+              targetCard.focus({ preventScroll: true });
+              targetCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+          }
+
+          if (e.key === 'j') {
             e.preventDefault();
-            state.selectedCardIndex = Math.min(cards.length - 1, state.selectedCardIndex + 1);
-            cards.forEach(function (c, idx) { c.classList.toggle('selected-card', idx === state.selectedCardIndex); });
-            cards[state.selectedCardIndex].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-          } else if (e.key === 'k' || e.key === 'ArrowUp') {
+            activateCard(Math.min(cards.length - 1, state.selectedCardIndex + 1));
+          } else if (e.key === 'k') {
             e.preventDefault();
-            state.selectedCardIndex = Math.max(0, state.selectedCardIndex - 1);
-            cards.forEach(function (c, idx) { c.classList.toggle('selected-card', idx === state.selectedCardIndex); });
-            cards[state.selectedCardIndex].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            activateCard(Math.max(0, state.selectedCardIndex - 1));
           } else if (e.key === 'c' && state.selectedCardIndex >= 0 && state.selectedCardIndex < cards.length) {
             e.preventDefault();
             var copyBtn = cards[state.selectedCardIndex].querySelector('button[data-action="copy-citation"], button[aria-label*="コピー"]');
             if (copyBtn) copyBtn.click();
-          } else if (e.key === 'Enter' && state.selectedCardIndex >= 0 && state.selectedCardIndex < cards.length) {
+          } else if (e.key === 'Enter' && state.selectedCardIndex >= 0 && state.selectedCardIndex < cards.length && active === cards[state.selectedCardIndex]) {
             var link = cards[state.selectedCardIndex].querySelector('a');
             if (link) window.open(link.href, '_blank', 'noopener,noreferrer');
           }

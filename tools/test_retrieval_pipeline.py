@@ -461,6 +461,9 @@ class TestPassageChunkerAndSecurity(unittest.TestCase):
         self.assertFalse(is_safe_retrieval_url("ftp://ftp.example.com/file"))
         self.assertFalse(is_safe_retrieval_url("gopher://example.com/"))
         self.assertFalse(is_safe_retrieval_url("http://user:pass@example.com/"))
+        self.assertFalse(is_safe_retrieval_url("http://@example.com/"))
+        self.assertFalse(is_safe_retrieval_url("http://attacker.com@127.0.0.1/"))
+        self.assertFalse(is_safe_retrieval_url("http://user@example.com/"))
         self.assertFalse(is_safe_retrieval_url("http://example.com:0/"))
 
         # Legitimate public web URLs must be accepted

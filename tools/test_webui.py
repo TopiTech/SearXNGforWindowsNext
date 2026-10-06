@@ -933,10 +933,12 @@ class TestWebUIMarkdownAndSanitization(unittest.TestCase):
         self.assertIn("function () { return inlineCodes[j]; }", html)
 
     def test_safe_image_url_patterns_in_bundle(self) -> None:
-        """Verify safeImageUrl helper handles data:image and rejects insecure schemes."""
+        """Verify safeImageUrl helper handles raster data:image and rejects insecure schemes including SVG."""
         html = webui_next.AI_WORKSPACE_HTML
         self.assertIn("function safeImageUrl(url)", html)
-        self.assertIn(r"data:image\/(?:png|jpeg|jpg|webp|gif|svg\+xml);base64,[a-z0-9+/=]+", html)
+        self.assertIn(r"data:image\/(?:png|jpeg|jpg|webp|gif);base64,[a-z0-9+/=]+", html)
+        # Verify SVG data URI is explicitly excluded from allowed regex to prevent XSS
+        self.assertNotIn(r"svg\+xml", html)
 
     def test_node_execution_markdown_and_image_safety(self) -> None:
         """If node is available, execute JS functions directly to verify edge-case outputs."""
@@ -959,8 +961,9 @@ class TestWebUIMarkdownAndSanitization(unittest.TestCase):
         }
         function safeHttpUrl(s) {
           if (!s) return '#';
+          if (!/^https?:\\/\\//i.test(s)) return '#';
           try {
-            var parsed = new URL(s, 'http://localhost');
+            var parsed = new URL(s);
             if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
               return parsed.href;
             }
@@ -970,7 +973,7 @@ class TestWebUIMarkdownAndSanitization(unittest.TestCase):
         function safeImageUrl(url) {
           var s = String(url == null ? '' : url).trim();
           if (!s) return '';
-          if (/^data:image\\/(?:png|jpeg|jpg|webp|gif|svg\\+xml);base64,[a-z0-9+/=]+$/i.test(s)) {
+          if (/^data:image\\/(?:png|jpeg|jpg|webp|gif);base64,[a-z0-9+/=]+$/i.test(s)) {
             return s;
           }
           var http = safeHttpUrl(s);
@@ -1111,6 +1114,35 @@ class TestWebUIAccessibilityDeepSearchAndKeybindings(unittest.TestCase):
         html = webui_next.AI_WORKSPACE_HTML
         self.assertIn("if (state.mode !== 'deep')", html)
         self.assertIn("setMode('deep', true)", html)
+
+    def test_ime_composition_guard_in_suggest(self) -> None:
+        """Verify IME composition guard (e.isComposing || e.keyCode === 229) is present in suggest keydown."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("if (e.isComposing || e.keyCode === 229) return;", html)
+
+    def test_enter_key_selection_on_active_suggestion(self) -> None:
+        """Verify Enter key explicitly commits and submits the active suggestion item."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("activeSuggestIndex >= 0 && items[activeSuggestIndex]", html)
+
+    def test_markdown_escaped_brackets_link_parsing(self) -> None:
+        """Verify markdown link regex handles titles with escaped brackets from escape_markdown_link."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn(r"\[((?:\\\]|[^\]])+)\]", html)
+        self.assertIn(r"label.replace(/\\([\[\]])/g, '$1')", html)
+
+    def test_card_navigation_focus_and_aria_attributes(self) -> None:
+        """Verify j/k card navigation activates ARIA selection and focuses the target card without scroll hijack."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("c.setAttribute('aria-selected', isSel ? 'true' : 'false')", html)
+        self.assertIn("targetCard.setAttribute('tabindex', '-1')", html)
+        self.assertIn("targetCard.focus({ preventScroll: true })", html)
+
+    def test_selected_card_video_and_image_styles(self) -> None:
+        """Verify .video-card.selected-card and .image-card.selected-card styles exist in CSS."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn(".video-card.selected-card {", html)
+        self.assertIn(".image-card.selected-card {", html)
 
 
 if __name__ == "__main__":
