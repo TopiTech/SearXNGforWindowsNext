@@ -636,15 +636,15 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         apply-patches.py, so any behavioral drift between the two copies is
         caught here.
         """
-        import time as _time
         import importlib.util as _ilu
+        import time as _time
 
         _spec = _ilu.spec_from_file_location(
             "webui_next_for_test", os.path.join(os.path.dirname(os.path.abspath(__file__)), "webui_next.py")
         )
         assert _spec is not None and _spec.loader is not None
         _wn = _ilu.module_from_spec(_spec)
-        _spec.loader.exec_module(_wn)  # noqa: S102 - test harness
+        _spec.loader.exec_module(_wn)
 
         strip = _wn._strip_html_to_text
 

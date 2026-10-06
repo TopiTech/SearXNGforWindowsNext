@@ -2091,6 +2091,8 @@ main.workspace {
   .search-bar-row { flex-wrap: wrap; }
   .search-bar-row #run-btn { width: 100%; justify-content: center; }
   #classic-deep-btn { width: 100%; justify-content: center; }
+  .options-row .opt-group { width: 100%; margin-left: 0 !important; }
+  .options-row .opt-input { min-width: 0; width: 100%; }
   .kbd-hint { display: none; }
   .search-input { padding-right: 0.95rem; }
   .preset-chips { margin-left: 0; width: 100%; }
@@ -4188,6 +4190,8 @@ footer.ws-footer {
           var copyItemBtn = document.createElement('button');
           copyItemBtn.type = 'button';
           copyItemBtn.className = 'btn btn-sm';
+          copyItemBtn.setAttribute('aria-label', '引用をコピー');
+          copyItemBtn.setAttribute('data-action', 'copy-citation');
           copyItemBtn.innerHTML = icon('copy') + '<span>引用コピー</span>';
           copyItemBtn.addEventListener('click', function () {
             var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
@@ -4352,6 +4356,8 @@ footer.ws-footer {
           pagBar.style.display = 'flex';
           document.getElementById('classic-page-indicator').textContent = 'ページ ' + page;
           document.getElementById('classic-prev-btn').disabled = (page <= 1);
+          var countVal = parseInt((document.getElementById('classic-count') || {}).value || '10', 10);
+          document.getElementById('classic-next-btn').disabled = (items.length < countVal);
           return;
         }
 
@@ -4445,6 +4451,8 @@ footer.ws-footer {
           var copyBtn = document.createElement('button');
           copyBtn.type = 'button';
           copyBtn.className = 'btn btn-sm';
+          copyBtn.setAttribute('aria-label', '引用をコピー');
+          copyBtn.setAttribute('data-action', 'copy-citation');
           copyBtn.innerHTML = icon('copy') + '<span>引用コピー</span>';
           copyBtn.addEventListener('click', function () {
             var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
@@ -4465,6 +4473,8 @@ footer.ws-footer {
         pagBar.style.display = 'flex';
         document.getElementById('classic-page-indicator').textContent = 'ページ ' + page;
         document.getElementById('classic-prev-btn').disabled = (page <= 1);
+        var countVal = parseInt((document.getElementById('classic-count') || {}).value || '10', 10);
+        document.getElementById('classic-next-btn').disabled = (items.length < countVal);
       }
 
       function runClassicSearch(query, page) {
@@ -5243,7 +5253,7 @@ footer.ws-footer {
             cards[state.selectedCardIndex].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           } else if (e.key === 'c' && state.selectedCardIndex >= 0 && state.selectedCardIndex < cards.length) {
             e.preventDefault();
-            var copyBtn = cards[state.selectedCardIndex].querySelector('button[aria-label*="コピー"], .btn:last-of-type');
+            var copyBtn = cards[state.selectedCardIndex].querySelector('button[data-action="copy-citation"], button[aria-label*="コピー"]');
             if (copyBtn) copyBtn.click();
           } else if (e.key === 'Enter' && state.selectedCardIndex >= 0 && state.selectedCardIndex < cards.length) {
             var link = cards[state.selectedCardIndex].querySelector('a');

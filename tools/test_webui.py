@@ -1044,6 +1044,35 @@ class TestWebUIAccessibilityDeepSearchAndKeybindings(unittest.TestCase):
         self.assertIn("if (oldBar) oldBar.remove();", html)
         self.assertIn("telBar.classList.remove('visible');", html)
 
+    def test_copy_buttons_have_aria_label_and_data_action(self) -> None:
+        """Both deep search and classic search copy citation buttons must declare ARIA and data-action attributes."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("copyItemBtn.setAttribute('aria-label', '引用をコピー')", html)
+        self.assertIn("copyItemBtn.setAttribute('data-action', 'copy-citation')", html)
+        self.assertIn("copyBtn.setAttribute('aria-label', '引用をコピー')", html)
+        self.assertIn("copyBtn.setAttribute('data-action', 'copy-citation')", html)
+
+    def test_keyboard_shortcut_c_targets_copy_citation_button(self) -> None:
+        """Pressing 'c' key must target copy-citation button specifically without hijacking domain filter buttons."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn(
+            'querySelector(\'button[data-action="copy-citation"], button[aria-label*="コピー"]\')',
+            html,
+        )
+        # Ensure the old fragile selector '.btn:last-of-type' is no longer used for 'c' key shortcut
+        self.assertNotIn('button[aria-label*="コピー"], .btn:last-of-type', html)
+
+    def test_classic_pagination_next_button_disabled_when_under_limit(self) -> None:
+        """Classic search next page button must be disabled when fewer items than count are returned."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("classic-next-btn').disabled = (items.length < countVal)", html)
+
+    def test_responsive_options_row_reflow_css(self) -> None:
+        """Mobile stylesheet must include width 100% reflow for .options-row .opt-group on <=640px viewports."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn(".options-row .opt-group { width: 100%; margin-left: 0 !important; }", html)
+        self.assertIn(".options-row .opt-input { min-width: 0; width: 100%; }", html)
+
 
 if __name__ == "__main__":
     unittest.main()
