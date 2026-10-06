@@ -320,19 +320,40 @@ class HeadingPassageChunker:
                 )
             return passages
 
-        # Split longer section into paragraphs or sentences
-        paragraphs = re.split(r"(\n\n+)", body)
-        buffer = ""
-        buf_start = base_char_offset
-
-        for p in paragraphs:
+        # Split longer section into paragraphs, sentences, and bounded text slices
+        raw_paragraphs = re.split(r"(\n\n+)", body)
+        units: list[str] = []
+        for p in raw_paragraphs:
             p_clean = p.strip()
             if not p_clean:
                 continue
-
-            if len(buffer) + len(p_clean) + 1 <= self.config.target_chunk_chars:
-                buffer = f"{buffer}\n\n{p_clean}" if buffer else p_clean
+            if len(p_clean) <= self.config.target_chunk_chars:
+                units.append(p_clean)
             else:
+                sentences = re.split(r"(?<=[.!?。！？\n])\s+", p_clean)
+                for s in sentences:
+                    s_clean = s.strip()
+                    if not s_clean:
+                        continue
+                    if len(s_clean) <= self.config.max_chunk_chars:
+                        units.append(s_clean)
+                    else:
+                        slice_len = max(self.config.target_chunk_chars, 1)
+                        while len(s_clean) > self.config.max_chunk_chars:
+                            units.append(s_clean[:slice_len].strip())
+                            s_clean = s_clean[slice_len:].strip()
+                        if s_clean:
+                            units.append(s_clean)
+
+        buffer = ""
+        buf_start = base_char_offset
+
+        for unit in units:
+            unit_clean = unit.strip()
+            if not unit_clean:
+                continue
+
+            if buffer and (len(buffer) + len(unit_clean) + 1 > self.config.target_chunk_chars):
                 if len(buffer) >= self.config.min_chunk_chars:
                     flags = SecurityScanner.scan_for_injection(buffer)
                     passages.append(
@@ -346,23 +367,46 @@ class HeadingPassageChunker:
                             security_flags=flags,
                         )
                     )
-                    # Prepare overlap from end of buffer
                     overlap = buffer[-self.config.overlap_chars :] if len(buffer) > self.config.overlap_chars else ""
                     buf_start = buf_start + len(buffer) - len(overlap)
-                    buffer = f"{overlap}\n{p_clean}" if overlap else p_clean
+                    if overlap and (len(overlap) + 1 + len(unit_clean) > self.config.max_chunk_chars):
+                        overlap = ""
+                    buffer = f"{overlap}\n{unit_clean}" if overlap else unit_clean
                 else:
-                    buffer = f"{buffer}\n\n{p_clean}" if buffer else p_clean
+                    if len(buffer) + len(unit_clean) + 1 > self.config.max_chunk_chars:
+                        if len(buffer) >= self.config.min_chunk_chars:
+                            flags = SecurityScanner.scan_for_injection(buffer)
+                            passages.append(
+                                EvidencePassage(
+                                    id="",
+                                    source_id=source_id,
+                                    heading=heading,
+                                    text=buffer,
+                                    start_char=buf_start,
+                                    end_char=buf_start + len(buffer),
+                                    security_flags=flags,
+                                )
+                            )
+                        buf_start = buf_start + len(buffer)
+                        buffer = unit_clean
+                    else:
+                        buffer = f"{buffer}\n\n{unit_clean}" if buffer else unit_clean
+            else:
+                buffer = f"{buffer}\n\n{unit_clean}" if buffer else unit_clean
 
         if len(buffer.strip()) >= self.config.min_chunk_chars:
-            flags = SecurityScanner.scan_for_injection(buffer)
+            final_text = buffer.strip()
+            if len(final_text) > self.config.max_chunk_chars:
+                final_text = final_text[: self.config.max_chunk_chars].strip()
+            flags = SecurityScanner.scan_for_injection(final_text)
             passages.append(
                 EvidencePassage(
                     id="",
                     source_id=source_id,
                     heading=heading,
-                    text=buffer.strip(),
+                    text=final_text,
                     start_char=buf_start,
-                    end_char=buf_start + len(buffer),
+                    end_char=buf_start + len(final_text),
                     security_flags=flags,
                 )
             )

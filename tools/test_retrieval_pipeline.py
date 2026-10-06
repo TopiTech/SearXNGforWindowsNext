@@ -341,6 +341,30 @@ class TestPassageChunkerAndSecurity(unittest.TestCase):
         self.assertTrue(any("Retrieval API Design" in h for h in headings))
         self.assertTrue(any("Security Measures" in h for h in headings))
 
+    def test_passage_chunker_respects_max_chunk_chars_on_large_unbroken_text(self) -> None:
+        """Verify that single long paragraphs or unformatted text blocks are split into bounded chunks."""
+        # 1. Multi-sentence paragraph without double newlines (exceeding target and max chars)
+        sentences = [f"This is sentence {i} explaining component details and architecture." for i in range(40)]
+        long_paragraph = " ".join(sentences)
+        self.assertGreater(len(long_paragraph), 2000)
+
+        config = PassageChunkerConfig(target_passage_chars=300, max_passage_chars=600, min_chunk_chars=40)
+        splitter = HeadingPassageSplitter(config)
+        passages = splitter.split_into_passages(long_paragraph, source_id="src_long")
+
+        self.assertGreaterEqual(len(passages), 4)
+        for p in passages:
+            self.assertLessEqual(len(p.text), config.max_chunk_chars)
+            self.assertGreaterEqual(len(p.text), config.min_chunk_chars)
+
+        # 2. Continuous unpunctuated text without spaces
+        unbroken_text = "X" * 1500
+        unbroken_passages = splitter.split_into_passages(unbroken_text, source_id="src_unbroken")
+        self.assertGreaterEqual(len(unbroken_passages), 3)
+        for p in unbroken_passages:
+            self.assertLessEqual(len(p.text), config.max_chunk_chars)
+            self.assertGreaterEqual(len(p.text), config.min_chunk_chars)
+
     def test_passage_scoring_against_query(self) -> None:
         splitter = HeadingPassageSplitter()
         passages = [

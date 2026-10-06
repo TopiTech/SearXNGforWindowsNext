@@ -208,9 +208,13 @@ def _scrape_url_direct(
             p = parsed_u.port
             if p is not None and (p == 0 or p > 65535):
                 raise blocked_exc_cls("Invalid port: 0")
-            return parsed_u
+        except blocked_exc_cls:
+            raise
         except ValueError as exc:
             raise blocked_exc_cls("Invalid URL") from exc
+        if parsed_u.username or parsed_u.password or "@" in (parsed_u.netloc or ""):
+            raise blocked_exc_cls("URLs with embedded credentials are not allowed")
+        return parsed_u
 
     def _is_static_host_blocked(host: str | None) -> bool:
         host_clean = _normalize_scrape_host(host)
@@ -287,9 +291,7 @@ def _scrape_url_direct(
         else:
             host_out = host_clean
         hostport = f"{host_out}:{port}" if p_url.port else host_out
-        userinfo, at_sep, _rest = p_url.netloc.partition("@")
-        netloc = f"{userinfo}@{hostport}" if at_sep else hostport
-        safe_url = p_url._replace(netloc=netloc).geturl()
+        safe_url = p_url._replace(netloc=hostport).geturl()
         try:
             addr_info = socket.getaddrinfo(host_clean, port)
         except (socket.gaierror, OSError) as exc:

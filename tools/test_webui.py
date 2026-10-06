@@ -498,6 +498,21 @@ class TestWebUIScraperLimits(unittest.TestCase):
             "In-process scraper client must disable keepalive connections",
         )
 
+    def test_scrape_url_direct_blocks_embedded_credentials(self) -> None:
+        """Verify _scrape_url_direct rejects URLs with embedded credentials to prevent SSRF bypass."""
+        mock_mod = unittest.mock.MagicMock()
+        mock_mod._is_blocked_scrape_host = lambda h: False
+        mock_mod.pinned_dns = unittest.mock.MagicMock()
+        mock_mod._ScrapeBlockedError = ValueError
+
+        res = webui_next._scrape_url_direct(mock_mod, "http://user:pass@example.com/page")
+        self.assertIn("URLs with embedded credentials are not allowed", res.get("error", ""))
+        self.assertEqual(res.get("content"), "")
+
+        res_at = webui_next._scrape_url_direct(mock_mod, "http://admin@example.com/page")
+        self.assertIn("URLs with embedded credentials are not allowed", res_at.get("error", ""))
+        self.assertEqual(res_at.get("content"), "")
+
 
 class TestRunTestsHarnessRuffFallback(unittest.TestCase):
     """Test tools/run-tests.ps1 Ruff executable fallback (F3.10)."""
