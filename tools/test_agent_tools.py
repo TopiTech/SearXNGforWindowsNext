@@ -492,10 +492,29 @@ class TestSearXNGCLI(unittest.TestCase):
         mock_search.return_value = {"query": "python", "results": []}
         parser = searxng_cli.build_parser()
         args = parser.parse_args(["search", "python", "-p", "3"])
-        code = searxng_cli.cmd_search(args)
+        with patch("sys.stdout", new_callable=io.StringIO):
+            code = searxng_cli.cmd_search(args)
         self.assertEqual(code, 0)
         mock_search.assert_called_once()
         self.assertEqual(mock_search.call_args[1].get("pageno"), 3)
+
+    @patch("searxng_client.search")
+    def test_cmd_search_cp1252_stdout_resilience(self, mock_search: MagicMock) -> None:
+        """Verify cmd_search does not crash when stdout cannot encode Japanese characters."""
+        mock_search.return_value = {"query": "python", "results": []}
+        parser = searxng_cli.build_parser()
+        args = parser.parse_args(["search", "python"])
+
+        class MockCP1252Stream(io.StringIO):
+            encoding = "cp1252"
+
+            def write(self, s: str) -> int:
+                s.encode("cp1252")
+                return super().write(s)
+
+        with patch("sys.stdout", new_callable=MockCP1252Stream):
+            code = searxng_cli.cmd_search(args)
+            self.assertEqual(code, 0)
 
     @patch("searxng_client.scrape")
     def test_cmd_scrape_markdown(self, mock_scrape: MagicMock) -> None:
@@ -829,7 +848,8 @@ class TestSearXNGCLI(unittest.TestCase):
 
         with patch("searxng_client.unified_search") as mock_unified:
             mock_unified.return_value = {"markdown": "results"}
-            ret = searxng_cli.cmd_search(args)
+            with patch("sys.stdout", new_callable=io.StringIO):
+                ret = searxng_cli.cmd_search(args)
             self.assertEqual(ret, 0)
             mock_unified.assert_called_once()
             self.assertFalse(mock_unified.call_args[1]["include_highlights"])

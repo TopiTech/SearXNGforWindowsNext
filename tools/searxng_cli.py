@@ -15,6 +15,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import sys
@@ -329,6 +331,15 @@ def _resolve_effective_mode(mode: str, depth: str | None, query: str) -> str:
     return "fast" if depth == "fast" else "deep"
 
 
+def _print_output(text: str) -> None:
+    """Safely print text to stdout, falling back to character replacement if the encoding cannot represent it."""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        print(text.encode(encoding, errors="replace").decode(encoding))
+
+
 def cmd_search(args: argparse.Namespace) -> int:
     """Handle 'search' subcommand (routes to unified_search when URL/deep/filter options are used)."""
     mode = getattr(args, "mode", "auto") or "auto"
@@ -358,9 +369,9 @@ def cmd_search(args: argparse.Namespace) -> int:
             timeout=args.timeout,
         )
         if args.as_json or getattr(args, "as_ai", False):
-            print(json.dumps(res, ensure_ascii=False, indent=2))
+            _print_output(json.dumps(res, ensure_ascii=False, indent=2))
         else:
-            print(searxng_client.format_markdown(res))
+            _print_output(searxng_client.format_markdown(res))
         return 1 if res.get("error") else 0
 
     if use_unified:
@@ -382,9 +393,9 @@ def cmd_search(args: argparse.Namespace) -> int:
             timeout=args.timeout,
         )
         if args.as_json:
-            print(json.dumps(res, ensure_ascii=False, indent=2))
+            _print_output(json.dumps(res, ensure_ascii=False, indent=2))
         else:
-            print(searxng_client.format_markdown(res))
+            _print_output(searxng_client.format_markdown(res))
         return 1 if res.get("error") else 0
 
     res = searxng_client.search(
@@ -398,9 +409,9 @@ def cmd_search(args: argparse.Namespace) -> int:
         timeout=args.timeout,
     )
     if args.as_json:
-        print(json.dumps(res, ensure_ascii=False, indent=2))
+        _print_output(json.dumps(res, ensure_ascii=False, indent=2))
     else:
-        print(searxng_client.format_search_markdown(res))
+        _print_output(searxng_client.format_search_markdown(res))
 
     return 1 if res.get("error") else 0
 
@@ -418,9 +429,9 @@ def cmd_scrape(args: argparse.Namespace) -> int:
             timeout=args.timeout,
         )
         if args.as_json:
-            print(json.dumps(res, ensure_ascii=False, indent=2))
+            _print_output(json.dumps(res, ensure_ascii=False, indent=2))
         else:
-            print(searxng_client.format_markdown(res))
+            _print_output(searxng_client.format_markdown(res))
         return 1 if res.get("error") else 0
 
     res = searxng_client.scrape(
@@ -430,9 +441,9 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         timeout=args.timeout,
     )
     if args.as_json:
-        print(json.dumps(res, ensure_ascii=False, indent=2))
+        _print_output(json.dumps(res, ensure_ascii=False, indent=2))
     else:
-        print(searxng_client.format_scrape_markdown(res))
+        _print_output(searxng_client.format_scrape_markdown(res))
 
     return 1 if res.get("error") else 0
 
@@ -451,9 +462,9 @@ def cmd_deep(args: argparse.Namespace) -> int:
         timeout=args.timeout,
     )
     if args.as_json:
-        print(json.dumps(res, ensure_ascii=False, indent=2))
+        _print_output(json.dumps(res, ensure_ascii=False, indent=2))
     else:
-        print(searxng_client.format_deep_search_markdown(res))
+        _print_output(searxng_client.format_deep_search_markdown(res))
 
     return 1 if res.get("error") else 0
 
@@ -473,9 +484,9 @@ def cmd_retrieval(args: argparse.Namespace) -> int:
         timeout=args.timeout,
     )
     if args.as_json:
-        print(json.dumps(res, ensure_ascii=False, indent=2))
+        _print_output(json.dumps(res, ensure_ascii=False, indent=2))
     else:
-        print(searxng_client.format_markdown(res))
+        _print_output(searxng_client.format_markdown(res))
 
     return 1 if res.get("error") else 0
 
@@ -492,10 +503,10 @@ def cmd_health(args: argparse.Namespace) -> int:
             "status": status_msg,
             "base_url": (args.base_url or searxng_client.get_base_url()),
         }
-        print(json.dumps(out, ensure_ascii=False, indent=2))
+        _print_output(json.dumps(out, ensure_ascii=False, indent=2))
     else:
         icon = "✅" if is_healthy else "❌"
-        print(f"{icon} {status_msg}")
+        _print_output(f"{icon} {status_msg}")
 
     return 0 if is_healthy else 1
 
@@ -504,9 +515,11 @@ def main() -> None:
     """CLI entrypoint."""
     # Ensure Windows stdout/stderr handles UTF-8 correctly
     if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
+        with contextlib.suppress(AttributeError, ValueError, io.UnsupportedOperation):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if hasattr(sys.stderr, "reconfigure"):
-        sys.stderr.reconfigure(encoding="utf-8")
+        with contextlib.suppress(AttributeError, ValueError, io.UnsupportedOperation):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     parser = build_parser()
     args = parser.parse_args()

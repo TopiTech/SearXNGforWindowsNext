@@ -4,6 +4,8 @@ param(
 
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
 $ErrorActionPreference = "Stop"
 
 # Determine workspace root directory
