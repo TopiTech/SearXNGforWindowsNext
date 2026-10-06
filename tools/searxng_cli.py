@@ -99,6 +99,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Time range filter",
     )
     search_parser.add_argument(
+        "-p",
+        "--page",
+        "--pageno",
+        dest="page",
+        type=int,
+        default=1,
+        help="Search results page number (default: 1)",
+    )
+    search_parser.add_argument(
         "--site",
         dest="include_domains",
         action="append",
@@ -384,6 +393,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         categories=args.category,
         engines=args.engines,
         time_range=args.time_range,
+        pageno=getattr(args, "page", 1),
         base_url=args.base_url,
         timeout=args.timeout,
     )

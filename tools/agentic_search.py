@@ -567,7 +567,7 @@ class DomainScorer:
             thumb_src = str(r.get("thumbnail_src") or "").strip()
             img_src = str(r.get("img_src") or "").strip()
             if not (thumb or thumb_src or img_src):
-                yt_match = re.search(r"(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
+                yt_match = re.search(r"(?:youtube\.com/(?:watch\?v=|shorts/)|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
                 if yt_match:
                     thumb = f"https://i.ytimg.com/vi/{yt_match.group(1)}/hqdefault.jpg"
 
@@ -576,7 +576,7 @@ class DomainScorer:
                 url=url,
                 domain=dom,
                 content=str(r.get("content") or "").strip(),
-                source=str(r.get("source") or "").strip(),
+                source=str(r.get("source") or r.get("engine") or "").strip(),
                 score=final_score,
                 published_date=str(r.get("published_date") or r.get("publishedDate") or "").strip(),
                 img_src=img_src,
@@ -587,7 +587,7 @@ class DomainScorer:
                 length=str(r.get("length") or "").strip(),
                 template=str(r.get("template") or "").strip(),
                 category=str(r.get("category") or "").strip(),
-                engine=str(r.get("engine") or "").strip(),
+                engine=str(r.get("engine") or r.get("source") or "").strip(),
             )
             items.append(item)
 

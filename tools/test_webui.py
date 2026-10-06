@@ -655,6 +655,13 @@ class TestWebUIAutocompleter(unittest.TestCase):
         self.assertEqual(resp_off.status_code, 200)
         self.assertEqual(resp_off.get_json(), [])
 
+        # Disabled via backend query param returns []
+        resp_param_off = client.get(
+            "/autocompleter?q=claude&backend=off", headers={"X-Requested-With": "XMLHttpRequest"}
+        )
+        self.assertEqual(resp_param_off.status_code, 200)
+        self.assertEqual(resp_param_off.get_json(), [])
+
 
 class TestWebUIQueryHistory(unittest.TestCase):
     """Test search query history persistence via localStorage."""
@@ -1050,18 +1057,22 @@ class TestWebUIAccessibilityDeepSearchAndKeybindings(unittest.TestCase):
         self.assertIn("window.open(link.href, '_blank', 'noopener,noreferrer')", html)
 
     def test_error_handlers_clear_telemetry_bar(self) -> None:
-        """Unified, Classic, and Scrape error handlers must remove/hide telemetry bars."""
+        """Unified, Classic, and Scrape error handlers must remove/hide telemetry bars while preserving static bar."""
         html = webui_next.AI_WORKSPACE_HTML
         self.assertIn("if (oldBar) oldBar.remove();", html)
         self.assertIn("telBar.classList.remove('visible');", html)
+        self.assertIn(".telemetry-bar:not(#telemetry-bar)", html)
 
     def test_copy_buttons_have_aria_label_and_data_action(self) -> None:
-        """Both deep search and classic search copy citation buttons must declare ARIA and data-action attributes."""
+        """Deep, classic, video, and image result actions must declare ARIA and data-action attributes."""
         html = webui_next.AI_WORKSPACE_HTML
         self.assertIn("copyItemBtn.setAttribute('aria-label', '引用をコピー')", html)
         self.assertIn("copyItemBtn.setAttribute('data-action', 'copy-citation')", html)
         self.assertIn("copyBtn.setAttribute('aria-label', '引用をコピー')", html)
         self.assertIn("copyBtn.setAttribute('data-action', 'copy-citation')", html)
+        self.assertIn("copyBtn.setAttribute('aria-label', '動画URLをコピー')", html)
+        self.assertIn("watchBtn.setAttribute('aria-label', '動画を新しいタブで再生')", html)
+        self.assertIn("fullLink.setAttribute('aria-label', '元画像を別タブで開く')", html)
 
     def test_keyboard_shortcut_c_targets_copy_citation_button(self) -> None:
         """Pressing 'c' key must target copy-citation button specifically without hijacking domain filter buttons."""
@@ -1083,6 +1094,23 @@ class TestWebUIAccessibilityDeepSearchAndKeybindings(unittest.TestCase):
         html = webui_next.AI_WORKSPACE_HTML
         self.assertIn(".options-row .opt-group { width: 100%; margin-left: 0 !important; }", html)
         self.assertIn(".options-row .opt-input { min-width: 0; width: 100%; }", html)
+
+    def test_responsive_image_grid_mobile_css(self) -> None:
+        """Mobile stylesheet must include narrow 2-column image gallery reflow on <=480px viewports."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("@media (max-width: 480px)", html)
+        self.assertIn("grid-template-columns: repeat(auto-fill, minmax(130px, 1fr))", html)
+
+    def test_search_focus_shortcut_switches_mode_from_agent_or_settings(self) -> None:
+        """Focusing search input via '/' or Ctrl+K from agent/settings tabs must switch to deep mode."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("if (state.mode === 'agent' || state.mode === 'settings')", html)
+
+    def test_url_scrape_switches_mode_to_deep(self) -> None:
+        """Entering a URL to scrape must switch to deep mode so the split-view and drawer are visible."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("if (state.mode !== 'deep')", html)
+        self.assertIn("setMode('deep', true)", html)
 
 
 if __name__ == "__main__":

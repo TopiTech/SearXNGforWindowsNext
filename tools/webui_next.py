@@ -503,6 +503,7 @@ def _search_in_process(
         categories=categories,
         engines=engines,
         time_range=time_range,
+        pageno=page_int,
         base_url=base_url,
         timeout=timeout,
     )
@@ -2712,6 +2713,15 @@ main.workspace {
     height: 190px;
   }
 }
+@media (max-width: 480px) {
+  .image-results-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 0.5rem;
+  }
+  .image-card-thumb-wrap {
+    height: 105px;
+  }
+}
 
 /* Settings Dashboard View */
 .settings-view-wrap {
@@ -4579,6 +4589,7 @@ footer.ws-footer {
               fullLink.target = '_blank';
               fullLink.rel = 'noopener noreferrer';
               fullLink.title = '元画像を別タブで開く';
+              fullLink.setAttribute('aria-label', '元画像を別タブで開く');
               fullLink.innerHTML = icon('externalLink');
               domRow.appendChild(fullLink);
             }
@@ -4619,7 +4630,7 @@ footer.ws-footer {
 
             var videoThumb = item.thumbnail || item.thumbnail_src || item.img_src;
             if (!videoThumb) {
-              var yt = (item.url || '').match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+              var yt = (item.url || '').match(/(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
               if (yt) videoThumb = 'https://i.ytimg.com/vi/' + yt[1] + '/hqdefault.jpg';
             }
 
@@ -4725,16 +4736,21 @@ footer.ws-footer {
             watchBtn.href = safeHttpUrl(item.url);
             watchBtn.target = '_blank';
             watchBtn.rel = 'noopener noreferrer';
+            watchBtn.setAttribute('aria-label', '動画を新しいタブで再生');
             watchBtn.innerHTML = icon('play') + '<span>動画を再生</span>';
             actRow.appendChild(watchBtn);
 
             var copyBtn = document.createElement('button');
             copyBtn.type = 'button';
             copyBtn.className = 'btn btn-sm';
+            copyBtn.setAttribute('aria-label', '動画URLをコピー');
+            copyBtn.setAttribute('data-action', 'copy-citation');
             copyBtn.innerHTML = icon('copy') + '<span>URLコピー</span>';
             copyBtn.addEventListener('click', function () {
-              navigator.clipboard.writeText(item.url);
-              showToast('URLをコピーしました');
+              var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
+              var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
+              var citeText = '[' + safeTitle + '](' + safeUrl + ')';
+              copyWithFeedback(citeText, copyBtn, 'コピー済');
             });
             actRow.appendChild(copyBtn);
 
@@ -5055,7 +5071,7 @@ footer.ws-footer {
             if (err.name === 'AbortError') return;
             var telBar = document.getElementById('telemetry-bar');
             if (telBar) telBar.classList.remove('visible');
-            var oldBar = document.querySelector('.telemetry-bar');
+            var oldBar = document.querySelector('.telemetry-bar:not(#telemetry-bar)');
             if (oldBar) oldBar.remove();
             container.setAttribute('aria-busy', 'false');
             container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">' + icon('alert') + ' 通信エラー</h2><p>' + escapeHtml(err) + '</p></div>';
@@ -5575,6 +5591,9 @@ footer.ws-footer {
         closeSuggest();
 
         if (isUrlText(qVal)) {
+          if (state.mode !== 'deep') {
+            setMode('deep', true);
+          }
           syncInputOptionsVisibility();
           runScrapeMode(qVal);
         } else if (state.mode === 'classic') {
@@ -5625,6 +5644,9 @@ footer.ws-footer {
         if ((e.key === '/' && active !== qInput && !isEditing) ||
             ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) {
           e.preventDefault();
+          if (state.mode === 'agent' || state.mode === 'settings') {
+            setMode('deep');
+          }
           qInput.focus();
           qInput.select();
           return;
@@ -5795,13 +5817,18 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         if not q or len(q) < 1:
             return Response("[]", mimetype="application/json")
 
+        req_backend = (request.args.get("backend") or request.args.get("autocomplete") or "").strip().lower()
+        if req_backend in ("off", "none", "0", "false"):
+            return Response("[]", mimetype="application/json")
+
         if "autocomplete" in request.cookies:
             cookie_ac = request.cookies.get("autocomplete", "").strip().lower()
-            if not cookie_ac or cookie_ac in ("off", "none", "0", "false"):
+            if not req_backend and (not cookie_ac or cookie_ac in ("off", "none", "0", "false")):
                 return Response("[]", mimetype="application/json")
         else:
             cookie_ac = ""
 
+        effective_backend = req_backend or cookie_ac
         results: list[str] = []
         if orig_autocompleter is not None:
             with contextlib.suppress(Exception):
@@ -5822,7 +5849,9 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                 import searx.autocomplete as sxng_ac
 
                 backends_dict = getattr(sxng_ac, "backends", {})
-                preferred = cookie_ac if cookie_ac and cookie_ac in backends_dict else "duckduckgo"
+                preferred = (
+                    effective_backend if effective_backend and effective_backend in backends_dict else "duckduckgo"
+                )
                 fallback_backends = [preferred]
                 if "duckduckgo" not in fallback_backends:
                     fallback_backends.append("duckduckgo")

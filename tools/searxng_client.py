@@ -100,6 +100,7 @@ def search(
     categories: str | None = "",
     engines: str | None = "",
     time_range: str | None = "",
+    pageno: int | str = 1,
     base_url: str | None = None,
     timeout: float | None = None,
 ) -> dict[str, Any]:
@@ -111,6 +112,7 @@ def search(
         categories: Optional comma-separated SearXNG categories (e.g. 'it,general').
         engines: Optional comma-separated search engine names (e.g. 'duckduckgo,bing').
         time_range: Optional time range filter ('day', 'week', 'month', 'year').
+        pageno: Optional page number (1-based, default 1).
         base_url: Optional SearXNG base URL override.
         timeout: Optional request timeout in seconds.
 
@@ -148,6 +150,13 @@ def search(
     tr_clean = (time_range or "").strip()
     if tr_clean:
         params["time_range"] = tr_clean
+
+    try:
+        page_val = int(pageno)
+    except (ValueError, TypeError):
+        page_val = 1
+    if page_val > 1:
+        params["pageno"] = str(page_val)
 
     search_url = f"{target_base}/search?{urllib.parse.urlencode(params)}"
 

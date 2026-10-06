@@ -1127,6 +1127,7 @@
               fullLink.target = '_blank';
               fullLink.rel = 'noopener noreferrer';
               fullLink.title = '元画像を別タブで開く';
+              fullLink.setAttribute('aria-label', '元画像を別タブで開く');
               fullLink.innerHTML = icon('externalLink');
               domRow.appendChild(fullLink);
             }
@@ -1167,7 +1168,7 @@
 
             var videoThumb = item.thumbnail || item.thumbnail_src || item.img_src;
             if (!videoThumb) {
-              var yt = (item.url || '').match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+              var yt = (item.url || '').match(/(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
               if (yt) videoThumb = 'https://i.ytimg.com/vi/' + yt[1] + '/hqdefault.jpg';
             }
 
@@ -1273,16 +1274,21 @@
             watchBtn.href = safeHttpUrl(item.url);
             watchBtn.target = '_blank';
             watchBtn.rel = 'noopener noreferrer';
+            watchBtn.setAttribute('aria-label', '動画を新しいタブで再生');
             watchBtn.innerHTML = icon('play') + '<span>動画を再生</span>';
             actRow.appendChild(watchBtn);
 
             var copyBtn = document.createElement('button');
             copyBtn.type = 'button';
             copyBtn.className = 'btn btn-sm';
+            copyBtn.setAttribute('aria-label', '動画URLをコピー');
+            copyBtn.setAttribute('data-action', 'copy-citation');
             copyBtn.innerHTML = icon('copy') + '<span>URLコピー</span>';
             copyBtn.addEventListener('click', function () {
-              navigator.clipboard.writeText(item.url);
-              showToast('URLをコピーしました');
+              var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
+              var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
+              var citeText = '[' + safeTitle + '](' + safeUrl + ')';
+              copyWithFeedback(citeText, copyBtn, 'コピー済');
             });
             actRow.appendChild(copyBtn);
 
@@ -1603,7 +1609,7 @@
             if (err.name === 'AbortError') return;
             var telBar = document.getElementById('telemetry-bar');
             if (telBar) telBar.classList.remove('visible');
-            var oldBar = document.querySelector('.telemetry-bar');
+            var oldBar = document.querySelector('.telemetry-bar:not(#telemetry-bar)');
             if (oldBar) oldBar.remove();
             container.setAttribute('aria-busy', 'false');
             container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">' + icon('alert') + ' 通信エラー</h2><p>' + escapeHtml(err) + '</p></div>';
@@ -2123,6 +2129,9 @@
         closeSuggest();
 
         if (isUrlText(qVal)) {
+          if (state.mode !== 'deep') {
+            setMode('deep', true);
+          }
           syncInputOptionsVisibility();
           runScrapeMode(qVal);
         } else if (state.mode === 'classic') {
@@ -2173,6 +2182,9 @@
         if ((e.key === '/' && active !== qInput && !isEditing) ||
             ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) {
           e.preventDefault();
+          if (state.mode === 'agent' || state.mode === 'settings') {
+            setMode('deep');
+          }
           qInput.focus();
           qInput.select();
           return;

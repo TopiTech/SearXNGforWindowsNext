@@ -855,6 +855,45 @@ class TestRegressionHardening(unittest.TestCase):
         self.assertEqual(r0.get("resolution"), "1920x1080")
         self.assertEqual(r0.get("template"), "images.html")
 
+    def test_youtube_shorts_and_watch_thumbnail_autodetect(self) -> None:
+        """Verify YouTube Shorts and standard watch URLs auto-detect video thumbnails when missing."""
+        scorer = agentic_search.DomainScorer()
+        results = [
+            {"url": "https://www.youtube.com/shorts/dQw4w9WgXcQ", "title": "Shorts Video"},
+            {"url": "https://youtube.com/watch?v=9bZkp7q19f0", "title": "Watch Video"},
+            {"url": "https://youtu.be/kJQP7kiw5Fk", "title": "YouTu.be Video"},
+            {"url": "https://example.com/other", "title": "Non-video"},
+        ]
+        scored = scorer.score_results(results)
+        self.assertEqual(len(scored), 4)
+        shorts_item = next(it for it in scored if "dQw4w9WgXcQ" in it.url)
+        self.assertEqual(shorts_item.thumbnail, "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg")
+
+        watch_item = next(it for it in scored if "9bZkp7q19f0" in it.url)
+        self.assertEqual(watch_item.thumbnail, "https://i.ytimg.com/vi/9bZkp7q19f0/hqdefault.jpg")
+
+        short_domain_item = next(it for it in scored if "kJQP7kiw5Fk" in it.url)
+        self.assertEqual(short_domain_item.thumbnail, "https://i.ytimg.com/vi/kJQP7kiw5Fk/hqdefault.jpg")
+
+        other_item = next(it for it in scored if "example.com" in it.url)
+        self.assertEqual(other_item.thumbnail, "")
+
+    def test_engine_source_bidirectional_fallback(self) -> None:
+        """Verify engine and source fall back to each other if only one is present."""
+        scorer = agentic_search.DomainScorer()
+        results = [
+            {"url": "https://example.com/1", "title": "1", "engine": "duckduckgo"},
+            {"url": "https://example.com/2", "title": "2", "source": "bing"},
+        ]
+        scored = scorer.score_results(results)
+        item1 = next(it for it in scored if "example.com/1" in it.url)
+        self.assertEqual(item1.engine, "duckduckgo")
+        self.assertEqual(item1.source, "duckduckgo")
+
+        item2 = next(it for it in scored if "example.com/2" in it.url)
+        self.assertEqual(item2.engine, "bing")
+        self.assertEqual(item2.source, "bing")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -152,6 +152,20 @@ class TestSearXNGClient(unittest.TestCase):
         self.assertNotIn("error", res_invalid)
 
     @patch("urllib.request.urlopen")
+    def test_search_pageno_forwarding(self, mock_urlopen: MagicMock) -> None:
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"query": "test", "results": []}).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        searxng_client.search("test", pageno=1)
+        req1 = mock_urlopen.call_args[0][0]
+        self.assertNotIn("pageno", req1.full_url)
+
+        searxng_client.search("test", pageno=3)
+        req2 = mock_urlopen.call_args[0][0]
+        self.assertIn("pageno=3", req2.full_url)
+
+    @patch("urllib.request.urlopen")
     def test_scrape_max_length_sanitization(self, mock_urlopen: MagicMock) -> None:
         mock_resp = MagicMock()
         mock_resp.read.return_value = json.dumps({"url": "https://example.com", "content": "A" * 100}).encode("utf-8")
@@ -472,6 +486,16 @@ class TestSearXNGCLI(unittest.TestCase):
             code = searxng_cli.cmd_search(args)
             self.assertEqual(code, 0)
             self.assertIn("Python Language", mock_out.getvalue())
+
+    @patch("searxng_client.search")
+    def test_cmd_search_page_arg(self, mock_search: MagicMock) -> None:
+        mock_search.return_value = {"query": "python", "results": []}
+        parser = searxng_cli.build_parser()
+        args = parser.parse_args(["search", "python", "-p", "3"])
+        code = searxng_cli.cmd_search(args)
+        self.assertEqual(code, 0)
+        mock_search.assert_called_once()
+        self.assertEqual(mock_search.call_args[1].get("pageno"), 3)
 
     @patch("searxng_client.scrape")
     def test_cmd_scrape_markdown(self, mock_scrape: MagicMock) -> None:

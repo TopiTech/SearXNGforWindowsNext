@@ -1170,6 +1170,15 @@ main.workspace {
     height: 190px;
   }
 }
+@media (max-width: 480px) {
+  .image-results-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 0.5rem;
+  }
+  .image-card-thumb-wrap {
+    height: 105px;
+  }
+}
 
 /* Settings Dashboard View */
 .settings-view-wrap {
