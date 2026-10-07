@@ -999,20 +999,21 @@ def sync_engines_to_settings_file(
 
         if new_content != content:
             dir_name = os.path.dirname(settings_path)
-            temp_file = tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8")
-            temp_path = temp_file.name
+            temp_path = None
             try:
-                temp_file.write(new_content)
-                temp_file.flush()
-                temp_file.close()
+                with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8") as temp_file:
+                    temp_path = temp_file.name
+                    temp_file.write(new_content)
+                    temp_file.flush()
                 os.replace(temp_path, settings_path)
             except Exception:
-                with contextlib.suppress(Exception):
-                    os.unlink(temp_path)
+                if temp_path:
+                    with contextlib.suppress(Exception):
+                        os.unlink(temp_path)
                 raise
             return True
         return False
-    except Exception:
+    except Exception:  # noqa: BLE001 - safely handle file I/O or parsing failures without crashing
         return False
 
 

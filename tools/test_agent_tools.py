@@ -920,6 +920,7 @@ class TestWebUINextRegression(unittest.TestCase):
     def test_sync_engines_to_settings_file_updates_yaml(self) -> None:
         """Verify sync_engines_to_settings_file safely modifies YAML without destroying comments."""
         import tempfile
+
         import webui_next
 
         sample_yaml = (
@@ -967,6 +968,7 @@ class TestWebUINextRegression(unittest.TestCase):
     def test_save_engines_settings_data_updates_in_memory_and_settings_file(self) -> None:
         """Verify save_engines_settings_data updates in-memory engine objects immediately."""
         import types
+
         import webui_next
 
         class MockEngine:
@@ -994,8 +996,8 @@ class TestWebUINextRegression(unittest.TestCase):
 
     def test_preferences_parse_cookie_and_dict_handle_bare_engine_names(self) -> None:
         """Verify Preferences and BooleanChoices parse bare engine names to enable all categories."""
-        from searx.preferences import BooleanChoices, Preferences
         import searx.plugins
+        from searx.preferences import BooleanChoices, Preferences
 
         choices = {
             "duckduckgo__general": False,
