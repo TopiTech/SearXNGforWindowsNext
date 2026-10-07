@@ -919,7 +919,7 @@ def patch_preferences_validation(content, path):
     if (
         "self.value = [x for x in elements if x in self.choices]" in content
         and "except ValidationException as e:" in content
-        and ("k.startswith(f\"{disabled}__\")" in content or "def parse_cookie" not in content)
+        and ('k.startswith(f"{disabled}__")' in content or "def parse_cookie" not in content)
         and (
             "user_setting_name in ('disabled_engines', 'enabled_engines')" in content
             or "elif user_setting_name == 'disabled_engines'" not in content
@@ -990,7 +990,7 @@ def patch_preferences_validation(content, path):
         "                self.choices[disabled] = False\n"
         "            else:\n"
         "                for k in self.choices:\n"
-        "                    if k == disabled or k.startswith(f\"{disabled}__\"):\n"
+        '                    if k == disabled or k.startswith(f"{disabled}__"):\n'
         "                        self.choices[k] = False\n\n"
         "        for enabled in data_enabled.split(','):\n"
         "            enabled = enabled.strip()\n"
@@ -1000,7 +1000,7 @@ def patch_preferences_validation(content, path):
         "                self.choices[enabled] = True\n"
         "            else:\n"
         "                for k in self.choices:\n"
-        "                    if k == enabled or k.startswith(f\"{enabled}__\"):\n"
+        '                    if k == enabled or k.startswith(f"{enabled}__"):\n'
         "                        self.choices[k] = True"
     )
     if old_parse_cookie in content:

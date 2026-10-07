@@ -931,7 +931,7 @@ def sync_engines_to_settings_file(
         return False
 
     if not settings_path:
-        env_path = os.environ.get("SEARXNG_SETTINGS_PATH", "").strip().strip('"\'')
+        env_path = os.environ.get("SEARXNG_SETTINGS_PATH", "").strip().strip("\"'")
         if env_path and os.path.isfile(env_path):
             settings_path = env_path
         else:
@@ -992,9 +992,7 @@ def sync_engines_to_settings_file(
                 line_ending = "\r\n" if "\r\n" in new_content else "\n"
                 to_insert = ""
                 for e in missing_to_add:
-                    to_insert += (
-                        f"{line_ending}  - name: {e}{line_ending}    engine: {e}{line_ending}    disabled: false{line_ending}"
-                    )
+                    to_insert += f"{line_ending}  - name: {e}{line_ending}    engine: {e}{line_ending}    disabled: false{line_ending}"
                 new_content = new_content[:sec_end] + to_insert + new_content[sec_end:]
 
         if new_content != content:

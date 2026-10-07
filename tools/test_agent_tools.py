@@ -956,7 +956,10 @@ class TestWebUINextRegression(unittest.TestCase):
             with open(tmp_path, "r", encoding="utf-8") as f:
                 updated = f.read()
 
-            self.assertIn("# DuckDuckGo engine\n  - name: duckduckgo\n    engine: duckduckgo\n    shortcut: ddg\n    disabled: false", updated)
+            self.assertIn(
+                "# DuckDuckGo engine\n  - name: duckduckgo\n    engine: duckduckgo\n    shortcut: ddg\n    disabled: false",
+                updated,
+            )
             self.assertIn("# Bing engine\n  - name: bing\n    engine: bing\n    disabled: true", updated)
             self.assertIn("- name: brave\n    engine: brave\n    disabled: false", updated)
             self.assertIn("# Top comment", updated)
@@ -981,9 +984,7 @@ class TestWebUINextRegression(unittest.TestCase):
 
         mock_webapp = types.SimpleNamespace(
             searx=types.SimpleNamespace(
-                engines=types.SimpleNamespace(
-                    engines={"duckduckgo": ddg_engine, "bing": bing_engine}
-                )
+                engines=types.SimpleNamespace(engines={"duckduckgo": ddg_engine, "bing": bing_engine})
             )
         )
 
