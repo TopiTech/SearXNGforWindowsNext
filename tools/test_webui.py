@@ -1159,6 +1159,14 @@ class TestWebUIAccessibilityDeepSearchAndKeybindings(unittest.TestCase):
         self.assertIn(".video-card.selected-card {", html)
         self.assertIn(".image-card.selected-card {", html)
 
+    def test_classic_pagination_fraction_indicator_format(self) -> None:
+        """Verify classic-page-indicator displays fraction format 'ページ 1 / 10' and updates dynamically."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn('id="classic-page-indicator" class="pill">ページ 1 / 10</span>', html)
+        self.assertIn("indicator.textContent = 'ページ ' + page + ' / ' + totalPages;", html)
+        self.assertIn("updateClassicPagination(page, items)", html)
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -915,10 +915,15 @@ def patch_preferences_accessibility(content, path):
 
 # --- Patch 3e: preferences.py (safe category validation & non-fatal parse_dict) ---
 def patch_preferences_validation(content, path):
-    """Ensure MultipleChoiceSetting safely filters choices and parse_dict handles ValidationException."""
+    """Ensure MultipleChoiceSetting safely filters choices, parse_cookie handles base engine names, and parse_dict handles ValidationException."""
     if (
         "self.value = [x for x in elements if x in self.choices]" in content
         and "except ValidationException as e:" in content
+        and ("k.startswith(f\"{disabled}__\")" in content or "def parse_cookie" not in content)
+        and (
+            "user_setting_name in ('disabled_engines', 'enabled_engines')" in content
+            or "elif user_setting_name == 'disabled_engines'" not in content
+        )
         and (
             "favicons, logger" in content
             or "from searx import get_setting, settings, autocomplete, favicons" not in content
@@ -964,6 +969,58 @@ def patch_preferences_validation(content, path):
     )
     if old_parse_dict in content:
         content = content.replace(old_parse_dict, new_parse_dict, 1)
+
+    # 3. Update BooleanChoices.parse_cookie to support matching base engine names across all categories
+    old_parse_cookie = (
+        "    def parse_cookie(self, data_disabled: str, data_enabled: str):\n"
+        "        for disabled in data_disabled.split(','):\n"
+        "            if disabled in self.choices:\n"
+        "                self.choices[disabled] = False\n\n"
+        "        for enabled in data_enabled.split(','):\n"
+        "            if enabled in self.choices:\n"
+        "                self.choices[enabled] = True"
+    )
+    new_parse_cookie = (
+        "    def parse_cookie(self, data_disabled: str, data_enabled: str):\n"
+        "        for disabled in data_disabled.split(','):\n"
+        "            disabled = disabled.strip()\n"
+        "            if not disabled:\n"
+        "                continue\n"
+        "            if disabled in self.choices:\n"
+        "                self.choices[disabled] = False\n"
+        "            else:\n"
+        "                for k in self.choices:\n"
+        "                    if k == disabled or k.startswith(f\"{disabled}__\"):\n"
+        "                        self.choices[k] = False\n\n"
+        "        for enabled in data_enabled.split(','):\n"
+        "            enabled = enabled.strip()\n"
+        "            if not enabled:\n"
+        "                continue\n"
+        "            if enabled in self.choices:\n"
+        "                self.choices[enabled] = True\n"
+        "            else:\n"
+        "                for k in self.choices:\n"
+        "                    if k == enabled or k.startswith(f\"{enabled}__\"):\n"
+        "                        self.choices[k] = True"
+    )
+    if old_parse_cookie in content:
+        content = content.replace(old_parse_cookie, new_parse_cookie, 1)
+
+    # 4. Trigger parse_cookie when either disabled_engines or enabled_engines is present in input_data
+    old_triggers = (
+        "            elif user_setting_name == 'disabled_engines':\n"
+        "                self.engines.parse_cookie(input_data.get('disabled_engines', ''), input_data.get('enabled_engines', ''))\n"
+        "            elif user_setting_name == 'disabled_plugins':\n"
+        "                self.plugins.parse_cookie(input_data.get('disabled_plugins', ''), input_data.get('enabled_plugins', ''))"
+    )
+    new_triggers = (
+        "            elif user_setting_name in ('disabled_engines', 'enabled_engines'):\n"
+        "                self.engines.parse_cookie(input_data.get('disabled_engines', ''), input_data.get('enabled_engines', ''))\n"
+        "            elif user_setting_name in ('disabled_plugins', 'enabled_plugins'):\n"
+        "                self.plugins.parse_cookie(input_data.get('disabled_plugins', ''), input_data.get('enabled_plugins', ''))"
+    )
+    if old_triggers in content:
+        content = content.replace(old_triggers, new_triggers, 1)
 
     return content
 

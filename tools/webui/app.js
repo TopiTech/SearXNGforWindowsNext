@@ -1045,6 +1045,27 @@
       /* -------------------------------------------------------------
        * Classic Search Mode Implementation (Text & Image Gallery)
        * ------------------------------------------------------------- */
+      function updateClassicPagination(page, items) {
+        var pagBar = document.getElementById('classic-pagination-bar');
+        if (!pagBar) return;
+        pagBar.style.display = 'flex';
+        var countVal = parseInt((document.getElementById('classic-count') || {}).value || '10', 10);
+        if (isNaN(countVal) || countVal < 1) countVal = 10;
+        var maxPages = 10;
+        var isLastPage = (items.length < countVal);
+        var totalPages = isLastPage ? Math.max(page, 1) : Math.max(page, maxPages);
+
+        var indicator = document.getElementById('classic-page-indicator');
+        if (indicator) {
+          indicator.textContent = 'ページ ' + page + ' / ' + totalPages;
+        }
+
+        var prevBtn = document.getElementById('classic-prev-btn');
+        if (prevBtn) prevBtn.disabled = (page <= 1);
+        var nextBtn = document.getElementById('classic-next-btn');
+        if (nextBtn) document.getElementById('classic-next-btn').disabled = (items.length < countVal) || (page >= totalPages);
+      }
+
       function renderClassicSearchResults(items, query, page) {
         var container = document.getElementById('classic-results-container');
         container.innerHTML = '';
@@ -1155,12 +1176,7 @@
           });
           container.appendChild(grid);
 
-          var pagBar = document.getElementById('classic-pagination-bar');
-          pagBar.style.display = 'flex';
-          document.getElementById('classic-page-indicator').textContent = 'ページ ' + page;
-          document.getElementById('classic-prev-btn').disabled = (page <= 1);
-          var countVal = parseInt((document.getElementById('classic-count') || {}).value || '10', 10);
-          document.getElementById('classic-next-btn').disabled = (items.length < countVal);
+          updateClassicPagination(page, items);
           return;
         }
 
@@ -1314,12 +1330,7 @@
           });
           container.appendChild(vList);
 
-          var pagBar = document.getElementById('classic-pagination-bar');
-          pagBar.style.display = 'flex';
-          document.getElementById('classic-page-indicator').textContent = 'ページ ' + page;
-          document.getElementById('classic-prev-btn').disabled = (page <= 1);
-          var countVal = parseInt((document.getElementById('classic-count') || {}).value || '10', 10);
-          document.getElementById('classic-next-btn').disabled = (items.length < countVal);
+          updateClassicPagination(page, items);
           return;
         }
 
@@ -1431,12 +1442,7 @@
         });
 
         // Pagination
-        var pagBar = document.getElementById('classic-pagination-bar');
-        pagBar.style.display = 'flex';
-        document.getElementById('classic-page-indicator').textContent = 'ページ ' + page;
-        document.getElementById('classic-prev-btn').disabled = (page <= 1);
-        var countVal = parseInt((document.getElementById('classic-count') || {}).value || '10', 10);
-        document.getElementById('classic-next-btn').disabled = (items.length < countVal);
+        updateClassicPagination(page, items);
       }
 
       function runClassicSearch(query, page) {

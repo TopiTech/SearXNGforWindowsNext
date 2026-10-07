@@ -26,6 +26,7 @@ import os
 import re
 import socket
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -920,18 +921,115 @@ def get_engines_settings_data(
     }
 
 
+def sync_engines_to_settings_file(
+    enabled_engines: list[str],
+    disabled_engines: list[str],
+    settings_path: str | None = None,
+) -> bool:
+    """Safely update disabled: true/false for specified engines in config/settings.yml."""
+    if not enabled_engines and not disabled_engines:
+        return False
+
+    if not settings_path:
+        env_path = os.environ.get("SEARXNG_SETTINGS_PATH", "").strip().strip('"\'')
+        if env_path and os.path.isfile(env_path):
+            settings_path = env_path
+        else:
+            default_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "settings.yml"
+            )
+            if os.path.isfile(default_path):
+                settings_path = default_path
+
+    if not settings_path or not os.path.isfile(settings_path):
+        return False
+
+    try:
+        with open(settings_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        engine_pat = re.compile(
+            r"(?m)(^[ \t]*-[ \t]*name:[ \t]*['\"]?([^'\"\r\n]+)['\"]?[ \t]*\r?\n)([\s\S]*?)(?=(?:^[ \t]*-[ \t]*name:)|(?:^[a-zA-Z0-9_]+:)|\Z)"
+        )
+
+        found_engines: set[str] = set()
+
+        def replace_engine_block(match: re.Match[str]) -> str:
+            header = match.group(1)
+            name = match.group(2).strip()
+            body = match.group(3)
+            found_engines.add(name)
+
+            target_disabled = None
+            if name in enabled_engines:
+                target_disabled = False
+            elif name in disabled_engines:
+                target_disabled = True
+
+            if target_disabled is None:
+                return match.group(0)
+
+            dis_pat = re.compile(r"(?m)^([ \t]*disabled[ \t]*:[ \t]*)(?:true|false|yes|no)(.*)$", re.IGNORECASE)
+            if dis_pat.search(body):
+                new_val = "true" if target_disabled else "false"
+                new_body = dis_pat.sub(rf"\g<1>{new_val}\g<2>", body)
+                return header + new_body
+            else:
+                indent = "    "
+                line_ending = "\r\n" if "\r\n" in header else "\n"
+                new_val = "true" if target_disabled else "false"
+                return header + f"{indent}disabled: {new_val}{line_ending}" + body
+
+        new_content = engine_pat.sub(replace_engine_block, content)
+
+        # For any enabled engines not already in config/settings.yml, append to engines: section
+        missing_to_add = [e for e in enabled_engines if e not in found_engines]
+        if missing_to_add:
+            top_level_pat = re.compile(r"(?m)(^engines:[ \t]*\r?\n[\s\S]*?)(?=^[a-zA-Z0-9_]+:|\Z)")
+            m = top_level_pat.search(new_content)
+            if m:
+                sec_end = m.end(1)
+                line_ending = "\r\n" if "\r\n" in new_content else "\n"
+                to_insert = ""
+                for e in missing_to_add:
+                    to_insert += (
+                        f"{line_ending}  - name: {e}{line_ending}    engine: {e}{line_ending}    disabled: false{line_ending}"
+                    )
+                new_content = new_content[:sec_end] + to_insert + new_content[sec_end:]
+
+        if new_content != content:
+            dir_name = os.path.dirname(settings_path)
+            temp_file = tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8")
+            temp_path = temp_file.name
+            try:
+                temp_file.write(new_content)
+                temp_file.flush()
+                temp_file.close()
+                os.replace(temp_path, settings_path)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    os.unlink(temp_path)
+                raise
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def save_engines_settings_data(
     webapp_mod: Any,
     payload: dict[str, Any],
     response: Any = None,
 ) -> dict[str, Any]:
-    """Persist user engine toggles and general preferences to session cookies."""
+    """Persist user engine toggles and general preferences to settings.yml and session cookies."""
     disabled_engines = payload.get("disabled_engines")
     enabled_engines = payload.get("enabled_engines")
     cookie_max_age = 60 * 60 * 24 * 365 * 5  # 5 years
 
     dis_str = ""
     en_str = ""
+    clean_dis: list[str] = []
+    clean_en: list[str] = []
 
     if isinstance(disabled_engines, list):
         clean_dis = [str(x).strip() for x in disabled_engines if str(x).strip()]
@@ -941,6 +1039,34 @@ def save_engines_settings_data(
         clean_en = [str(x).strip() for x in enabled_engines if str(x).strip()]
         en_str = ",".join(clean_en)
 
+    # 1. Persist engine enablement directly into config/settings.yml
+    synced_yml = sync_engines_to_settings_file(clean_en, clean_dis)
+
+    # 2. Live in-memory update for the running process
+    se = None
+    if webapp_mod is not None:
+        searx_pkg = getattr(webapp_mod, "searx", None)
+        if searx_pkg:
+            se = getattr(searx_pkg, "engines", None)
+    if se is None:
+        se = sys.modules.get("searx.engines")
+    if se and hasattr(se, "engines"):
+        for name in clean_en:
+            if name in se.engines:
+                se.engines[name].disabled = False
+        for name in clean_dis:
+            if name in se.engines:
+                se.engines[name].disabled = True
+
+    # 3. Update active request preferences if available
+    if webapp_mod is not None:
+        with contextlib.suppress(Exception):
+            sxng_req = getattr(webapp_mod, "sxng_request", None)
+            prefs = getattr(sxng_req, "preferences", None) if sxng_req else None
+            if prefs and hasattr(prefs, "engines") and hasattr(prefs.engines, "parse_cookie"):
+                prefs.engines.parse_cookie(dis_str, en_str)
+
+    # 4. Set persistent session cookies
     if response is not None and hasattr(response, "set_cookie"):
         if "disabled_engines" in payload:
             response.set_cookie("disabled_engines", dis_str, max_age=cookie_max_age, path="/")
@@ -958,6 +1084,7 @@ def save_engines_settings_data(
         "success": True,
         "disabled_engines_count": len(disabled_engines) if isinstance(disabled_engines, list) else 0,
         "enabled_engines_count": len(enabled_engines) if isinstance(enabled_engines, list) else 0,
+        "synced_settings_yml": synced_yml,
     }
 
 
@@ -3308,7 +3435,7 @@ footer.ws-footer {
       </div>
       <div id="classic-pagination-bar" class="classic-pagination-row" style="display:none;">
         <button type="button" class="btn btn-sm" id="classic-prev-btn">&larr; 前のページ</button>
-        <span id="classic-page-indicator" class="pill">ページ 1</span>
+        <span id="classic-page-indicator" class="pill">ページ 1 / 10</span>
         <button type="button" class="btn btn-sm" id="classic-next-btn">次のページ &rarr;</button>
       </div>
     </section>
@@ -4517,6 +4644,27 @@ footer.ws-footer {
       /* -------------------------------------------------------------
        * Classic Search Mode Implementation (Text & Image Gallery)
        * ------------------------------------------------------------- */
+      function updateClassicPagination(page, items) {
+        var pagBar = document.getElementById('classic-pagination-bar');
+        if (!pagBar) return;
+        pagBar.style.display = 'flex';
+        var countVal = parseInt((document.getElementById('classic-count') || {}).value || '10', 10);
+        if (isNaN(countVal) || countVal < 1) countVal = 10;
+        var maxPages = 10;
+        var isLastPage = (items.length < countVal);
+        var totalPages = isLastPage ? Math.max(page, 1) : Math.max(page, maxPages);
+
+        var indicator = document.getElementById('classic-page-indicator');
+        if (indicator) {
+          indicator.textContent = 'ページ ' + page + ' / ' + totalPages;
+        }
+
+        var prevBtn = document.getElementById('classic-prev-btn');
+        if (prevBtn) prevBtn.disabled = (page <= 1);
+        var nextBtn = document.getElementById('classic-next-btn');
+        if (nextBtn) document.getElementById('classic-next-btn').disabled = (items.length < countVal) || (page >= totalPages);
+      }
+
       function renderClassicSearchResults(items, query, page) {
         var container = document.getElementById('classic-results-container');
         container.innerHTML = '';
@@ -4627,12 +4775,7 @@ footer.ws-footer {
           });
           container.appendChild(grid);
 
-          var pagBar = document.getElementById('classic-pagination-bar');
-          pagBar.style.display = 'flex';
-          document.getElementById('classic-page-indicator').textContent = 'ページ ' + page;
-          document.getElementById('classic-prev-btn').disabled = (page <= 1);
-          var countVal = parseInt((document.getElementById('classic-count') || {}).value || '10', 10);
-          document.getElementById('classic-next-btn').disabled = (items.length < countVal);
+          updateClassicPagination(page, items);
           return;
         }
 
@@ -4786,12 +4929,7 @@ footer.ws-footer {
           });
           container.appendChild(vList);
 
-          var pagBar = document.getElementById('classic-pagination-bar');
-          pagBar.style.display = 'flex';
-          document.getElementById('classic-page-indicator').textContent = 'ページ ' + page;
-          document.getElementById('classic-prev-btn').disabled = (page <= 1);
-          var countVal = parseInt((document.getElementById('classic-count') || {}).value || '10', 10);
-          document.getElementById('classic-next-btn').disabled = (items.length < countVal);
+          updateClassicPagination(page, items);
           return;
         }
 
@@ -4903,12 +5041,7 @@ footer.ws-footer {
         });
 
         // Pagination
-        var pagBar = document.getElementById('classic-pagination-bar');
-        pagBar.style.display = 'flex';
-        document.getElementById('classic-page-indicator').textContent = 'ページ ' + page;
-        document.getElementById('classic-prev-btn').disabled = (page <= 1);
-        var countVal = parseInt((document.getElementById('classic-count') || {}).value || '10', 10);
-        document.getElementById('classic-next-btn').disabled = (items.length < countVal);
+        updateClassicPagination(page, items);
       }
 
       function runClassicSearch(query, page) {

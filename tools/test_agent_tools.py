@@ -917,6 +917,113 @@ class TestWebUINextRegression(unittest.TestCase):
         self.assertIn("localStorage.removeItem('sxng_pref_mode')", html)
         self.assertIn("localStorage.removeItem('sxng_pref_safesearch')", html)
 
+    def test_sync_engines_to_settings_file_updates_yaml(self) -> None:
+        """Verify sync_engines_to_settings_file safely modifies YAML without destroying comments."""
+        import tempfile
+        import webui_next
+
+        sample_yaml = (
+            "# Top comment\n"
+            "engines:\n"
+            "  # Bing engine\n"
+            "  - name: bing\n"
+            "    engine: bing\n"
+            "    disabled: false\n"
+            "\n"
+            "  # DuckDuckGo engine\n"
+            "  - name: duckduckgo\n"
+            "    engine: duckduckgo\n"
+            "    shortcut: ddg\n"
+            "    disabled: true\n"
+            "\n"
+            "doi_resolvers:\n"
+            "  oadoi.org: 'https://oadoi.org/'\n"
+        )
+        with tempfile.NamedTemporaryFile("w+", delete=False, encoding="utf-8", suffix=".yml") as tmp:
+            tmp.write(sample_yaml)
+            tmp_path = tmp.name
+
+        try:
+            # Enable duckduckgo, disable bing, add new engine brave
+            changed = webui_next.sync_engines_to_settings_file(
+                enabled_engines=["duckduckgo", "brave"],
+                disabled_engines=["bing"],
+                settings_path=tmp_path,
+            )
+            self.assertTrue(changed)
+
+            with open(tmp_path, "r", encoding="utf-8") as f:
+                updated = f.read()
+
+            self.assertIn("# DuckDuckGo engine\n  - name: duckduckgo\n    engine: duckduckgo\n    shortcut: ddg\n    disabled: false", updated)
+            self.assertIn("# Bing engine\n  - name: bing\n    engine: bing\n    disabled: true", updated)
+            self.assertIn("- name: brave\n    engine: brave\n    disabled: false", updated)
+            self.assertIn("# Top comment", updated)
+            self.assertIn("doi_resolvers:", updated)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    def test_save_engines_settings_data_updates_in_memory_and_settings_file(self) -> None:
+        """Verify save_engines_settings_data updates in-memory engine objects immediately."""
+        import types
+        import webui_next
+
+        class MockEngine:
+            def __init__(self, name: str, disabled: bool) -> None:
+                self.name = name
+                self.disabled = disabled
+
+        ddg_engine = MockEngine("duckduckgo", disabled=True)
+        bing_engine = MockEngine("bing", disabled=False)
+
+        mock_webapp = types.SimpleNamespace(
+            searx=types.SimpleNamespace(
+                engines=types.SimpleNamespace(
+                    engines={"duckduckgo": ddg_engine, "bing": bing_engine}
+                )
+            )
+        )
+
+        payload = {"enabled_engines": ["duckduckgo"], "disabled_engines": ["bing"]}
+        res = webui_next.save_engines_settings_data(mock_webapp, payload)
+
+        self.assertTrue(res["success"])
+        self.assertFalse(ddg_engine.disabled, "duckduckgo should be live updated to disabled=False")
+        self.assertTrue(bing_engine.disabled, "bing should be live updated to disabled=True")
+
+    def test_preferences_parse_cookie_and_dict_handle_bare_engine_names(self) -> None:
+        """Verify Preferences and BooleanChoices parse bare engine names to enable all categories."""
+        from searx.preferences import BooleanChoices, Preferences
+        import searx.plugins
+
+        choices = {
+            "duckduckgo__general": False,
+            "duckduckgo__images": False,
+            "bing__general": True,
+        }
+        bc = BooleanChoices("engines", dict(choices))
+
+        # Bare engine name 'duckduckgo' should enable both duckduckgo__general and duckduckgo__images
+        bc.parse_cookie(data_disabled="bing", data_enabled="duckduckgo")
+        self.assertTrue(bc.choices["duckduckgo__general"])
+        self.assertTrue(bc.choices["duckduckgo__images"])
+        self.assertFalse(bc.choices["bing__general"])
+
+        # Test Preferences.parse_dict with only enabled_engines
+        import types
+        import searx.favicons.proxy
+        orig_cfg = getattr(searx.favicons.proxy, "CFG", None)
+        try:
+            searx.favicons.proxy.CFG = types.SimpleNamespace(resolver_map={})
+            prefs = Preferences(["simple"], ["general", "images"], {}, searx.plugins.STORAGE)
+            prefs.engines.choices = dict(choices)
+            prefs.parse_dict({"enabled_engines": "duckduckgo"})
+            self.assertTrue(prefs.engines.choices["duckduckgo__general"])
+            self.assertTrue(prefs.engines.choices["duckduckgo__images"])
+        finally:
+            searx.favicons.proxy.CFG = orig_cfg
+
 
 class TestAgentQueryPipelineIntegration(unittest.TestCase):
     """Regression tests for agent tool integration with QueryProcessor and RetrievalService."""
