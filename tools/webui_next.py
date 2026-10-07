@@ -1015,6 +1015,32 @@ def sync_engines_to_settings_file(
         return False
 
 
+def apply_settings_cookies(response: Any, payload: dict[str, Any]) -> None:
+    """Set persistent session cookies on response from settings payload."""
+    if response is None or not hasattr(response, "set_cookie"):
+        return
+    cookie_max_age = 60 * 60 * 24 * 365 * 5  # 5 years
+    if "disabled_engines" in payload:
+        disabled_engines = payload.get("disabled_engines")
+        clean_dis = (
+            [str(x).strip() for x in disabled_engines if str(x).strip()] if isinstance(disabled_engines, list) else []
+        )
+        response.set_cookie("disabled_engines", ",".join(clean_dis), max_age=cookie_max_age, path="/")
+    if "enabled_engines" in payload:
+        enabled_engines = payload.get("enabled_engines")
+        clean_en = (
+            [str(x).strip() for x in enabled_engines if str(x).strip()] if isinstance(enabled_engines, list) else []
+        )
+        response.set_cookie("enabled_engines", ",".join(clean_en), max_age=cookie_max_age, path="/")
+    if "safesearch" in payload:
+        response.set_cookie("safesearch", str(payload["safesearch"]), max_age=cookie_max_age, path="/")
+    if "autocomplete" in payload:
+        ac_val = str(payload["autocomplete"]).strip().lower()
+        if ac_val in ("off", "none", "0", "false"):
+            ac_val = "off"
+        response.set_cookie("autocomplete", ac_val, max_age=cookie_max_age, path="/")
+
+
 def save_engines_settings_data(
     webapp_mod: Any,
     payload: dict[str, Any],
@@ -1023,7 +1049,6 @@ def save_engines_settings_data(
     """Persist user engine toggles and general preferences to settings.yml and session cookies."""
     disabled_engines = payload.get("disabled_engines")
     enabled_engines = payload.get("enabled_engines")
-    cookie_max_age = 60 * 60 * 24 * 365 * 5  # 5 years
 
     dis_str = ""
     en_str = ""
@@ -1065,19 +1090,9 @@ def save_engines_settings_data(
             if prefs and hasattr(prefs, "engines") and hasattr(prefs.engines, "parse_cookie"):
                 prefs.engines.parse_cookie(dis_str, en_str)
 
-    # 4. Set persistent session cookies
-    if response is not None and hasattr(response, "set_cookie"):
-        if "disabled_engines" in payload:
-            response.set_cookie("disabled_engines", dis_str, max_age=cookie_max_age, path="/")
-        if "enabled_engines" in payload:
-            response.set_cookie("enabled_engines", en_str, max_age=cookie_max_age, path="/")
-        if "safesearch" in payload:
-            response.set_cookie("safesearch", str(payload["safesearch"]), max_age=cookie_max_age, path="/")
-        if "autocomplete" in payload:
-            ac_val = str(payload["autocomplete"]).strip().lower()
-            if ac_val in ("off", "none", "0", "false"):
-                ac_val = "off"
-            response.set_cookie("autocomplete", ac_val, max_age=cookie_max_age, path="/")
+    # 4. Set persistent session cookies if response object provided
+    if response is not None:
+        apply_settings_cookies(response, payload)
 
     return {
         "success": True,
@@ -5940,24 +5955,52 @@ class _TokenBucket:
         self.updated = updated
 
 
+def _get_rate_capacity() -> float:
+    """Get active rate limit burst capacity (env SEARXNG_RATE_CAPACITY overrides default)."""
+    try:
+        val = float(os.environ.get("SEARXNG_RATE_CAPACITY", _RATE_CAPACITY))
+        return val if val > 0 else _RATE_CAPACITY
+    except (ValueError, TypeError):
+        return _RATE_CAPACITY
+
+
+def _get_rate_refill() -> float:
+    """Get active rate limit refill rate in tokens/sec (env SEARXNG_RATE_REFILL overrides default)."""
+    try:
+        val = float(os.environ.get("SEARXNG_RATE_REFILL", _RATE_REFILL_PER_SEC))
+        return val if val > 0 else _RATE_REFILL_PER_SEC
+    except (ValueError, TypeError):
+        return _RATE_REFILL_PER_SEC
+
+
+def _is_rate_limiting_enabled() -> bool:
+    """Return False if SEARXNG_RATE_LIMIT is set to off/false/0/disabled."""
+    val = os.environ.get("SEARXNG_RATE_LIMIT", "").strip().lower()
+    return val not in ("0", "false", "off", "no", "disable", "disabled")
+
+
 def _rate_limit_check(client_id: str) -> bool:
     """Take one token for ``client_id``; return True when allowed."""
+    if not _is_rate_limiting_enabled():
+        return True
     now = time.monotonic()
+    capacity = _get_rate_capacity()
+    refill = _get_rate_refill()
     with _RATELOCK:
         bucket = _RATE_BUCKETS.get(client_id)
         if bucket is None:
             if len(_RATE_BUCKETS) >= _RATE_MAX_BUCKETS:
                 # Evict stalest entries (oldest refill timestamps first)
                 # to keep the table bounded under address churn.
-                stale_cutoff = now - (_RATE_CAPACITY / _RATE_REFILL_PER_SEC)
+                stale_cutoff = now - (capacity / refill) if refill > 0 else now - 60.0
                 for stale_key in [k for k, v in _RATE_BUCKETS.items() if v.updated < stale_cutoff]:
                     del _RATE_BUCKETS[stale_key]
                 if len(_RATE_BUCKETS) >= _RATE_MAX_BUCKETS and client_id not in _RATE_BUCKETS:
                     return False  # under flood: reject unknown clients
-            bucket = _TokenBucket(_RATE_CAPACITY, now)
+            bucket = _TokenBucket(capacity, now)
             _RATE_BUCKETS[client_id] = bucket
         elapsed = now - bucket.updated
-        bucket.tokens = min(_RATE_CAPACITY, bucket.tokens + elapsed * _RATE_REFILL_PER_SEC)
+        bucket.tokens = min(capacity, bucket.tokens + elapsed * refill)
         bucket.updated = now
         if bucket.tokens >= 1.0:
             bucket.tokens -= 1.0
@@ -6042,11 +6085,11 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             or request.args.get("format") == "json"
         )
         if is_ajax:
-            return Response(json.dumps(results), mimetype="application/json")
+            return Response(json.dumps(results, ensure_ascii=False), mimetype="application/json")
 
         relevances = {"google:suggestrelevance": [600 - i for i in range(len(results))]}
         return Response(
-            json.dumps([q, results, [], [], relevances]),
+            json.dumps([q, results, [], [], relevances], ensure_ascii=False),
             mimetype="application/x-suggestions+json",
         )
 
@@ -6075,7 +6118,8 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         if request.path in _RATE_LIMITED_PATHS:
             client_id = _rate_limit_client_id()
             if not _rate_limit_check(client_id):
-                retry_after = max(1, round(1.0 / _RATE_REFILL_PER_SEC))
+                refill_rate = _get_rate_refill()
+                retry_after = max(1, round(1.0 / refill_rate)) if refill_rate > 0 else 2
                 resp = jsonify({"error": "Rate limit exceeded", "retry_after": retry_after})
                 resp.status_code = 429
                 resp.headers["Retry-After"] = str(retry_after)
@@ -6095,8 +6139,8 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                 out_fmt = (request.args.get("format") or "").strip().lower()
                 accept = request.headers.get("Accept") or ""
                 if not out_fmt and "application/json" not in accept and "text/json" not in accept:
-                    params = dict(request.args)
-                    qs = urllib.parse.urlencode(params)
+                    params = request.args.to_dict(flat=False)
+                    qs = urllib.parse.urlencode(params, doseq=True)
                     return redirect(f"/?{qs}" if qs else "/", code=302)
             # 3. Browser /preferences -> redirect to Settings tab
             if path == "/preferences":
@@ -6128,8 +6172,8 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             out_fmt in ("json", "json_lite", "csv", "rss") or "application/json" in accept or "text/json" in accept
         ) and orig_search:
             return orig_search()
-        params = dict(request.values)
-        qs = urllib.parse.urlencode(params)
+        params = request.values.to_dict(flat=False)
+        qs = urllib.parse.urlencode(params, doseq=True)
         return redirect(f"/?{qs}" if qs else "/", code=302)
 
     def unified_preferences_view() -> Any:
@@ -6185,7 +6229,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             payload = payload if isinstance(payload, dict) else {}
             data = save_engines_settings_data(webapp_mod, payload)
             resp = jsonify(data)
-            save_engines_settings_data(webapp_mod, payload, response=resp)
+            apply_settings_cookies(resp, payload)
             return resp
 
         cookies = dict(request.cookies) if getattr(request, "cookies", None) else {}

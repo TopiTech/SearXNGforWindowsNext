@@ -479,6 +479,37 @@ class TestWebUIPostParameterRetention(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_data(as_text=True), "ORIGINAL_SEARCH_INVOKED")
 
+    def test_post_search_preserves_multi_value_parameters(self) -> None:
+        """Verify duplicate keys (e.g. category=it&category=science) are preserved in 302 redirect."""
+        from werkzeug.datastructures import MultiDict
+
+        form_data = MultiDict(
+            [
+                ("q", "machine learning"),
+                ("category", "it"),
+                ("category", "science"),
+            ]
+        )
+        resp = self.client.post("/search", data=form_data)
+        self.assertEqual(resp.status_code, 302)
+        location = resp.headers.get("Location", "")
+        parsed = urllib.parse.urlparse(location)
+        qs = urllib.parse.parse_qs(parsed.query)
+
+        self.assertEqual(qs.get("q"), ["machine learning"])
+        self.assertEqual(qs.get("category"), ["it", "science"])
+
+    def test_get_search_preserves_multi_value_parameters(self) -> None:
+        """Verify GET /search with multi-value query params preserves all values in 302 redirect."""
+        resp = self.client.get("/search?q=test&category=it&category=news")
+        self.assertEqual(resp.status_code, 302)
+        location = resp.headers.get("Location", "")
+        parsed = urllib.parse.urlparse(location)
+        qs = urllib.parse.parse_qs(parsed.query)
+
+        self.assertEqual(qs.get("q"), ["test"])
+        self.assertEqual(qs.get("category"), ["it", "news"])
+
 
 class TestWebUIScraperLimits(unittest.TestCase):
     """Test scraper HTTP keepalive pooling hardening (F3.10 / keepalive)."""
@@ -1165,6 +1196,84 @@ class TestWebUIAccessibilityDeepSearchAndKeybindings(unittest.TestCase):
         self.assertIn('id="classic-page-indicator" class="pill">ページ 1 / 10</span>', html)
         self.assertIn("indicator.textContent = 'ページ ' + page + ' / ' + totalPages;", html)
         self.assertIn("updateClassicPagination(page, items)", html)
+
+
+class TestWebUIRefinedBehaviors(unittest.TestCase):
+    """Test rate limiter configurability, single persistence execution, and autocompleter unicode."""
+
+    def test_apply_settings_cookies_sets_cookie_attributes(self) -> None:
+        """apply_settings_cookies sets disabled_engines, enabled_engines, safesearch, autocomplete."""
+
+        class MockResp:
+            def __init__(self) -> None:
+                self.cookies: dict[str, str] = {}
+
+            def set_cookie(self, key: str, value: str, **kwargs: Any) -> None:
+                self.cookies[key] = value
+
+        resp = MockResp()
+        payload = {
+            "disabled_engines": ["duckduckgo", "brave"],
+            "enabled_engines": ["google", "bing"],
+            "safesearch": 1,
+            "autocomplete": "off",
+        }
+        webui_next.apply_settings_cookies(resp, payload)
+        self.assertEqual(resp.cookies.get("disabled_engines"), "duckduckgo,brave")
+        self.assertEqual(resp.cookies.get("enabled_engines"), "google,bing")
+        self.assertEqual(resp.cookies.get("safesearch"), "1")
+        self.assertEqual(resp.cookies.get("autocomplete"), "off")
+
+    def test_rate_limiter_bypass_via_env(self) -> None:
+        """SEARXNG_RATE_LIMIT=0/false disables rate limiter completely."""
+        with patch.dict(os.environ, {"SEARXNG_RATE_LIMIT": "false"}):
+            self.assertFalse(webui_next._is_rate_limiting_enabled())
+            # Rapid requests should never be blocked
+            for _ in range(50):
+                self.assertTrue(webui_next._rate_limit_check("test-bypass-ip"))
+
+    def test_rate_limiter_env_capacity_and_refill(self) -> None:
+        """SEARXNG_RATE_CAPACITY and SEARXNG_RATE_REFILL override defaults."""
+        with patch.dict(os.environ, {"SEARXNG_RATE_CAPACITY": "42.0", "SEARXNG_RATE_REFILL": "2.5"}):
+            self.assertEqual(webui_next._get_rate_capacity(), 42.0)
+            self.assertEqual(webui_next._get_rate_refill(), 2.5)
+
+    def test_settings_engines_post_calls_save_once(self) -> None:
+        """POST /api/settings/engines should call save_engines_settings_data once and apply cookies."""
+        app = Flask(__name__)
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        with (
+            patch("webui_next.save_engines_settings_data") as mock_save,
+            patch("webui_next.apply_settings_cookies") as mock_apply,
+        ):
+            mock_save.return_value = {"success": True, "synced_settings_yml": True}
+            resp = client.post("/api/settings/engines", json={"enabled_engines": ["google"]})
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(mock_save.call_count, 1)
+            self.assertEqual(mock_apply.call_count, 1)
+
+    def test_autocompleter_cjk_raw_response_encoding(self) -> None:
+        """Unified autocompleter JSON output preserves non-ASCII characters directly without \\uXXXX escapes."""
+        app = Flask(__name__)
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        class MockSearxAutocomplete:
+            def __init__(self) -> None:
+                self.backends: dict[str, Any] = {"duckduckgo": None}
+
+            @staticmethod
+            def search_autocomplete(backend: str, q: str, lang: str) -> list[str]:
+                return ["検索エンジン", "検索結果"]
+
+        with patch.dict("sys.modules", {"searx.autocomplete": MockSearxAutocomplete()}):
+            resp = client.get("/autocompleter?q=検&format=json")
+            self.assertEqual(resp.status_code, 200)
+            raw_text = resp.get_data(as_text=True)
+            self.assertIn("検索エンジン", raw_text)
+            self.assertNotIn(r"\u691c", raw_text)
 
 
 if __name__ == "__main__":
