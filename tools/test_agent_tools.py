@@ -1012,17 +1012,15 @@ class TestWebUINextRegression(unittest.TestCase):
 
         # Test Preferences.parse_dict with only enabled_engines
         import types
+
         import searx.favicons.proxy
-        orig_cfg = getattr(searx.favicons.proxy, "CFG", None)
-        try:
-            searx.favicons.proxy.CFG = types.SimpleNamespace(resolver_map={})
+
+        with patch.object(searx.favicons.proxy, "CFG", types.SimpleNamespace(resolver_map={})):
             prefs = Preferences(["simple"], ["general", "images"], {}, searx.plugins.STORAGE)
             prefs.engines.choices = dict(choices)
             prefs.parse_dict({"enabled_engines": "duckduckgo"})
             self.assertTrue(prefs.engines.choices["duckduckgo__general"])
             self.assertTrue(prefs.engines.choices["duckduckgo__images"])
-        finally:
-            searx.favicons.proxy.CFG = orig_cfg
 
 
 class TestAgentQueryPipelineIntegration(unittest.TestCase):
