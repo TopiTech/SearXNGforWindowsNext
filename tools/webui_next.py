@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextlib
 import ipaddress
 import json
+import logging
 import os
 import re
 import socket
@@ -41,6 +42,8 @@ if TOOLS_DIR not in sys.path:
 import agentic_search
 import retrieval_service
 import searxng_client
+
+logger = logging.getLogger(__name__)
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -438,6 +441,21 @@ def _search_in_process(
     except (ValueError, TypeError):
         page_int = 1
 
+    # SSRF guard on the HTTP fallback: ``base_url`` reaches
+    # searxng_client.search() which performs a plain urllib request without
+    # the SSRF hardening of the scrape path. Restrict it to the local
+    # SearXNG instance (loopback / configured base URL); anything else is
+    # dropped so a caller cannot probe internal network endpoints through
+    # this API and read the JSON response.
+    if base_url is not None:
+        base_clean = str(base_url).strip()
+        configured = (os.environ.get("SEARXNG_BASE_URL") or "").strip().rstrip("/")
+        allowed = {"http://127.0.0.1:8888", "http://localhost:8888"}
+        if configured:
+            allowed.add(configured)
+        if base_clean.rstrip("/") not in allowed:
+            base_url = None
+
     if webapp_mod is not None:
         try:
             sxng_req = getattr(webapp_mod, "sxng_request", None)
@@ -496,9 +514,11 @@ def _search_in_process(
                     "infoboxes": data.get("infoboxes", []),
                     "suggestions": data.get("suggestions", []),
                 }
-        except Exception:  # noqa: BLE001, S110
-            # Fall back to HTTP client if outside request context or any internal mismatch
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # Fall back to HTTP client if outside request context or any internal
+            # mismatch. Log the failure so real bugs in the in-process path are
+            # visible instead of silently doubling latency via the HTTP fallback.
+            logger.warning("in-process search failed, falling back to HTTP client: %s", exc)
 
     return searxng_client.search(
         query=clean_query,
@@ -921,12 +941,51 @@ def get_engines_settings_data(
     }
 
 
+# Engine names are YAML plain-scalar-interpolated when appended to
+# config/settings.yml; restrict them to the character set SearXNG itself uses
+# (module identifiers) so a crafted JSON body cannot inject YAML structure
+# (newlines, "- name:" sequences, flow indicators).
+_ENGINE_NAME_RE = re.compile(r"^[A-Za-z0-9_.\- ]{1,64}$")
+
+_SETTINGS_YML_LOCK = threading.Lock()
+
+
+def _clean_engine_names(raw: Any) -> list[str]:
+    """Normalize a raw engine-name payload into validated unique names."""
+    if not isinstance(raw, list):
+        return []
+    names: list[str] = []
+    for x in raw:
+        name = str(x).strip()
+        if not name or not _ENGINE_NAME_RE.fullmatch(name):
+            continue
+        if name not in names:
+            names.append(name)
+    return names
+
+
 def sync_engines_to_settings_file(
     enabled_engines: list[str],
     disabled_engines: list[str],
     settings_path: str | None = None,
 ) -> bool:
     """Safely update disabled: true/false for specified engines in config/settings.yml."""
+    if not enabled_engines and not disabled_engines:
+        return False
+
+    # Second line of defense: only names that actually exist in the loaded
+    # engine registry may be persisted. Prevents YAML pollution with unknown
+    # keys even if the charset validation above is loosened later.
+    try:
+        import searx.engines as _sx_engines
+
+        registry = set(getattr(_sx_engines, "engines", {}).keys())
+        if registry:
+            enabled_engines = [e for e in enabled_engines if e in registry]
+            disabled_engines = [e for e in disabled_engines if e in registry]
+    except Exception as exc:  # noqa: BLE001 - registry unavailable (unit tests): keep charset-validated names
+        logger.debug("engine registry unavailable for name validation: %s", exc)
+
     if not enabled_engines and not disabled_engines:
         return False
 
@@ -944,75 +1003,79 @@ def sync_engines_to_settings_file(
     if not settings_path or not os.path.isfile(settings_path):
         return False
 
-    try:
-        with open(settings_path, "r", encoding="utf-8") as f:
-            content = f.read()
+    # Serialize read-modify-write cycles: os.replace is atomic but the
+    # read-check-write sequence is not, so two concurrent POSTs could lose
+    # each other's updates.
+    with _SETTINGS_YML_LOCK:
+        try:
+            with open(settings_path, "r", encoding="utf-8") as f:
+                content = f.read()
 
-        engine_pat = re.compile(
-            r"(?m)(^[ \t]*-[ \t]*name:[ \t]*['\"]?([^'\"\r\n]+)['\"]?[ \t]*\r?\n)([\s\S]*?)(?=(?:^[ \t]*-[ \t]*name:)|(?:^[a-zA-Z0-9_]+:)|\Z)"
-        )
+            engine_pat = re.compile(
+                r"(?m)(^[ \t]*-[ \t]*name:[ \t]*['\"]?([^'\"\r\n]+)['\"]?[ \t]*\r?\n)([\s\S]*?)(?=(?:^[ \t]*-[ \t]*name:)|(?:^[a-zA-Z0-9_]+:)|\Z)"
+            )
 
-        found_engines: set[str] = set()
+            found_engines: set[str] = set()
 
-        def replace_engine_block(match: re.Match[str]) -> str:
-            header = match.group(1)
-            name = match.group(2).strip()
-            body = match.group(3)
-            found_engines.add(name)
+            def replace_engine_block(match: re.Match[str]) -> str:
+                header = match.group(1)
+                name = match.group(2).strip()
+                body = match.group(3)
+                found_engines.add(name)
 
-            target_disabled = None
-            if name in enabled_engines:
-                target_disabled = False
-            elif name in disabled_engines:
-                target_disabled = True
+                target_disabled = None
+                if name in enabled_engines:
+                    target_disabled = False
+                elif name in disabled_engines:
+                    target_disabled = True
 
-            if target_disabled is None:
-                return match.group(0)
+                if target_disabled is None:
+                    return match.group(0)
 
-            dis_pat = re.compile(r"(?m)^([ \t]*disabled[ \t]*:[ \t]*)(?:true|false|yes|no)(.*)$", re.IGNORECASE)
-            if dis_pat.search(body):
-                new_val = "true" if target_disabled else "false"
-                new_body = dis_pat.sub(rf"\g<1>{new_val}\g<2>", body)
-                return header + new_body
-            else:
-                indent = "    "
-                line_ending = "\r\n" if "\r\n" in header else "\n"
-                new_val = "true" if target_disabled else "false"
-                return header + f"{indent}disabled: {new_val}{line_ending}" + body
+                dis_pat = re.compile(r"(?m)^([ \t]*disabled[ \t]*:[ \t]*)(?:true|false|yes|no)(.*)$", re.IGNORECASE)
+                if dis_pat.search(body):
+                    new_val = "true" if target_disabled else "false"
+                    new_body = dis_pat.sub(rf"\g<1>{new_val}\g<2>", body)
+                    return header + new_body
+                else:
+                    indent = "    "
+                    line_ending = "\r\n" if "\r\n" in header else "\n"
+                    new_val = "true" if target_disabled else "false"
+                    return header + f"{indent}disabled: {new_val}{line_ending}" + body
 
-        new_content = engine_pat.sub(replace_engine_block, content)
+            new_content = engine_pat.sub(replace_engine_block, content)
 
-        # For any enabled engines not already in config/settings.yml, append to engines: section
-        missing_to_add = [e for e in enabled_engines if e not in found_engines]
-        if missing_to_add:
-            top_level_pat = re.compile(r"(?m)(^engines:[ \t]*\r?\n[\s\S]*?)(?=^[a-zA-Z0-9_]+:|\Z)")
-            m = top_level_pat.search(new_content)
-            if m:
-                sec_end = m.end(1)
-                line_ending = "\r\n" if "\r\n" in new_content else "\n"
-                to_insert = ""
-                for e in missing_to_add:
-                    to_insert += f"{line_ending}  - name: {e}{line_ending}    engine: {e}{line_ending}    disabled: false{line_ending}"
-                new_content = new_content[:sec_end] + to_insert + new_content[sec_end:]
+            # For any enabled engines not already in config/settings.yml, append to engines: section
+            missing_to_add = [e for e in enabled_engines if e not in found_engines]
+            if missing_to_add:
+                top_level_pat = re.compile(r"(?m)(^engines:[ \t]*\r?\n[\s\S]*?)(?=^[a-zA-Z0-9_]+:|\Z)")
+                m = top_level_pat.search(new_content)
+                if m:
+                    sec_end = m.end(1)
+                    line_ending = "\r\n" if "\r\n" in new_content else "\n"
+                    to_insert = ""
+                    for e in missing_to_add:
+                        to_insert += f"{line_ending}  - name: {e}{line_ending}    engine: {e}{line_ending}    disabled: false{line_ending}"
+                    new_content = new_content[:sec_end] + to_insert + new_content[sec_end:]
 
-        if new_content != content:
-            dir_name = os.path.dirname(settings_path)
-            temp_path = None
-            try:
-                with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8") as temp_file:
-                    temp_path = temp_file.name
-                    temp_file.write(new_content)
-                    temp_file.flush()
-                os.replace(temp_path, settings_path)
-            except Exception:
-                if temp_path:
-                    with contextlib.suppress(Exception):
-                        os.unlink(temp_path)
-                raise
-            return True
-        return False
-    except Exception:  # noqa: BLE001 - safely handle file I/O or parsing failures without crashing
-        return False
+            if new_content != content:
+                dir_name = os.path.dirname(settings_path)
+                temp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8") as temp_file:
+                        temp_path = temp_file.name
+                        temp_file.write(new_content)
+                        temp_file.flush()
+                    os.replace(temp_path, settings_path)
+                except Exception:
+                    if temp_path:
+                        with contextlib.suppress(Exception):
+                            os.unlink(temp_path)
+                    raise
+                return True
+            return False
+        except Exception:  # noqa: BLE001 - safely handle file I/O or parsing failures without crashing
+            return False
 
 
 def apply_settings_cookies(response: Any, payload: dict[str, Any]) -> None:
@@ -1020,25 +1083,24 @@ def apply_settings_cookies(response: Any, payload: dict[str, Any]) -> None:
     if response is None or not hasattr(response, "set_cookie"):
         return
     cookie_max_age = 60 * 60 * 24 * 365 * 5  # 5 years
+    # SameSite=Lax + HttpOnly: these cookies only drive server-side engine
+    # enablement (never read by page JS), so they must not ride along on
+    # cross-site requests (CSRF via cookie-based state) nor be readable
+    # from injected script.
+    cookie_kwargs = {"max_age": cookie_max_age, "path": "/", "samesite": "Lax", "httponly": True}
     if "disabled_engines" in payload:
-        disabled_engines = payload.get("disabled_engines")
-        clean_dis = (
-            [str(x).strip() for x in disabled_engines if str(x).strip()] if isinstance(disabled_engines, list) else []
-        )
-        response.set_cookie("disabled_engines", ",".join(clean_dis), max_age=cookie_max_age, path="/")
+        clean_dis = _clean_engine_names(payload.get("disabled_engines"))
+        response.set_cookie("disabled_engines", ",".join(clean_dis), **cookie_kwargs)
     if "enabled_engines" in payload:
-        enabled_engines = payload.get("enabled_engines")
-        clean_en = (
-            [str(x).strip() for x in enabled_engines if str(x).strip()] if isinstance(enabled_engines, list) else []
-        )
-        response.set_cookie("enabled_engines", ",".join(clean_en), max_age=cookie_max_age, path="/")
+        clean_en = _clean_engine_names(payload.get("enabled_engines"))
+        response.set_cookie("enabled_engines", ",".join(clean_en), **cookie_kwargs)
     if "safesearch" in payload:
-        response.set_cookie("safesearch", str(payload["safesearch"]), max_age=cookie_max_age, path="/")
+        response.set_cookie("safesearch", str(payload["safesearch"]), **cookie_kwargs)
     if "autocomplete" in payload:
         ac_val = str(payload["autocomplete"]).strip().lower()
         if ac_val in ("off", "none", "0", "false"):
             ac_val = "off"
-        response.set_cookie("autocomplete", ac_val, max_age=cookie_max_age, path="/")
+        response.set_cookie("autocomplete", ac_val, **cookie_kwargs)
 
 
 def save_engines_settings_data(
@@ -1052,16 +1114,12 @@ def save_engines_settings_data(
 
     dis_str = ""
     en_str = ""
-    clean_dis: list[str] = []
-    clean_en: list[str] = []
-
-    if isinstance(disabled_engines, list):
-        clean_dis = [str(x).strip() for x in disabled_engines if str(x).strip()]
-        dis_str = ",".join(clean_dis)
-
-    if isinstance(enabled_engines, list):
-        clean_en = [str(x).strip() for x in enabled_engines if str(x).strip()]
-        en_str = ",".join(clean_en)
+    # Validate names against the engine-name charset (blocks YAML/cookie
+    # injection via crafted JSON bodies) before any persistence or mutation.
+    clean_dis = _clean_engine_names(disabled_engines)
+    clean_en = _clean_engine_names(enabled_engines)
+    dis_str = ",".join(clean_dis)
+    en_str = ",".join(clean_en)
 
     # 1. Persist engine enablement directly into config/settings.yml
     synced_yml = sync_engines_to_settings_file(clean_en, clean_dis)
@@ -1651,7 +1709,12 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
 
 
 def _load_ai_workspace_html() -> str:
-    """Load AI Workspace HTML from tools/webui component files, falling back to embedded string."""
+    """Load AI Workspace HTML from tools/webui component files, falling back to embedded string.
+
+    Never raises: this runs at import time, so a locked/partial file (common on
+    Windows while editors or sync tools hold handles) must not crash webapp
+    startup. Any read failure falls back to the embedded copy.
+    """
     webui_dir = os.path.join(TOOLS_DIR, "webui")
     css_path = os.path.join(webui_dir, "styles.css")
     body_path = os.path.join(webui_dir, "body.html")
@@ -1659,19 +1722,24 @@ def _load_ai_workspace_html() -> str:
     tmpl_path = os.path.join(webui_dir, "template.html")
 
     if os.path.isfile(css_path) and os.path.isfile(body_path) and os.path.isfile(js_path) and os.path.isfile(tmpl_path):
-        with open(css_path, encoding="utf-8") as f:
-            css_content = f.read()
-        with open(body_path, encoding="utf-8") as f:
-            body_content = f.read()
-        with open(js_path, encoding="utf-8") as f:
-            js_content = f.read()
-        with open(tmpl_path, encoding="utf-8") as f:
-            tmpl_content = f.read()
-        return (
-            tmpl_content.replace("{{ CSS }}", css_content)
-            .replace("{{ BODY }}", body_content)
-            .replace("{{ JS }}", js_content)
-        )
+        try:
+            with open(css_path, encoding="utf-8") as f:
+                css_content = f.read()
+            with open(body_path, encoding="utf-8") as f:
+                body_content = f.read()
+            with open(js_path, encoding="utf-8") as f:
+                js_content = f.read()
+            with open(tmpl_path, encoding="utf-8") as f:
+                tmpl_content = f.read()
+            return (
+                tmpl_content.replace("{{ CSS }}", css_content)
+                .replace("{{ BODY }}", body_content)
+                .replace("{{ JS }}", js_content)
+            )
+        except OSError as exc:
+            # Keep the server bootable; the embedded snapshot is refreshed by
+            # tools/webui/bundle.py on every build.
+            logger.warning("Failed to load tools/webui sources (%s); using embedded workspace HTML", exc)
 
     return _EMBEDDED_AI_WORKSPACE_HTML
 
@@ -5277,7 +5345,9 @@ footer.ws-footer {
       addListener('btn-save-unsaved', 'click', function () {
         var saveEngBtn = document.getElementById('btn-save-settings-engines');
         if (saveEngBtn) saveEngBtn.click();
-        setUnsavedChanges(false);
+        // NOTE: togglesModified is cleared by the save handler's .then() on
+        // success. Clearing it here would disable the beforeunload warning
+        // even when the POST fails and the changes are actually lost.
       });
 
       function renderSettingsEngineCards() {
@@ -5608,9 +5678,14 @@ footer.ws-footer {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ disabled_engines: disabled, enabled_engines: enabled })
         })
-          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+          })
           .then(function () {
             showToast('検索エンジン構成を保存しました');
+            // Clear the dirty flag only after a confirmed save so the
+            // beforeunload guard stays active if the POST failed.
             setUnsavedChanges(false);
           })
           .catch(function () {
@@ -6124,6 +6199,61 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                 resp.status_code = 429
                 resp.headers["Retry-After"] = str(retry_after)
                 return resp
+        return None
+
+    # --- CSRF / DNS-rebinding guard for state-changing requests ---
+    # The app binds to localhost and has no authentication, so any web page in
+    # the user's browser (or a DNS-rebound attacker domain) could otherwise
+    # POST JSON to /api/settings/engines and rewrite config/settings.yml or
+    # toggle every engine. JSON content-type already blocks classic form CSRF,
+    # but a rebinding attacker can send JSON directly — so the Host header
+    # must match a locally trusted name.
+    _STATE_CHANGING_PATHS = frozenset({"/api/settings/engines"})
+    _TRUSTED_HOST_NAMES = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
+
+    def _request_host_trusted() -> bool:
+        host = (request.host or "").lower().strip()
+        # Strip the port (Host may be "127.0.0.1:8888" or bare "localhost").
+        if host.startswith("["):
+            host_name = host.split("]", 1)[0] + "]" if "]" in host else host
+        else:
+            host_name = host.rsplit(":", 1)[0] if ":" in host else host
+        if host_name in _TRUSTED_HOST_NAMES:
+            return True
+        # Honor the configured public base URL (reverse-proxy deployments)
+        configured = (os.environ.get("SEARXNG_BASE_URL") or "").strip()
+        if configured:
+            with contextlib.suppress(ValueError):
+                parsed = urllib.parse.urlsplit(configured)
+                if (parsed.hostname or "").lower() == host_name.strip("[]"):
+                    return True
+        return False
+
+    @app.before_request
+    def sxng_state_change_guard() -> Any:
+        if request.method in ("POST", "PUT", "DELETE") and request.path in _STATE_CHANGING_PATHS:
+            # Standard browser CSRF defense: a cross-site form cannot set a
+            # custom Origin; fetch/XHR always carry it for cross-origin calls.
+            origin = (request.headers.get("Origin") or "").strip()
+            if origin:
+                with contextlib.suppress(ValueError):
+                    o_host = urllib.parse.urlsplit(origin).netloc.lower()
+                    # Compare hostname (port-insensitive): loopback requests
+                    # legitimately vary the port across instances, and the
+                    # Host guard below still enforces a local name.
+                    o_name = (
+                        o_host.rsplit(":", 1)[0] if o_host and ":" in o_host and not o_host.startswith("[") else o_host
+                    )
+                    req_name = (request.host or "").lower()
+                    req_name = (
+                        req_name.rsplit(":", 1)[0]
+                        if req_name and ":" in req_name and not req_name.startswith("[")
+                        else req_name
+                    )
+                    if o_name and o_name != req_name and o_name.strip("[]") not in _TRUSTED_HOST_NAMES:
+                        return jsonify({"error": "Cross-origin request rejected"}), 403
+            if not _request_host_trusted():
+                return jsonify({"error": "Untrusted Host header"}), 403
         return None
 
     # --- Tier A: app.before_request hook (Earliest Interception) ---

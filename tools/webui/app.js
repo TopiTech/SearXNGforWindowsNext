@@ -1664,7 +1664,9 @@
       addListener('btn-save-unsaved', 'click', function () {
         var saveEngBtn = document.getElementById('btn-save-settings-engines');
         if (saveEngBtn) saveEngBtn.click();
-        setUnsavedChanges(false);
+        // NOTE: togglesModified is cleared by the save handler's .then() on
+        // success. Clearing it here would disable the beforeunload warning
+        // even when the POST fails and the changes are actually lost.
       });
 
       function renderSettingsEngineCards() {
@@ -1995,9 +1997,14 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ disabled_engines: disabled, enabled_engines: enabled })
         })
-          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+          })
           .then(function () {
             showToast('検索エンジン構成を保存しました');
+            // Clear the dirty flag only after a confirmed save so the
+            // beforeunload guard stays active if the POST failed.
             setUnsavedChanges(false);
           })
           .catch(function () {

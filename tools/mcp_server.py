@@ -363,7 +363,9 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
     raw_args = params.get("arguments")
     arguments = raw_args if isinstance(raw_args, dict) else {}
 
-    log_debug(f"Calling tool '{tool_name}' with arguments: {arguments}")
+    # Log only the tool name: full arguments can contain sensitive user
+    # queries/URLs and stderr is often captured by clients.
+    log_debug(f"Calling tool '{tool_name}'")
 
     if tool_name == "searxng_search":
         query = str(arguments.get("query") or "")
@@ -598,8 +600,10 @@ def process_message(line: str) -> dict[str, Any] | None:
     method = req.get("method")
     params = req.get("params") or {}
 
-    # Notifications (messages without id) require no response
-    if msg_id is None and method:
+    # Notifications (messages without id) require no response. A request with
+    # an explicit JSON-RPC "id": null is still a request and MUST be answered,
+    # so only a *missing* id key makes it a notification.
+    if "id" not in req and method:
         if method == "notifications/initialized":
             log_debug("Notification received: initialized")
         return None
@@ -614,11 +618,13 @@ def process_message(line: str) -> dict[str, Any] | None:
     elif method == "tools/list":
         return handle_tools_list(msg_id, params)
     elif method == "tools/call":
+        if not isinstance(params, dict):
+            return make_jsonrpc_error(msg_id, -32602, "Invalid params: params must be an object")
         try:
             return handle_tools_call(msg_id, params)
         except Exception as exc:  # noqa: BLE001 - keep stdio loop alive
             log_debug(f"tools/call handler failed: {exc}")
-            return make_jsonrpc_error(msg_id, -32603, f"Internal error: {exc}")
+            return make_jsonrpc_error(msg_id, -32603, "Internal error")
     elif method == "resources/list":
         return {"jsonrpc": "2.0", "id": msg_id, "result": {"resources": []}}
     elif method == "prompts/list":

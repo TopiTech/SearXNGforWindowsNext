@@ -192,14 +192,17 @@ class QueryProcessor:
             return "ja"
         # Chinese Hanzi / Kanji (without Kana)
         if re.search(r"[\u4e00-\u9fff]", text):
-            return "ja"  # Default CJK to ja in this workspace context
+            return "zh"  # Han-only text: most likely Chinese; ja requires Kana
         return "en"
 
     @classmethod
     def detect_freshness(cls, text: str) -> str | None:
         """Detect explicit freshness indicators such as recent years or relative time words."""
         low = text.lower()
-        year_match = re.search(r"\b(202[4-9])\b", low)
+        # Any plausible 4-digit year 2000-2099; the retrieval service compares
+        # it against published dates, so hardcoding 2024-2030 would silently
+        # stop matching as time passes.
+        year_match = re.search(r"\b(20\d{2})\b", low)
         if year_match:
             return year_match.group(1)
         if any(w in low for w in ("today", "今日", "latest", "最新", "速報")):
@@ -415,6 +418,8 @@ class QueryProcessor:
             if "tutorial" not in base.lower() and "guide" not in base.lower():
                 if processed.language == "ja":
                     expansions.append(f"{base} 使い方")
+                elif processed.language == "zh":
+                    expansions.append(f"{base} 教程")
                 else:
                     expansions.append(f"{base} tutorial")
 

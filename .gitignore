@@ -16,8 +16,13 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# NOTE: anchored with a leading slash on purpose. Unanchored "lib/" would also
+# match "python/Lib/" (case-insensitive on Windows), which makes git skip the
+# whole embedded Python tree — silently hiding NEW upstream files copied into
+# python/Lib/site-packages/searx/ during sync (the ! negations below cannot
+# re-include children of an ignored parent directory).
+/lib/
+/lib64/
 parts/
 sdist/
 var/

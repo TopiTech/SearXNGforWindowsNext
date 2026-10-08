@@ -353,7 +353,10 @@ class RetrievalService:
             sq = compute_source_quality(dom)
             comps.source_quality = sq
 
-            # Freshness score if query indicates freshness or published date is recent
+            # Freshness score if query indicates freshness or published date is recent.
+            # The date string must actually contain the requested year; a
+            # non-matching or unparseable date previously still earned 0.8,
+            # ranking stale 2015 pages above undated fresh results.
             fresh_score = 0.0
             pub_date = item.get("published_date") or item.get("published_at")
             if processed_q.freshness and pub_date:
@@ -361,7 +364,7 @@ class RetrievalService:
                 if processed_q.freshness.isdigit() and processed_q.freshness in pub_date_str:
                     fresh_score = 1.0
                 else:
-                    fresh_score = 0.8
+                    fresh_score = 0.3
             comps.freshness = fresh_score
 
             # Composite weighted score:
@@ -385,8 +388,19 @@ class RetrievalService:
                 top_k=min(5, len(candidate_items)),
             )
 
-        # Cap results to requested count or budget limit
-        final_count = min(count or budget.max_candidate_results, len(candidate_items))
+        # Cap results to requested count or budget limit.
+        # count=None -> budget default; count<=0 -> no results requested.
+        # Never slice with a negative: candidate_items[:-3] would silently
+        # drop items and count=0 previously fell through "0 or X" to the
+        # budget default, returning 1 result instead of 0.
+        if count is None:
+            final_count = budget.max_candidate_results
+        else:
+            try:
+                req_count = int(count)
+            except (ValueError, TypeError):
+                req_count = budget.max_candidate_results
+            final_count = max(0, min(req_count, len(candidate_items)))
         selected_candidates = candidate_items[:final_count]
 
         # 8. Speculative Scraping & Heading-Aware Passage Extraction

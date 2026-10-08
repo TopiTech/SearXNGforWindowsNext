@@ -1021,6 +1021,29 @@ def execute_scrape_pipeline(
             "rag_prompt": "",
         }
 
+    # Defense-in-depth SSRF validation: the built-in scrapers perform their own
+    # (stronger, DNS-pinned) checks, but any alternate scrape_func wired into
+    # this pipeline is invoked with whatever URL the caller supplies.
+    if not is_safe_retrieval_url(clean_url, resolve_dns=True):
+        err_msg = "スクレイピング拒否 (400): プライベートIP、ループバック、または許可されていないスキームです。"
+        return {
+            "mode": "scrape",
+            "url": clean_url,
+            "domain": extract_domain(clean_url),
+            "query": clean_q,
+            "content": "",
+            "highlights": [],
+            "results": [],
+            "results_count": 0,
+            "scraped_count": 0,
+            "char_count": 0,
+            "estimated_tokens": 0,
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000.0, 1),
+            "error": err_msg,
+            "markdown": f"### 本文抽出エラー\n\n{err_msg}",
+            "rag_prompt": "",
+        }
+
     scrape_kwargs: dict[str, Any] = {"max_length": max_len}
     if timeout is not None:
         scrape_kwargs["timeout"] = timeout

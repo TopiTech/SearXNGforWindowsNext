@@ -28,6 +28,12 @@ except (ImportError, ModuleNotFoundError):
     _HAS_RAPIDFUZZ = False
 
 
+# Module-level cap for O(n*m) fuzzy comparisons (see DedupConfig docstring and
+# levenshtein_ratio). DedupConfig.max_fuzzy_input_chars documents the value;
+# the constant is read by module-level helpers that have no config access.
+_FUZZY_INPUT_CAP = 256
+
+
 @dataclass(frozen=True)
 class DedupConfig:
     """Centralized thresholds and parameters for deduplication."""
@@ -36,6 +42,19 @@ class DedupConfig:
     title_similarity_threshold: float = 0.88
     # Lower threshold when both items originate from the same domain
     same_domain_title_threshold: float = 0.82
+    # Stricter threshold for fuzzy (non-exact) title merges across DIFFERENT
+    # domains: character-similarity alone cannot distinguish genuinely distinct
+    # results whose titles differ by one token ("chapter 1 intro" vs "chapter 2
+    # intro" scores ~0.94). Cross-domain reprints with edited titles must clear
+    # this higher bar; exact-title cross-domain merges remain handled by the
+    # dedicated exact-match stage.
+    cross_domain_title_threshold: float = 0.98
+    # Word-level bigram containment required for cross-domain fuzzy title
+    # merges. Character bigrams saturate near 0.95 for long template titles
+    # that differ by one number; word-level containment ("unique body 1" vs
+    # "unique body 2" shares only the boilerplate words) stays far below the
+    # bar for distinct results while remaining ~1.0 for true reprints.
+    cross_domain_title_min_word_coverage: float = 0.95
     # Minimum title character length to apply fuzzy matching (avoids false merges on "Home", "Docs")
     min_title_length_for_fuzzy: int = 12
     # Snippet/content near-duplicate similarity threshold
@@ -44,6 +63,17 @@ class DedupConfig:
     min_snippet_length_for_fuzzy: int = 40
     # Enable canonical URL deduplication
     enable_canonical_dedup: bool = True
+    # Maximum unique-bigram share of the shorter snippet below which two
+    # snippets are considered near-duplicates. Boilerplate-heavy snippets that
+    # share most of their text but differ in a few unique characters (e.g.
+    # templated listing pages) must NOT be merged; requiring that at least this
+    # fraction of the shorter text's bigrams is shared keeps distinct results
+    # apart while still catching true reprints.
+    snippet_min_jaccard: float = 0.95
+    # Hard cap for fuzzy comparison inputs: pure-Python Levenshtein is
+    # O(len1*len2); an attacker-controlled SERP title/snippet of several KB
+    # would otherwise stall the search thread for seconds per pair (CPU DoS).
+    max_fuzzy_input_chars: int = 256
 
 
 def normalize_title(title: str) -> str:
@@ -64,10 +94,18 @@ def levenshtein_ratio(s1: str, s2: str) -> float:
     """Calculate normalized Levenshtein similarity ratio between 0.0 and 1.0.
 
     Uses rapidfuzz if available; otherwise uses an optimized pure-Python dynamic programming approach.
+
+    Inputs are truncated to ``_FUZZY_INPUT_CAP`` characters: the DP fallback is
+    O(len1*len2), so untrusted multi-KB strings would take seconds per pair
+    (CPU DoS via crafted SERP titles/snippets). Truncation only affects inputs
+    that are far beyond any realistic title length and never flips a
+    duplicate verdict for strings that differ within the capped prefix.
     """
     if _HAS_RAPIDFUZZ and _rf_fuzz is not None:
-        return float(_rf_fuzz.ratio(s1, s2) / 100.0)
+        return float(_rf_fuzz.ratio(s1[:_FUZZY_INPUT_CAP], s2[:_FUZZY_INPUT_CAP]) / 100.0)
 
+    s1 = s1[:_FUZZY_INPUT_CAP]
+    s2 = s2[:_FUZZY_INPUT_CAP]
     if s1 == s2:
         return 1.0
     len1, len2 = len(s1), len(s2)
@@ -120,6 +158,25 @@ def text_similarity(s1: str, s2: str) -> float:
         return lev
     jac = ngram_jaccard_similarity(s1, s2, n=2)
     return max(lev, jac)
+
+
+def _min_coverage_ratio(s1: str, s2: str, n: int = 2) -> float:
+    """Return the share of the shorter string's n-grams found in the longer one.
+
+    Used as a guard against boilerplate-only merges: two templated snippets can
+    share most of their text (high Jaccard) while still describing distinct
+    results ("unique body 1 ..." vs "unique body 2 ..."). If the shorter text's
+    own bigrams are not almost fully contained in the longer text, the pair is
+    a partial overlap, not a reprint.
+    """
+    if len(s1) < n or len(s2) < n:
+        return 1.0
+    shorter, longer = (s1, s2) if len(s1) <= len(s2) else (s2, s1)
+    short_set = {shorter[i : i + n] for i in range(len(shorter) - n + 1)}
+    longer_set = {longer[i : i + n] for i in range(len(longer) - n + 1)}
+    if not short_set:
+        return 1.0
+    return len(short_set & longer_set) / len(short_set)
 
 
 def is_near_duplicate_title(t1: str, t2: str, threshold: float = 0.88) -> bool:
@@ -251,16 +308,38 @@ class ResultDeduplicator:
                 ):
                     dom1 = str(item.get("domain") or extract_domain(str(item.get("url") or "")))
                     dom2 = str(c_item.get("domain") or extract_domain(str(c_item.get("url") or "")))
+                    same_domain = bool(dom1 and dom1 == dom2)
                     threshold = (
                         self.config.same_domain_title_threshold
-                        if (dom1 and dom1 == dom2)
+                        if same_domain
                         else self.config.title_similarity_threshold
                     )
                     sim = text_similarity(norm_tit, c_norm_tit)
                     if sim >= threshold:
                         # If domains differ, never merge short/generic titles across different sites
-                        if dom1 != dom2 and (len(norm_tit) < 28 or len(norm_tit.split()) < 4):
+                        if not same_domain and (len(norm_tit) < 28 or len(norm_tit.split()) < 4):
                             continue
+                        # Cross-domain fuzzy merges need stronger evidence:
+                        # titles differing by one character/token still score
+                        # ~0.94-0.96 with char-level similarity, which would
+                        # collapse distinct results hosted on different sites.
+                        if not same_domain and (
+                            sim < self.config.cross_domain_title_threshold
+                            or _min_coverage_ratio(norm_tit, c_norm_tit, n=1)
+                            < self.config.cross_domain_title_min_word_coverage
+                        ):
+                            # Fall back to snippet-alignment evidence: merge only
+                            # when the snippets are strong near-duplicates too.
+                            if not (norm_snip and len(norm_snip) >= 20):
+                                continue
+                            c_snip_chk = unicodedata.normalize("NFKC", str(c_item.get("content") or "")).strip().lower()
+                            if not c_snip_chk:
+                                continue
+                            snip_chk_sim = text_similarity(norm_snip[:300], c_snip_chk[:300])
+                            if snip_chk_sim < self.config.snippet_similarity_threshold:
+                                continue
+                            if _min_coverage_ratio(norm_snip[:300], c_snip_chk[:300]) < self.config.snippet_min_jaccard:
+                                continue
 
                         # Extra validation: check if snippets are also somewhat aligned
                         if norm_snip and len(norm_snip) >= 20:
@@ -285,9 +364,16 @@ class ResultDeduplicator:
                     c_snip = unicodedata.normalize("NFKC", str(c_item.get("content") or "")).strip().lower()
                     snip_sim = text_similarity(norm_snip[:300], c_snip[:300])
                     if snip_sim >= self.config.snippet_similarity_threshold:
-                        matched_cluster = cluster
-                        match_reason = f"fuzzy_snippet(sim={snip_sim:.2f})"
-                        break
+                        # Boilerplate guard: templated snippets (listing pages,
+                        # cookie/disclaimer text) share most bigrams yet
+                        # describe distinct results. Require the shorter
+                        # snippet's bigrams to be almost fully contained in the
+                        # longer one before treating this as a mirror/reprint.
+                        coverage = _min_coverage_ratio(norm_snip[:300], c_snip[:300])
+                        if coverage >= self.config.snippet_min_jaccard:
+                            matched_cluster = cluster
+                            match_reason = f"fuzzy_snippet(sim={snip_sim:.2f})"
+                            break
 
             if matched_cluster:
                 # Merge into existing cluster

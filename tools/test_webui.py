@@ -18,6 +18,7 @@ Validates:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -1253,6 +1254,277 @@ class TestWebUIRefinedBehaviors(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(mock_save.call_count, 1)
             self.assertEqual(mock_apply.call_count, 1)
+
+    def test_settings_engines_post_rejects_cross_origin(self) -> None:
+        """CSRF guard: a POST with a foreign Origin header must be rejected with 403.
+
+        Regression test for the DNS-rebinding / cross-site state-change vector:
+        without this guard any web page in the user's browser could POST JSON
+        to /api/settings/engines and rewrite config/settings.yml.
+        """
+        app = Flask(__name__)
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        with patch("webui_next.save_engines_settings_data") as mock_save:
+            resp = client.post(
+                "/api/settings/engines",
+                json={"enabled_engines": ["google"]},
+                headers={"Origin": "https://evil.example.com"},
+            )
+            self.assertEqual(resp.status_code, 403)
+            self.assertEqual(mock_save.call_count, 0)
+
+    def test_settings_engines_post_rejects_untrusted_host(self) -> None:
+        """CSRF guard: a POST whose Host header names a non-local host must be rejected.
+
+        Blocks DNS rebinding, where an attacker-controlled domain resolves to
+        127.0.0.1 and thus bypasses same-origin policy entirely.
+        """
+        app = Flask(__name__)
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        with patch("webui_next.save_engines_settings_data") as mock_save:
+            resp = client.post(
+                "/api/settings/engines",
+                json={"enabled_engines": ["google"]},
+                headers={"Host": "attacker.example.com"},
+            )
+            self.assertEqual(resp.status_code, 403)
+            self.assertEqual(mock_save.call_count, 0)
+
+    def test_settings_engines_post_accepts_local_origin(self) -> None:
+        """CSRF guard: same-origin POSTs from the local UI keep working."""
+        app = Flask(__name__)
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        with (
+            patch("webui_next.save_engines_settings_data") as mock_save,
+            patch("webui_next.apply_settings_cookies"),
+        ):
+            mock_save.return_value = {"success": True}
+            resp = client.post(
+                "/api/settings/engines",
+                json={"enabled_engines": ["google"]},
+                headers={"Origin": "http://127.0.0.1:8888"},
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(mock_save.call_count, 1)
+
+    def test_save_engines_rejects_yaml_injection_names(self) -> None:
+        """Engine names with YAML structure characters must never reach settings.yml or cookies."""
+        app = Flask(__name__)
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        payload = {
+            "enabled_engines": ["google", "x\\n- name: injected_engine\\n    disabled: false"],
+            "disabled_engines": ["  ", "a" * 200],
+        }
+        with (
+            patch("webui_next.sync_engines_to_settings_file") as mock_sync,
+            patch("webui_next.apply_settings_cookies") as mock_apply,
+        ):
+            mock_sync.return_value = False
+            resp = client.post("/api/settings/engines", json=payload)
+            self.assertEqual(resp.status_code, 200)
+            saved_call = mock_sync.call_args
+            enabled_names = saved_call.args[0] if saved_call.args else saved_call.kwargs.get("enabled_engines", [])
+            self.assertEqual(enabled_names, ["google"])
+            cookie_call = mock_apply.call_args
+            cookie_payload = cookie_call.args[1] if cookie_call.args else cookie_call.kwargs.get("payload", {})
+            self.assertEqual(
+                cookie_payload.get("enabled_engines"), payload["enabled_engines"]
+            )  # raw payload for the API response path
+            # The cookie values themselves must only contain validated names.
+            with patch.object(webui_next, "_clean_engine_names", wraps=webui_next._clean_engine_names) as spy:
+                webui_next._clean_engine_names(["ok", "bad\\nname"])
+                spy.assert_called()
+
+    def test_apply_settings_cookies_flags(self) -> None:
+        """Settings cookies are set with SameSite=Lax and HttpOnly (CSRF hardening)."""
+
+        class FakeResponse:
+            def __init__(self) -> None:
+                self.cookies: dict[str, dict[str, Any]] = {}
+
+            def set_cookie(self, key: str, value: str, **kwargs: Any) -> None:
+                self.cookies[key] = kwargs
+
+        resp = FakeResponse()
+        webui_next.apply_settings_cookies(resp, {"enabled_engines": ["google"], "safesearch": "1"})
+        for name in ("enabled_engines", "safesearch"):
+            self.assertEqual(resp.cookies[name].get("samesite"), "Lax", name)
+            self.assertTrue(resp.cookies[name].get("httponly"), name)
+
+    def test_scrape_pipeline_blocks_private_urls(self) -> None:
+        """execute_scrape_pipeline must validate URLs before invoking scrape_func (SSRF defense-in-depth)."""
+        called: list[str] = []
+
+        def fake_scrape(url: str, **kwargs: Any) -> dict[str, Any]:
+            called.append(url)
+            return {"content": "x"}
+
+        res = webui_next.agentic_search.execute_scrape_pipeline("http://127.0.0.1:8888/admin", fake_scrape)
+        self.assertTrue(res.get("error"))
+        self.assertEqual(called, [], "scrape_func must not be invoked for loopback URLs")
+
+        res2 = webui_next.agentic_search.execute_scrape_pipeline("http://169.254.169.254/latest/meta-data", fake_scrape)
+        self.assertTrue(res2.get("error"))
+        self.assertEqual(called, [], "scrape_func must not be invoked for link-local URLs")
+
+    def test_retrieval_service_count_semantics(self) -> None:
+        """RetrievalService.search honors count=0 (no results) and never returns negative slices."""
+
+        def fake_search(**kwargs: Any) -> dict[str, Any]:
+            return {
+                "results": [
+                    {"url": f"https://example{i}.com/", "title": f"t{i}", "content": f"c{i}", "engine": "bing"}
+                    for i in range(5)
+                ]
+            }
+
+        svc = webui_next.retrieval_service.RetrievalService(search_func=fake_search, scrape_func=None)
+        resp = svc.search(query="test", mode="fast", count=0)
+        self.assertEqual(len(resp.results), 0, "count=0 must return 0 results (was 1 via '0 or X' fallback)")
+
+        resp_neg = svc.search(query="test", mode="fast", count=-3)
+        self.assertEqual(len(resp_neg.results), 0, "negative count must not slice candidates negatively")
+
+        resp_two = svc.search(query="test", mode="fast", count=2)
+        self.assertEqual(len(resp_two.results), 2)
+
+    def test_dedup_does_not_collapse_boilerplate_results(self) -> None:
+        """Distinct results sharing boilerplate-heavy snippets must survive deduplication.
+
+        Regression test: bigram Jaccard of templated snippets differing by one
+        character scored ~0.93 > the 0.85 threshold, collapsing 10 distinct
+        SERP results into 1.
+        """
+        items = [
+            {
+                "url": f"https://example{i}.com/page",
+                "title": f"Result {i}: Distinct topic number {i}",
+                "content": (f"unique body {i} ") * 5,
+                "engine": "bing",
+            }
+            for i in range(10)
+        ]
+        import deduplication
+
+        deduped = deduplication.deduplicate_results(items, query="test")
+        self.assertEqual(len(deduped), 10)
+
+        # True duplicates must still merge
+        dup_items = [
+            {
+                "url": "https://a.com/x",
+                "title": "Python 3.13 release notes",
+                "content": "Python 3.13 was released with many new features and improvements for developers.",
+                "engine": "bing",
+            },
+            {
+                "url": "https://a.com/x?utm_source=t",
+                "title": "Python 3.13 release notes",
+                "content": "Python 3.13 was released with many new features and improvements for developers.",
+                "engine": "google",
+            },
+        ]
+        deduped2 = deduplication.deduplicate_results(dup_items, query="python")
+        self.assertEqual(len(deduped2), 1)
+
+    def test_dedup_fuzzy_inputs_are_capped(self) -> None:
+        """Levenshtein inputs are truncated so untrusted 4KB titles cannot stall the pipeline (CPU DoS)."""
+        import time
+
+        import deduplication
+
+        a = ("lorem ipsum dolor sit amet consectetur adipiscing elit sed do " * 70)[:4000]
+        b = a[:-1] + "X"
+        t0 = time.perf_counter()
+        for _ in range(10):
+            deduplication.text_similarity(a, b)
+        elapsed = (time.perf_counter() - t0) / 10
+        self.assertLess(elapsed, 0.05, f"fuzzy compare took {elapsed * 1000:.1f}ms avg; input cap regressed?")
+
+    def test_workspace_html_load_failure_falls_back_to_embedded(self) -> None:
+        """_load_ai_workspace_html must not raise when a webui source file is unreadable."""
+        with (
+            patch("builtins.open", side_effect=OSError("file locked by another process")),
+            patch("webui_next.logger") as mock_logger,
+        ):
+            html = webui_next._load_ai_workspace_html()
+        self.assertIn("<!DOCTYPE html>", html)
+        mock_logger.warning.assert_called_once()
+
+    def test_mcp_rejects_non_dict_params(self) -> None:
+        """MCP tools/call with non-object params returns -32602, not -32603 with leaked internals."""
+        import mcp_server
+
+        resp = mcp_server.process_message(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": 123})
+        )
+        self.assertIsNotNone(resp)
+        self.assertEqual(resp["error"]["code"], -32602)
+
+    def test_mcp_internal_error_is_sanitized(self) -> None:
+        """MCP tools/call handler failures must not echo raw exception text to the client."""
+        import mcp_server
+
+        with patch.object(mcp_server, "handle_tools_call", side_effect=RuntimeError("secret /etc/passwd path")):
+            resp = mcp_server.process_message(
+                json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "searxng_search"}})
+            )
+        assert resp is not None
+        err = resp.get("error") or {}
+        self.assertEqual(err.get("code"), -32603)
+        self.assertNotIn("secret", str(err.get("message")))
+
+    def test_mcp_id_null_request_gets_response(self) -> None:
+        """A JSON-RPC request with explicit id:null is a request, not a notification."""
+        import mcp_server
+
+        resp = mcp_server.process_message(json.dumps({"jsonrpc": "2.0", "id": None, "method": "ping"}))
+        self.assertIsNotNone(resp)
+        self.assertIsNone(resp.get("id"))
+
+    def test_search_in_process_rejects_foreign_base_url(self) -> None:
+        """_search_in_process drops non-local base_url values (SSRF via HTTP fallback)."""
+        with patch("webui_next.searxng_client.search") as mock_client_search:
+            mock_client_search.return_value = {"query": "q", "results": []}
+            webui_next._search_in_process(
+                webapp_mod=None,
+                query="test",
+                base_url="http://192.168.1.10:8080/internal",
+            )
+            passed_base = mock_client_search.call_args.kwargs.get("base_url")
+            self.assertIsNone(passed_base, "foreign base_url must be dropped before the HTTP fallback")
+
+            mock_client_search.reset_mock()
+            webui_next._search_in_process(
+                webapp_mod=None,
+                query="test",
+                base_url="http://127.0.0.1:8888",
+            )
+            passed_base_ok = mock_client_search.call_args.kwargs.get("base_url")
+            self.assertEqual(passed_base_ok, "http://127.0.0.1:8888", "loopback base_url must still be honored")
+
+    def test_query_language_zh_not_ja(self) -> None:
+        """Han-only queries are classified as Chinese, not Japanese."""
+        from query_pipeline import QueryProcessor
+
+        self.assertEqual(QueryProcessor.detect_language("机器学习 教程"), "zh")
+        self.assertEqual(QueryProcessor.detect_language("機械学習の使い方"), "ja")
+
+    def test_detect_freshness_accepts_any_year(self) -> None:
+        """Freshness year detection must not be hardcoded to 2024-2030."""
+        from query_pipeline import QueryProcessor
+
+        self.assertEqual(QueryProcessor.detect_freshness("best gpu 2031"), "2031")
+        self.assertEqual(QueryProcessor.detect_freshness("best gpu 2026"), "2026")
+        self.assertIsNone(QueryProcessor.detect_freshness("best gpu ever"))
 
     def test_autocompleter_cjk_raw_response_encoding(self) -> None:
         """Unified autocompleter JSON output preserves non-ASCII characters directly without \\uXXXX escapes."""
