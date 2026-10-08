@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+import time
 import unittest
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -332,11 +333,22 @@ class TestTier1CLITools(unittest.TestCase):
 
     def test_cli_scrape_json(self) -> None:
         """Verify 'searxng_cli.py scrape ... --json' extracts content."""
-        proc = E2ECLIRunner.run_searxng_cli(
-            ["scrape", "https://example.com", "-m", "100", "--json"],
-            base_url=self.base_url,
+        proc = None
+        for attempt in range(3):
+            proc = E2ECLIRunner.run_searxng_cli(
+                ["scrape", "https://example.com", "-m", "100", "--json"],
+                base_url=self.base_url,
+            )
+            if proc.returncode == 0:
+                break
+            if attempt < 2:
+                time.sleep(1.0)
+        self.assertIsNotNone(proc)
+        self.assertEqual(
+            proc.returncode,
+            0,
+            f"CLI scrape failed (exit {proc.returncode}): stdout={proc.stdout!r}, stderr={proc.stderr!r}",
         )
-        self.assertEqual(proc.returncode, 0, f"CLI scrape failed: {proc.stderr}")
         data = json.loads(proc.stdout)
         self.assertIn("content", data)
 

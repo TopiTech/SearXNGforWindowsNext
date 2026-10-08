@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 import unittest
 import urllib.parse
@@ -1546,6 +1547,95 @@ class TestWebUIRefinedBehaviors(unittest.TestCase):
             raw_text = resp.get_data(as_text=True)
             self.assertIn("検索エンジン", raw_text)
             self.assertNotIn(r"\u691c", raw_text)
+
+
+class TestSyncEnginesSettingsFile(unittest.TestCase):
+    """Test sync_engines_to_settings_file atomic write, retry backoff, and EXDEV fallback."""
+
+    def test_sync_engines_enables_and_disables_in_yaml(self) -> None:
+        import tempfile
+
+        initial_yaml = (
+            "engines:\n"
+            "  - name: google\n"
+            "    engine: google\n"
+            "    disabled: false\n"
+            "  - name: bing\n"
+            "    engine: bing\n"
+            "    disabled: true\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cfg_path = os.path.join(tmp_dir, "settings.yml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(initial_yaml)
+
+            changed = webui_next.sync_engines_to_settings_file(
+                enabled_engines=["bing"],
+                disabled_engines=["google"],
+                settings_path=cfg_path,
+            )
+            self.assertTrue(changed)
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("disabled: true", content)
+            self.assertIn("disabled: false", content)
+
+    def test_sync_engines_retries_on_transient_permission_error(self) -> None:
+        import tempfile
+
+        initial_yaml = "engines:\n  - name: google\n    disabled: false\n"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cfg_path = os.path.join(tmp_dir, "settings.yml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(initial_yaml)
+
+            real_replace = os.replace
+            attempts = 0
+
+            def faulty_replace(src: str, dst: str) -> None:
+                nonlocal attempts
+                attempts += 1
+                if attempts < 3:
+                    raise PermissionError("Access is denied (transient lock)")
+                real_replace(src, dst)
+
+            with patch("webui_next.os.replace", side_effect=faulty_replace):
+                changed = webui_next.sync_engines_to_settings_file(
+                    disabled_engines=["google"],
+                    settings_path=cfg_path,
+                )
+            self.assertTrue(changed)
+            self.assertEqual(attempts, 3)
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                self.assertIn("disabled: true", f.read())
+
+    def test_sync_engines_fallback_on_cross_device_exdev(self) -> None:
+        import errno
+        import tempfile
+
+        initial_yaml = "engines:\n  - name: google\n    disabled: false\n"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cfg_path = os.path.join(tmp_dir, "settings.yml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(initial_yaml)
+
+            def exdev_replace(src: str, dst: str) -> None:
+                err = OSError(errno.EXDEV, "Invalid cross-device link")
+                err.winerror = 17
+                raise err
+
+            with (
+                patch("webui_next.os.replace", side_effect=exdev_replace),
+                patch("webui_next.shutil.move", wraps=shutil.move) as spy_move,
+            ):
+                changed = webui_next.sync_engines_to_settings_file(
+                    disabled_engines=["google"],
+                    settings_path=cfg_path,
+                )
+            self.assertTrue(changed)
+            self.assertGreaterEqual(spy_move.call_count, 1)
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                self.assertIn("disabled: true", f.read())
 
 
 if __name__ == "__main__":

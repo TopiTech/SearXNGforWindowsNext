@@ -20,11 +20,13 @@ Provides:
 from __future__ import annotations
 
 import contextlib
+import errno
 import ipaddress
 import json
 import logging
 import os
 import re
+import shutil
 import socket
 import sys
 import tempfile
@@ -965,11 +967,13 @@ def _clean_engine_names(raw: Any) -> list[str]:
 
 
 def sync_engines_to_settings_file(
-    enabled_engines: list[str],
-    disabled_engines: list[str],
+    enabled_engines: list[str] | None = None,
+    disabled_engines: list[str] | None = None,
     settings_path: str | None = None,
 ) -> bool:
     """Safely update disabled: true/false for specified engines in config/settings.yml."""
+    enabled_engines = list(enabled_engines or [])
+    disabled_engines = list(disabled_engines or [])
     if not enabled_engines and not disabled_engines:
         return False
 
@@ -1066,7 +1070,29 @@ def sync_engines_to_settings_file(
                         temp_path = temp_file.name
                         temp_file.write(new_content)
                         temp_file.flush()
-                    os.replace(temp_path, settings_path)
+                        try:
+                            os.fsync(temp_file.fileno())
+                        except (AttributeError, OSError):
+                            pass
+
+                    last_err: OSError | None = None
+                    for attempt in range(5):
+                        try:
+                            os.replace(temp_path, settings_path)
+                            last_err = None
+                            break
+                        except OSError as exc:
+                            if getattr(exc, "winerror", None) == 17 or getattr(exc, "errno", None) == errno.EXDEV:
+                                shutil.move(temp_path, settings_path)
+                                last_err = None
+                                break
+                            if isinstance(exc, PermissionError):
+                                last_err = exc
+                                time.sleep(0.05 * (2**attempt))
+                            else:
+                                raise
+                    if last_err:
+                        raise last_err
                 except Exception:
                     if temp_path:
                         with contextlib.suppress(Exception):
@@ -2939,6 +2965,28 @@ main.workspace {
   }
   .image-card-thumb-wrap {
     height: 105px;
+  }
+  #theme-toggle-btn span {
+    display: none;
+  }
+  #theme-toggle-btn {
+    padding: 0.45rem;
+  }
+  .toast-notice {
+    right: 1rem;
+    left: 1rem;
+    bottom: 1rem;
+    max-width: calc(100vw - 2rem);
+    justify-content: center;
+    text-align: center;
+  }
+  .unsaved-bar {
+    max-width: calc(100vw - 1.5rem);
+    width: auto;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 0.6rem 0.9rem;
+    gap: 0.6rem;
   }
 }
 
