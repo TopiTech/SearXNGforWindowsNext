@@ -103,6 +103,19 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Unit tests in tools\test_webui.py failed with exit code $LASTEXITCODE"
     }
+    Write-Host "  -> Running challenger adversarial suites..." -ForegroundColor Green
+    & ".\python\python.exe" "tests\test_challenger_m2_2_adversarial.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Adversarial tests in tests\test_challenger_m2_2_adversarial.py failed with exit code $LASTEXITCODE"
+    }
+    & ".\python\python.exe" "tests\test_challenger_m3_1_adversarial.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Adversarial tests in tests\test_challenger_m3_1_adversarial.py failed with exit code $LASTEXITCODE"
+    }
+    & ".\python\python.exe" "tests\test_challenger_m3_r_adversarial.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Adversarial tests in tests\test_challenger_m3_r_adversarial.py failed with exit code $LASTEXITCODE"
+    }
     Write-Host "  -> Running evaluation benchmark..." -ForegroundColor Green
     & ".\python\python.exe" "tests\evaluation\run_benchmark.py"
     if ($LASTEXITCODE -ne 0) {

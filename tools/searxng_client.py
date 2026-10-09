@@ -26,8 +26,22 @@ DEFAULT_HEADERS = {
 
 def get_base_url() -> str:
     """Return the configured SearXNG base URL, stripped of trailing slashes."""
-    url = os.environ.get("SEARXNG_BASE_URL", DEFAULT_BASE_URL).strip()
-    return url.rstrip("/")
+    custom_url = os.environ.get("SEARXNG_BASE_URL", "").strip()
+    if custom_url:
+        return custom_url.rstrip("/")
+
+    port_raw = os.environ.get("SEARXNG_PORT", "").strip()
+    if port_raw:
+        try:
+            port_num = int(port_raw)
+            if 1 <= port_num <= 65535:
+                bind = os.environ.get("SEARXNG_BIND_ADDRESS", "").strip()
+                host = bind if bind and bind != "0.0.0.0" else "127.0.0.1"
+                return f"http://{host}:{port_num}"
+        except ValueError:
+            pass
+
+    return DEFAULT_BASE_URL.rstrip("/")
 
 
 def get_timeout() -> float:

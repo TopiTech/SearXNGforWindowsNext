@@ -452,9 +452,16 @@ def _search_in_process(
     if base_url is not None:
         base_clean = str(base_url).strip()
         configured = (os.environ.get("SEARXNG_BASE_URL") or "").strip().rstrip("/")
+        port_raw = (os.environ.get("SEARXNG_PORT") or "").strip()
         allowed = {"http://127.0.0.1:8888", "http://localhost:8888"}
+        if port_raw.isdigit():
+            allowed.add(f"http://127.0.0.1:{port_raw}")
+            allowed.add(f"http://localhost:{port_raw}")
         if configured:
             allowed.add(configured)
+        client_base = searxng_client.get_base_url()
+        if client_base:
+            allowed.add(client_base.rstrip("/"))
         if base_clean.rstrip("/") not in allowed:
             base_url = None
 

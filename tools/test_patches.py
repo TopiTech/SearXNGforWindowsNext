@@ -3833,6 +3833,21 @@ class TestPatchHardeningM2(unittest.TestCase):
                 capture_output=True,
             )
 
+    def test_ensure_secret_key_icacls_permissions_on_windows_user_fallback(self):
+        """F2.4: Verify set_file_permissions falls back to USER env on Windows when USERNAME is unset."""
+        dummy_path = r"C:\fake\config\secret.key"
+        with (
+            mock.patch("sys.platform", "win32"),
+            mock.patch.dict(os.environ, {"USER": "fallback_user"}, clear=True),
+            mock.patch("subprocess.run") as mock_run,
+        ):
+            ensure_secret_key.set_file_permissions(dummy_path)
+            mock_run.assert_called_once_with(
+                ["icacls", dummy_path, "/inheritance:r", "/grant:r", "fallback_user:(R,W)"],
+                check=False,
+                capture_output=True,
+            )
+
     def test_ensure_secret_key_posix_permissions(self):
         """F2.4: Verify set_file_permissions uses chmod 600 on POSIX platforms."""
         dummy_path = "/fake/config/secret.key"

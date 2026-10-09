@@ -38,6 +38,26 @@ class TestSearXNGClient(unittest.TestCase):
             url = searxng_client.get_base_url()
             self.assertEqual(url, "http://localhost:9000")
 
+    def test_get_base_url_port_override(self) -> None:
+        with patch.dict(os.environ, {"SEARXNG_PORT": "9000"}, clear=True):
+            url = searxng_client.get_base_url()
+            self.assertEqual(url, "http://127.0.0.1:9000")
+
+    def test_get_base_url_port_and_bind_override(self) -> None:
+        with patch.dict(os.environ, {"SEARXNG_PORT": "9000", "SEARXNG_BIND_ADDRESS": "192.168.1.50"}, clear=True):
+            url = searxng_client.get_base_url()
+            self.assertEqual(url, "http://192.168.1.50:9000")
+
+    def test_get_base_url_port_wildcard_bind_override(self) -> None:
+        with patch.dict(os.environ, {"SEARXNG_PORT": "9000", "SEARXNG_BIND_ADDRESS": "0.0.0.0"}, clear=True):
+            url = searxng_client.get_base_url()
+            self.assertEqual(url, "http://127.0.0.1:9000")
+
+    def test_get_base_url_invalid_port_fallback(self) -> None:
+        with patch.dict(os.environ, {"SEARXNG_PORT": "not_a_number"}, clear=True):
+            url = searxng_client.get_base_url()
+            self.assertEqual(url, "http://127.0.0.1:8888")
+
     def test_get_timeout_env_override(self) -> None:
         with patch.dict(os.environ, {"SEARXNG_TIMEOUT": "25.5"}):
             self.assertEqual(searxng_client.get_timeout(), 25.5)

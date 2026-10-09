@@ -77,7 +77,14 @@ def _read_key(path: str) -> str | None:
 def set_file_permissions(path: str) -> None:
     """Lock down file permissions: icacls on Windows, chmod 600 on POSIX."""
     if sys.platform == "win32":
-        username = os.environ.get("USERNAME")
+        username = os.environ.get("USERNAME") or os.environ.get("USER") or os.environ.get("LOGNAME")
+        if not username:
+            try:
+                import getpass
+
+                username = getpass.getuser()
+            except (ImportError, KeyError, OSError):
+                username = None
         if username:
             try:
                 subprocess.run(

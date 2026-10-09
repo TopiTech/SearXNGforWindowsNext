@@ -1512,6 +1512,17 @@ class TestWebUIRefinedBehaviors(unittest.TestCase):
             passed_base_ok = mock_client_search.call_args.kwargs.get("base_url")
             self.assertEqual(passed_base_ok, "http://127.0.0.1:8888", "loopback base_url must still be honored")
 
+            # Custom SEARXNG_PORT is honored
+            mock_client_search.reset_mock()
+            with patch.dict(os.environ, {"SEARXNG_PORT": "9000"}):
+                webui_next._search_in_process(
+                    webapp_mod=None,
+                    query="test",
+                    base_url="http://127.0.0.1:9000",
+                )
+                passed_custom_port = mock_client_search.call_args.kwargs.get("base_url")
+                self.assertEqual(passed_custom_port, "http://127.0.0.1:9000", "configured SEARXNG_PORT must be honored")
+
     def test_query_language_zh_not_ja(self) -> None:
         """Han-only queries are classified as Chinese, not Japanese."""
         from query_pipeline import QueryProcessor
