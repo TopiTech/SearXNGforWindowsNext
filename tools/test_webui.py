@@ -1199,6 +1199,28 @@ class TestWebUIAccessibilityDeepSearchAndKeybindings(unittest.TestCase):
         self.assertIn("indicator.textContent = 'ページ ' + page + ' / ' + totalPages;", html)
         self.assertIn("updateClassicPagination(page, items)", html)
 
+    def test_btn_save_general_prefs_error_handling(self) -> None:
+        """Verify btn-save-general-prefs handles HTTP errors and displays error toast on failure."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("addListener('btn-save-general-prefs'", html)
+        self.assertIn("showToast('一般設定の保存に失敗しました', true);", html)
+        self.assertIn("showToast('一般設定を保存しました');", html)
+        self.assertNotIn(
+            "}).finally(function () {\n          showToast('一般設定を保存しました');\n        });",
+            html,
+        )
+
+    def test_direct_answers_safe_object_extraction(self) -> None:
+        """Verify direct answers extract text from object payloads before rendering."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("a.answer || a.text || a.content || JSON.stringify(a)", html)
+        self.assertIn("classic-answer-box", html)
+
+    def test_classic_scrape_error_formatting(self) -> None:
+        """Verify classic scrape drawer presents errors with alert icon rather than plain text."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("icon('alert') + ' 抽出エラー: ' + escapeHtml(res.error)", html)
+
 
 class TestWebUIRefinedBehaviors(unittest.TestCase):
     """Test rate limiter configurability, single persistence execution, and autocompleter unicode."""

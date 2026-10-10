@@ -5153,7 +5153,13 @@ footer.ws-footer {
             scrapeBtn.setAttribute('aria-expanded', 'true');
             fetch('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
               .then(function (r) { return r.json(); })
-              .then(function (res) { d.textContent = res.content || res.error || '(本文なし)'; })
+              .then(function (res) {
+                if (res.error) {
+                  d.innerHTML = icon('alert') + ' 抽出エラー: ' + escapeHtml(res.error);
+                } else {
+                  d.textContent = res.content || '(本文なし)';
+                }
+              })
               .catch(function (e) { d.innerHTML = icon('alert') + ' 抽出エラー: ' + escapeHtml(e); });
           });
 
@@ -5234,9 +5240,17 @@ footer.ws-footer {
               ansContainer.innerHTML = '';
               if (res.answers && res.answers.length) {
                 res.answers.forEach(function (a) {
+                  var ansText = '';
+                  if (typeof a === 'string') {
+                    ansText = a;
+                  } else if (a && typeof a === 'object') {
+                    ansText = a.answer || a.text || a.content || JSON.stringify(a);
+                  } else {
+                    ansText = String(a || '');
+                  }
                   var abox = document.createElement('div');
                   abox.className = 'classic-answer-box';
-                  abox.innerHTML = '<strong>ダイレクトアンサー:</strong><br>' + escapeHtml(a);
+                  abox.innerHTML = '<strong>ダイレクトアンサー:</strong><br>' + escapeHtml(ansText);
                   ansContainer.appendChild(abox);
                 });
               }
@@ -5780,9 +5794,17 @@ footer.ws-footer {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ safesearch: ss, default_mode: mode, autocomplete: ac })
-        }).finally(function () {
-          showToast('一般設定を保存しました');
-        });
+        })
+          .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+          })
+          .then(function () {
+            showToast('一般設定を保存しました');
+          })
+          .catch(function () {
+            showToast('一般設定の保存に失敗しました', true);
+          });
       });
 
       addListener('btn-reset-general-prefs', 'click', function () {

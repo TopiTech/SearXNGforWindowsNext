@@ -297,17 +297,22 @@ RESERVED_TLDS: tuple[str, ...] = (
     ".arpa",
 )
 
+KNOWN_LOOPBACK_DOMAINS: tuple[str, ...] = (
+    "localtest.me",
+    "lvh.me",
+    "vcap.me",
+    "lacolhost.com",
+    "localh4.st",
+    "traefik.me",
+)
 
-def _is_reserved_scrape_host(host: str) -> bool:
-    """Check if host is a local or reserved domain name."""
-    h = (host or "").strip().rstrip(".").lower()
-    if not h or h in ("localhost", "ip6-localhost", "ip6-loopback"):
-        return True
-    for tld in RESERVED_TLDS:
-        bare = tld.lstrip(".")
-        if h == bare or h.endswith(tld):
-            return True
-    return False
+WILDCARD_DNS_DOMAINS: tuple[str, ...] = (
+    ".nip.io",
+    ".sslip.io",
+)
+
+_WILDCARD_IPV4_PATTERN: re.Pattern[str] = re.compile(r"(?:^|[.-])(?P<ip>\d{1,4}(?:[.-]\d{1,4}){3})(?:[.-]|$)")
+_WILDCARD_HEX_PATTERN: re.Pattern[str] = re.compile(r"(?:^|[.-])(?P<hex>[0-9a-fA-F]{8})(?:[.-]|$)")
 
 
 def _is_ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address | str) -> bool:
@@ -337,6 +342,49 @@ def _is_ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address | str) -> b
         return True
     teredo = getattr(ip, "teredo", None)
     return bool(teredo is not None and (_is_ip_blocked(teredo[0]) or _is_ip_blocked(teredo[1])))
+
+
+def _is_reserved_scrape_host(host: str) -> bool:
+    """Check if host is a local, reserved, loopback, or private wildcard domain name."""
+    h = (host or "").strip().rstrip(".").lower()
+    if not h or h in ("localhost", "ip6-localhost", "ip6-loopback"):
+        return True
+    for tld in RESERVED_TLDS:
+        bare = tld.lstrip(".")
+        if h == bare or h.endswith(tld):
+            return True
+    for loopback_dom in KNOWN_LOOPBACK_DOMAINS:
+        if h == loopback_dom or h.endswith("." + loopback_dom):
+            return True
+    for wc_dom in WILDCARD_DNS_DOMAINS:
+        bare_wc = wc_dom.lstrip(".")
+        if h == bare_wc or h.endswith(wc_dom):
+            prefix = h[: -len(wc_dom)] if h.endswith(wc_dom) else ""
+            if not prefix:
+                return True
+            match_ip = _WILDCARD_IPV4_PATTERN.search(prefix)
+            if match_ip:
+                raw_ip = match_ip.group("ip").replace("-", ".")
+                try:
+                    ip_addr = ipaddress.IPv4Address(raw_ip)
+                    if _is_ip_blocked(ip_addr):
+                        return True
+                except (ValueError, ipaddress.AddressValueError):
+                    try:
+                        packed = socket.inet_aton(raw_ip)
+                        if _is_ip_blocked(ipaddress.IPv4Address(packed)):
+                            return True
+                    except (OSError, ValueError):
+                        pass
+            match_hex = _WILDCARD_HEX_PATTERN.search(prefix)
+            if match_hex:
+                try:
+                    ip_int = int(match_hex.group("hex"), 16)
+                    if _is_ip_blocked(ipaddress.IPv4Address(ip_int)):
+                        return True
+                except (ValueError, ipaddress.AddressValueError):
+                    pass
+    return False
 
 
 def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:

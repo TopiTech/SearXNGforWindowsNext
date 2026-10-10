@@ -472,6 +472,28 @@ class TestPassageChunkerAndSecurity(unittest.TestCase):
         self.assertFalse(is_safe_retrieval_url("http://local/"))
         self.assertFalse(is_safe_retrieval_url("http://internal/"))
 
+        # Dedicated loopback domains
+        self.assertFalse(is_safe_retrieval_url("http://localtest.me/"))
+        self.assertFalse(is_safe_retrieval_url("http://api.localtest.me:8080/"))
+        self.assertFalse(is_safe_retrieval_url("http://lvh.me/"))
+        self.assertFalse(is_safe_retrieval_url("http://vcap.me/"))
+        self.assertFalse(is_safe_retrieval_url("http://lacolhost.com/"))
+        self.assertFalse(is_safe_retrieval_url("http://localh4.st/"))
+        self.assertFalse(is_safe_retrieval_url("http://traefik.me/"))
+
+        # Wildcard DNS services resolving to private/loopback IPs (static detection)
+        self.assertFalse(is_safe_retrieval_url("http://127.0.0.1.nip.io/"))
+        self.assertFalse(is_safe_retrieval_url("http://app.127.0.0.1.nip.io/"))
+        self.assertFalse(is_safe_retrieval_url("http://10.0.0.1.nip.io/"))
+        self.assertFalse(is_safe_retrieval_url("http://192.168.1.1.nip.io/"))
+        self.assertFalse(is_safe_retrieval_url("http://127-0-0-1.sslip.io/"))
+        self.assertFalse(is_safe_retrieval_url("http://10-0-0-1.sslip.io/"))
+        self.assertFalse(is_safe_retrieval_url("http://192-168-0-1.sslip.io/"))
+        self.assertFalse(is_safe_retrieval_url("http://7f000001.nip.io/"))
+        self.assertFalse(is_safe_retrieval_url("http://nip.io/"))
+        self.assertFalse(is_safe_retrieval_url("http://sslip.io/"))
+        self.assertTrue(is_safe_retrieval_url("http://8.8.8.8.nip.io/"))
+
         # Private IPv4 ranges must be rejected
         self.assertFalse(is_safe_retrieval_url("http://192.168.1.10/router"))
         self.assertFalse(is_safe_retrieval_url("http://10.0.0.5/api"))
