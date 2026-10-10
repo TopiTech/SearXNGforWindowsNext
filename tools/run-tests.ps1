@@ -116,6 +116,10 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Adversarial tests in tests\test_challenger_m3_r_adversarial.py failed with exit code $LASTEXITCODE"
     }
+    & ".\python\python.exe" "tests\test_challenger_m4_adversarial.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Adversarial tests in tests\test_challenger_m4_adversarial.py failed with exit code $LASTEXITCODE"
+    }
     Write-Host "  -> Running evaluation benchmark..." -ForegroundColor Green
     & ".\python\python.exe" "tests\evaluation\run_benchmark.py"
     if ($LASTEXITCODE -ne 0) {

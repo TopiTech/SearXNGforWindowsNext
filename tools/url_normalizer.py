@@ -181,6 +181,11 @@ class URLNormalizer:
         if not raw:
             return ""
 
+        # Remove ASCII control characters
+        raw = _CONTROL_CHARS_PATTERN.sub("", raw)
+        if not raw:
+            return ""
+
         try:
             parsed = urllib.parse.urlsplit(raw)
         except ValueError:
@@ -271,6 +276,9 @@ def extract_domain(url: str) -> str:
     return URLNormalizer.extract_domain(url)
 
 
+_CONTROL_CHARS_PATTERN: re.Pattern[str] = re.compile(r"[\x00-\x1f\x7f]")
+
+
 RESERVED_TLDS: tuple[str, ...] = (
     ".localhost",
     ".local",
@@ -338,6 +346,8 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
     - Only 'http' and 'https' schemes
     - Valid port (1-65535, rejects port 0)
     - No credentials (user:pass@host)
+    - Rejects ASCII control characters (0x00-0x1F, 0x7F)
+    - Rejects backslash characters in authority/netloc (SSRF parser differential mitigation)
     - Rejects localhost, loopback, private, link-local, multicast, transition IPv4 and IPv6
     - Rejects hex/octal/decimal obfuscated IP formats
     - Rejects reserved TLDs and bare intranet hostnames
@@ -347,6 +357,9 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
         return False
 
     clean_url = url.strip()
+    if _CONTROL_CHARS_PATTERN.search(clean_url):
+        return False
+
     try:
         parsed = urllib.parse.urlsplit(clean_url)
     except ValueError:
@@ -364,6 +377,10 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
 
     # Block credentials or userinfo in URL (mitigates SSRF parser confusion)
     if parsed.username or parsed.password or "@" in (parsed.netloc or ""):
+        return False
+
+    # Block backslashes in netloc (mitigates WHATWG vs RFC-3986 parser differentials)
+    if "\\" in (parsed.netloc or ""):
         return False
 
     raw_host = parsed.hostname or ""

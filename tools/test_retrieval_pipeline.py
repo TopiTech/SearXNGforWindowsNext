@@ -490,10 +490,28 @@ class TestPassageChunkerAndSecurity(unittest.TestCase):
         self.assertFalse(is_safe_retrieval_url("http://user@example.com/"))
         self.assertFalse(is_safe_retrieval_url("http://example.com:0/"))
 
+        # ASCII control characters and unprintable characters must be rejected
+        self.assertFalse(is_safe_retrieval_url("http://127.0.0.1\r.example.com/"))
+        self.assertFalse(is_safe_retrieval_url("http://127.0.0.1\n.example.com/"))
+        self.assertFalse(is_safe_retrieval_url("http://example.com/\x00evil"))
+        self.assertFalse(is_safe_retrieval_url("http://example.com/\x1fevil"))
+        self.assertFalse(is_safe_retrieval_url("http://example.com/\x7fevil"))
+        self.assertFalse(is_safe_retrieval_url("http://example.com/\tpath"))
+
+        # Backslash in authority / netloc (SSRF parser differential) must be rejected
+        self.assertFalse(is_safe_retrieval_url("http://127.0.0.1\\example.com/"))
+        self.assertFalse(is_safe_retrieval_url("http://127.0.0.1\\index.html"))
+        self.assertFalse(is_safe_retrieval_url("http://localhost\\admin"))
+        self.assertFalse(is_safe_retrieval_url("http://example.com\\path"))
+
         # Legitimate public web URLs must be accepted
         self.assertTrue(is_safe_retrieval_url("https://docs.python.org/3/"))
         self.assertTrue(is_safe_retrieval_url("https://github.com/SearXNG/searxng"))
         self.assertTrue(is_safe_retrieval_url("https://www.google.com/search"))
+        self.assertEqual(
+            normalize_url("http://example.com/path\r\n"),
+            "http://example.com/path",
+        )
 
     def test_is_safe_retrieval_url_resolve_dns(self) -> None:
         """Verify is_safe_retrieval_url performs active DNS resolution check when resolve_dns=True."""
