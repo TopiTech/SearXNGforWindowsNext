@@ -1090,6 +1090,33 @@ class TestAgentQueryPipelineIntegration(unittest.TestCase):
         self.assertGreater(len(dispatched), 0)
         self.assertEqual(dispatched[0], '"Python 3.12"')
 
+    def test_searxng_client_base_url_validation_and_scrape_ssrf_guard(self) -> None:
+        """Verify searxng_client blocks unsafe target URLs in scrape before making network requests."""
+        res = searxng_client.scrape("http://127.0.0.1:8888/internal")
+        self.assertIn("error", res)
+        self.assertEqual(res.get("content"), "")
+
+        res_meta = searxng_client.scrape("http://169.254.169.254/latest/meta-data/")
+        self.assertIn("error", res_meta)
+        self.assertEqual(res_meta.get("content"), "")
+
+    def test_mcp_server_non_dict_params_and_null_id_handling(self) -> None:
+        """Verify mcp_server rejects non-dict params with -32602 and responds to explicit id: null."""
+        import json
+
+        bad_req = json.dumps({"jsonrpc": "2.0", "id": 99, "method": "tools/call", "params": ["invalid"]})
+        bad_resp = mcp_server.process_message(bad_req)
+        self.assertIsNotNone(bad_resp)
+        assert bad_resp is not None
+        self.assertEqual(bad_resp["error"]["code"], -32602)
+
+        null_id_req = json.dumps({"jsonrpc": "2.0", "id": None, "method": "ping"})
+        null_id_resp = mcp_server.process_message(null_id_req)
+        self.assertIsNotNone(null_id_resp)
+        assert null_id_resp is not None
+        self.assertIsNone(null_id_resp["id"])
+        self.assertEqual(null_id_resp["result"], {})
+
 
 if __name__ == "__main__":
     unittest.main()

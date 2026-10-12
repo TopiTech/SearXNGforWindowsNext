@@ -27,7 +27,7 @@ import unittest
 import urllib.parse
 from html.parser import HTMLParser
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from flask import Flask, Response
 
@@ -533,9 +533,9 @@ class TestWebUIScraperLimits(unittest.TestCase):
 
     def test_scrape_url_direct_blocks_embedded_credentials(self) -> None:
         """Verify _scrape_url_direct rejects URLs with embedded credentials to prevent SSRF bypass."""
-        mock_mod = unittest.mock.MagicMock()
+        mock_mod = MagicMock()
         mock_mod._is_blocked_scrape_host = lambda h: False
-        mock_mod.pinned_dns = unittest.mock.MagicMock()
+        mock_mod.pinned_dns = MagicMock()
         mock_mod._ScrapeBlockedError = ValueError
 
         res = webui_next._scrape_url_direct(mock_mod, "http://user:pass@example.com/page")
@@ -1693,6 +1693,43 @@ class TestSyncEnginesSettingsFile(unittest.TestCase):
             self.assertGreaterEqual(spy_move.call_count, 1)
             with open(cfg_path, "r", encoding="utf-8") as f:
                 self.assertIn("disabled: true", f.read())
+
+    def test_sanitize_local_base_url_blocks_remote_hosts(self) -> None:
+        """Verify _sanitize_local_base_url allows loopback SearXNG URLs and rejects remote SSRF targets."""
+        self.assertEqual(webui_next._sanitize_local_base_url("http://127.0.0.1:8888/"), "http://127.0.0.1:8888")
+        self.assertEqual(webui_next._sanitize_local_base_url("http://localhost:8888"), "http://localhost:8888")
+        self.assertIsNone(webui_next._sanitize_local_base_url("http://169.254.169.254"))
+        self.assertIsNone(webui_next._sanitize_local_base_url("https://evil.example.com:8888"))
+        self.assertIsNone(webui_next._sanitize_local_base_url(None))
+
+    def test_sync_engines_rejects_yaml_injection_names(self) -> None:
+        """Verify sync_engines_to_settings_file ignores engine names with newlines or YAML structure characters."""
+        import tempfile
+
+        initial_yaml = "engines:\n  - name: google\n    engine: google\n    disabled: false\n"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cfg_path = os.path.join(tmp_dir, "settings.yml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(initial_yaml)
+
+            changed = webui_next.sync_engines_to_settings_file(
+                enabled_engines=["evil\n  - name: pwned\n    disabled: false"],
+                disabled_engines=["bad: [1, 2]"],
+                settings_path=cfg_path,
+            )
+            self.assertFalse(changed)
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertNotIn("pwned", content)
+            self.assertNotIn("bad:", content)
+
+    def test_frontend_xss_and_accessibility_bundle_invariants(self) -> None:
+        """Verify bundled WebUI includes image URL sanitization, ARIA tab/live-region attributes, and modifier guards."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("function safeImageUrl(", html)
+        self.assertIn('id="unsaved-bar" class="unsaved-bar" role="status" aria-live="polite"', html)
+        self.assertIn("t.setAttribute('aria-selected'", html)
+        self.assertIn("if (e.altKey && !e.ctrlKey && !e.metaKey)", html)
 
 
 if __name__ == "__main__":

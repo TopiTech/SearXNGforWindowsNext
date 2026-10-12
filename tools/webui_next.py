@@ -33,6 +33,7 @@ import tempfile
 import threading
 import time
 import urllib.parse
+from collections.abc import Callable
 from html.parser import HTMLParser
 from typing import Any
 
@@ -44,6 +45,7 @@ if TOOLS_DIR not in sys.path:
 import agentic_search
 import retrieval_service
 import searxng_client
+import url_normalizer
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +211,8 @@ def _scrape_url_direct(
         return host_norm
 
     def _parse_url(value: str) -> urllib.parse.ParseResult:
+        if any(ord(c) <= 0x20 or ord(c) == 0x7F for c in value):
+            raise blocked_exc_cls("Invalid URL: contains control characters or whitespace")
         try:
             parsed_u = urllib.parse.urlparse(value)
             p = parsed_u.port
@@ -218,7 +222,7 @@ def _scrape_url_direct(
             raise
         except ValueError as exc:
             raise blocked_exc_cls("Invalid URL") from exc
-        if parsed_u.username or parsed_u.password or "@" in (parsed_u.netloc or "") or "\\" in (parsed_u.netloc or ""):
+        if parsed_u.username or parsed_u.password or "@" in (parsed_u.netloc or "") or "\\" in value:
             raise blocked_exc_cls("URLs with embedded credentials or backslashes are not allowed")
         return parsed_u
 
@@ -230,7 +234,9 @@ def _scrape_url_direct(
         if callable(is_reserved_fn):
             if is_reserved_fn(host_clean):
                 return True
-        elif webapp_mod._is_blocked_scrape_host(host_clean):
+        elif url_normalizer._is_reserved_scrape_host(host_clean):
+            return True
+        if webapp_mod._is_blocked_scrape_host(host_clean):
             return True
         if "%" in host_clean:
             host_clean = host_clean.split("%", 1)[0]
@@ -241,14 +247,20 @@ def _scrape_url_direct(
             if ":" in host_clean:
                 return True
             if host_clean.replace(".", "").isdigit():
+                parsed_any = False
+                if "." not in host_clean:
+                    with contextlib.suppress(ValueError, TypeError, OverflowError):
+                        ip_int = int(host_clean)
+                        if 0 <= ip_int <= 0xFFFFFFFF:
+                            parsed_any = True
+                            if webapp_mod._is_ip_blocked(ipaddress.IPv4Address(ip_int)):
+                                return True
                 with contextlib.suppress(OSError, ValueError):
                     packed = socket.inet_aton(host_clean)
-                    return bool(webapp_mod._is_ip_blocked(ipaddress.IPv4Address(packed)))
-                with contextlib.suppress(ValueError, TypeError, OverflowError):
-                    ip_int = int(host_clean)
-                    if 0 <= ip_int <= 0xFFFFFFFF:
-                        return bool(webapp_mod._is_ip_blocked(ipaddress.IPv4Address(ip_int)))
-                return True
+                    parsed_any = True
+                    if webapp_mod._is_ip_blocked(ipaddress.IPv4Address(packed)):
+                        return True
+                return not parsed_any
             if host_clean.startswith(("0x", "0X", "0o", "0O", "0b", "0B")):
                 with contextlib.suppress(ValueError, TypeError, OverflowError):
                     ip_int = int(host_clean, 0)
@@ -413,6 +425,27 @@ def _scrape_url_direct(
         return {"url": clean_url, "content": "", "error": f"取得失敗: {str(exc)[:120]}"}
 
 
+def _sanitize_local_base_url(base_url: str | None) -> str | None:
+    """Restrict user-supplied base_url to local SearXNG URLs to prevent SSRF via HTTP fallback."""
+    if not isinstance(base_url, str):
+        return None
+    base_clean = base_url.strip().rstrip("/")
+    if not base_clean:
+        return None
+    configured = (os.environ.get("SEARXNG_BASE_URL") or "").strip().rstrip("/")
+    port_raw = (os.environ.get("SEARXNG_PORT") or "").strip()
+    allowed = {"http://127.0.0.1:8888", "http://localhost:8888"}
+    if port_raw.isdigit():
+        allowed.add(f"http://127.0.0.1:{port_raw}")
+        allowed.add(f"http://localhost:{port_raw}")
+    if configured:
+        allowed.add(configured)
+    client_base = searxng_client.get_base_url()
+    if client_base:
+        allowed.add(client_base.rstrip("/"))
+    return base_clean if base_clean in allowed else None
+
+
 def _search_in_process(
     webapp_mod: Any,
     query: str,
@@ -443,27 +476,7 @@ def _search_in_process(
     except (ValueError, TypeError):
         page_int = 1
 
-    # SSRF guard on the HTTP fallback: ``base_url`` reaches
-    # searxng_client.search() which performs a plain urllib request without
-    # the SSRF hardening of the scrape path. Restrict it to the local
-    # SearXNG instance (loopback / configured base URL); anything else is
-    # dropped so a caller cannot probe internal network endpoints through
-    # this API and read the JSON response.
-    if base_url is not None:
-        base_clean = str(base_url).strip()
-        configured = (os.environ.get("SEARXNG_BASE_URL") or "").strip().rstrip("/")
-        port_raw = (os.environ.get("SEARXNG_PORT") or "").strip()
-        allowed = {"http://127.0.0.1:8888", "http://localhost:8888"}
-        if port_raw.isdigit():
-            allowed.add(f"http://127.0.0.1:{port_raw}")
-            allowed.add(f"http://localhost:{port_raw}")
-        if configured:
-            allowed.add(configured)
-        client_base = searxng_client.get_base_url()
-        if client_base:
-            allowed.add(client_base.rstrip("/"))
-        if base_clean.rstrip("/") not in allowed:
-            base_url = None
+    base_url = _sanitize_local_base_url(base_url)
 
     if webapp_mod is not None:
         try:
@@ -568,6 +581,7 @@ def execute_server_deep_search(
     max_res = _parse_int(max_results, default=5, minimum=1, maximum=50)
     max_tok = _parse_int(max_tokens, default=3000, minimum=500, maximum=16000)
     page_num = _parse_int(pageno, default=1, minimum=1, maximum=100)
+    safe_base_url = _sanitize_local_base_url(base_url)
 
     def _s_func(
         query: str,
@@ -593,8 +607,10 @@ def execute_server_deep_search(
     def _sc_func(
         url: str,
         max_length: int = 12000,
+        base_url: str | None = None,
         timeout: float = 6.0,
     ) -> dict[str, Any]:
+        _ = base_url
         return _scrape_url_direct(
             webapp_mod=webapp_mod,
             url=url,
@@ -618,7 +634,7 @@ def execute_server_deep_search(
         focus_query=focus_query,
         max_tokens=max_tok,
         max_scrape_length=max_scrape_length,
-        base_url=base_url,
+        base_url=safe_base_url,
         timeout=timeout,
     )
     res["page"] = page_num
@@ -640,6 +656,7 @@ def execute_server_retrieval_search(
 ) -> dict[str, Any]:
     """Execute high-quality retrieval pipeline in-process, returning GenAI Structured Schema dict."""
     count_int = _parse_int(count, default=5, minimum=1, maximum=50)
+    safe_base_url = _sanitize_local_base_url(base_url)
 
     def _s_func(
         query: str,
@@ -664,8 +681,10 @@ def execute_server_retrieval_search(
     def _sc_func(
         url: str,
         max_length: int = 12000,
+        base_url: str | None = None,
         timeout: float = 6.0,
     ) -> dict[str, Any]:
+        _ = base_url
         return _scrape_url_direct(
             webapp_mod=webapp_mod,
             url=url,
@@ -683,7 +702,7 @@ def execute_server_retrieval_search(
         time_range=time_range,
         include_domains=include_domains,
         exclude_domains=exclude_domains,
-        base_url=base_url,
+        base_url=safe_base_url,
         timeout=timeout,
     )
     data = resp.to_dict()
@@ -815,13 +834,15 @@ def get_engines_settings_data(
     if cookie_enabled:
         enabled_set.update(c.strip() for c in cookie_enabled.split(",") if c.strip())
 
-    if webapp_mod is not None:
+    if webapp_mod is not None and not cookie_disabled and not cookie_enabled:
         with contextlib.suppress(Exception):
             sxng_req = getattr(webapp_mod, "sxng_request", None)
             prefs = getattr(sxng_req, "preferences", None) if sxng_req else None
             if prefs and hasattr(prefs, "engines"):
                 with contextlib.suppress(Exception):
                     disabled_set.update(prefs.engines.get_disabled())
+
+    disabled_set -= enabled_set
 
     now = time.time()
     se = None
@@ -872,10 +893,10 @@ def get_engines_settings_data(
         def_disabled = bool(getattr(e, "disabled", False))
 
         # Determine enabled state
-        if name in disabled_set:
-            is_enabled = False
-        elif name in enabled_set:
+        if name in enabled_set:
             is_enabled = True
+        elif name in disabled_set:
+            is_enabled = False
         else:
             is_enabled = not def_disabled
 
@@ -946,7 +967,7 @@ def get_engines_settings_data(
         "avg_reliability": avg_rel,
         "categories": category_names,
         "engines": engine_items,
-        "autocomplete": str(cookies.get("autocomplete") or "").strip() or "duckduckgo",
+        "autocomplete": (cookies.get("autocomplete") or "").strip() or "duckduckgo",
     }
 
 
@@ -979,8 +1000,8 @@ def sync_engines_to_settings_file(
     settings_path: str | None = None,
 ) -> bool:
     """Safely update disabled: true/false for specified engines in config/settings.yml."""
-    enabled_engines = list(enabled_engines or [])
-    disabled_engines = list(disabled_engines or [])
+    enabled_engines = _clean_engine_names(list(enabled_engines or []))
+    disabled_engines = _clean_engine_names(list(disabled_engines or []))
     if not enabled_engines and not disabled_engines:
         return False
 
@@ -988,7 +1009,11 @@ def sync_engines_to_settings_file(
     # engine registry may be persisted. Prevents YAML pollution with unknown
     # keys even if the charset validation above is loosened later.
     try:
-        import searx.engines as _sx_engines
+        _sx_engines = sys.modules.get("searx.engines")
+        if _sx_engines is None:
+            import searx.engines as _sx_engines_mod
+
+            _sx_engines = _sx_engines_mod
 
         registry = set(getattr(_sx_engines, "engines", {}).keys())
         if registry:
@@ -1049,7 +1074,12 @@ def sync_engines_to_settings_file(
                     new_body = dis_pat.sub(rf"\g<1>{new_val}\g<2>", body)
                     return header + new_body
                 else:
-                    indent = "    "
+                    indent_m = re.search(r"(?m)^([ \t]+)[a-zA-Z_]", body)
+                    if indent_m:
+                        indent = indent_m.group(1)
+                    else:
+                        dash_m = re.match(r"^([ \t]*)-[ \t]*", header)
+                        indent = (dash_m.group(1) + "  ") if dash_m else "    "
                     line_ending = "\r\n" if "\r\n" in header else "\n"
                     new_val = "true" if target_disabled else "false"
                     return header + f"{indent}disabled: {new_val}{line_ending}" + body
@@ -1107,7 +1137,8 @@ def sync_engines_to_settings_file(
                     raise
                 return True
             return False
-        except Exception:  # noqa: BLE001 - safely handle file I/O or parsing failures without crashing
+        except Exception as exc:  # noqa: BLE001 - safely handle file I/O or parsing failures without crashing
+            logger.warning("Failed to sync engines to settings.yml: %s", exc)
             return False
 
 
@@ -1128,12 +1159,15 @@ def apply_settings_cookies(response: Any, payload: dict[str, Any]) -> None:
         clean_en = _clean_engine_names(payload.get("enabled_engines"))
         response.set_cookie("enabled_engines", ",".join(clean_en), **cookie_kwargs)
     if "safesearch" in payload:
-        response.set_cookie("safesearch", str(payload["safesearch"]), **cookie_kwargs)
+        ss_val = str(payload["safesearch"]).strip()
+        if ss_val in ("0", "1", "2"):
+            response.set_cookie("safesearch", ss_val, **cookie_kwargs)
     if "autocomplete" in payload:
         ac_val = str(payload["autocomplete"]).strip().lower()
-        if ac_val in ("off", "none", "0", "false"):
+        if ac_val in ("off", "none", "0", "false", ""):
             ac_val = "off"
-        response.set_cookie("autocomplete", ac_val, **cookie_kwargs)
+        if re.fullmatch(r"[a-z0-9_-]{1,32}", ac_val):
+            response.set_cookie("autocomplete", ac_val, **cookie_kwargs)
 
 
 def save_engines_settings_data(
@@ -1187,8 +1221,8 @@ def save_engines_settings_data(
 
     return {
         "success": True,
-        "disabled_engines_count": len(disabled_engines) if isinstance(disabled_engines, list) else 0,
-        "enabled_engines_count": len(enabled_engines) if isinstance(enabled_engines, list) else 0,
+        "disabled_engines_count": len(clean_dis),
+        "enabled_engines_count": len(clean_en),
         "synced_settings_yml": synced_yml,
     }
 
@@ -1823,7 +1857,7 @@ _EMBEDDED_AI_WORKSPACE_HTML = r"""<!DOCTYPE html>
   --accent: #4f46e5;
   --accent-hover: #4338ca;
   --accent-soft: rgba(79, 70, 229, 0.09);
-  --emerald: #059669;
+  --emerald: #047857;
   --emerald-soft: rgba(5, 150, 105, 0.10);
   --amber: #b45309;
   --amber-soft: rgba(180, 83, 9, 0.10);
@@ -2102,7 +2136,7 @@ main.workspace {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  border-bottom: 1px solid var(--border-color);
   transition: background 0.12s ease, color 0.12s ease;
 }
 .suggest-item:last-child {
@@ -2290,7 +2324,7 @@ main.workspace {
 
 /* Telemetry Ribbon */
 .telemetry-bar {
-  display: flex;
+  display: none;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
@@ -2301,10 +2335,11 @@ main.workspace {
   border-radius: 0.55rem;
   opacity: 0;
   transform: translateY(-4px);
-  transition: all 0.2s ease;
+  transition: opacity 0.2s ease, transform 0.2s ease;
   pointer-events: none;
 }
 .telemetry-bar.visible {
+  display: flex;
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
@@ -2378,6 +2413,7 @@ main.workspace {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
+  min-width: 0;
 }
 .result-card:hover {
   border-color: var(--border-hover);
@@ -2422,6 +2458,8 @@ main.workspace {
   font-size: 1.05rem;
   font-weight: 700;
   line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .card-title a { color: var(--text-main); }
 .card-title a:hover { color: var(--accent-hover); }
@@ -2436,6 +2474,8 @@ main.workspace {
   padding: 0.5rem 0.75rem;
   border-radius: 0 0.4rem 0.4rem 0;
   margin: 0.25rem 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .highlight-code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -2465,6 +2505,8 @@ main.workspace {
   max-height: 24rem;
   overflow-y: auto;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   margin-top: 0.4rem;
 }
 
@@ -2622,6 +2664,15 @@ main.workspace {
   padding: 0.35rem 0.55rem;
 }
 .ctx-preview-container th { background: var(--bg-elevated); font-weight: 700; }
+.ctx-preview-container ul {
+  margin: 0.4rem 0;
+  padding-left: 1.25rem;
+}
+.ctx-preview-container hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 0.75rem 0;
+}
 
 .token-progress-wrap {
   display: flex;
@@ -2659,6 +2710,7 @@ main.workspace {
   flex-direction: column;
   gap: 0.4rem;
   transition: border-color 0.15s ease;
+  min-width: 0;
 }
 .classic-card:hover { border-color: var(--border-hover); }
 .classic-card.selected-card {
@@ -2677,18 +2729,24 @@ main.workspace {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .classic-title-link {
   font-size: 1.08rem;
   font-weight: 700;
   color: var(--accent-hover);
   text-decoration: none;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .classic-title-link:hover { text-decoration: underline; }
 .classic-snippet-text {
   font-size: 0.84rem;
   color: var(--text-secondary);
   line-height: 1.55;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .classic-actions-row {
   display: flex;
@@ -2954,48 +3012,6 @@ main.workspace {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
-@media (max-width: 640px) {
-  .video-card {
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-  .video-thumb-wrap {
-    width: 100%;
-    min-width: 0;
-    height: 190px;
-  }
-}
-@media (max-width: 480px) {
-  .image-results-grid {
-    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-    gap: 0.5rem;
-  }
-  .image-card-thumb-wrap {
-    height: 105px;
-  }
-  #theme-toggle-btn span {
-    display: none;
-  }
-  #theme-toggle-btn {
-    padding: 0.45rem;
-  }
-  .toast-notice {
-    right: 1rem;
-    left: 1rem;
-    bottom: 1rem;
-    max-width: calc(100vw - 2rem);
-    justify-content: center;
-    text-align: center;
-  }
-  .unsaved-bar {
-    max-width: calc(100vw - 1.5rem);
-    width: auto;
-    flex-wrap: wrap;
-    justify-content: center;
-    padding: 0.6rem 0.9rem;
-    gap: 0.6rem;
-  }
-}
 
 /* Settings Dashboard View */
 .settings-view-wrap {
@@ -3211,13 +3227,15 @@ main.workspace {
   align-items: center;
   gap: 1rem;
   z-index: 100;
-  transition: transform 0.25s ease, opacity 0.25s ease;
+  transition: transform 0.25s ease, opacity 0.25s ease, visibility 0.25s ease;
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
 }
 .unsaved-bar.show {
   transform: translateX(-50%) translateY(0);
   opacity: 1;
+  visibility: visible;
   pointer-events: auto;
 }
 .unsaved-text {
@@ -3301,17 +3319,65 @@ main.workspace {
   box-shadow: 0 8px 24px rgba(0,0,0,0.35);
   z-index: 1000;
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.25s ease, transform 0.25s ease;
+  transition: opacity 0.25s ease, transform 0.25s ease, visibility 0.25s ease;
   transform: translateY(10px);
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
 }
+.toast-notice .ui-icon {
+  color: #ffffff;
+}
 .toast-notice.show {
   opacity: 1;
+  visibility: visible;
   pointer-events: auto;
   transform: translateY(0);
+}
+
+@media (max-width: 640px) {
+  .video-card {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .video-thumb-wrap {
+    width: 100%;
+    min-width: 0;
+    height: 190px;
+  }
+}
+@media (max-width: 480px) {
+  .image-results-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 0.5rem;
+  }
+  .image-card-thumb-wrap {
+    height: 105px;
+  }
+  #theme-toggle-btn span {
+    display: none;
+  }
+  #theme-toggle-btn {
+    padding: 0.45rem;
+  }
+  .toast-notice {
+    right: 1rem;
+    left: 1rem;
+    bottom: 1rem;
+    max-width: calc(100vw - 2rem);
+    justify-content: center;
+    text-align: center;
+  }
+  .unsaved-bar {
+    max-width: calc(100vw - 1.5rem);
+    width: auto;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 0.6rem 0.9rem;
+    gap: 0.6rem;
+  }
 }
 
 footer.ws-footer {
@@ -3404,6 +3470,7 @@ footer.ws-footer {
               <option value="8">8件</option>
               <option value="10">10件</option>
               <option value="15">15件</option>
+              <option value="20">20件</option>
             </select>
           </div>
 
@@ -3460,7 +3527,9 @@ footer.ws-footer {
           <div class="opt-group">
             <label for="classic-count">件数:</label>
             <select id="classic-count" class="opt-select">
+              <option value="5">5件</option>
               <option value="10" selected>10件</option>
+              <option value="15">15件</option>
               <option value="20">20件</option>
               <option value="30">30件</option>
             </select>
@@ -3831,14 +3900,38 @@ footer.ws-footer {
           .replace(/[\\$"\\`!]/g, function (ch) { return String.fromCharCode(92) + ch; });
       }
 
+      function safeGetStorage(key, fallback) {
+        try {
+          var val = localStorage.getItem(key);
+          return val !== null ? val : fallback;
+        } catch (e) {
+          return fallback;
+        }
+      }
+
+      function safeSetStorage(key, value) {
+        try {
+          localStorage.setItem(key, value);
+        } catch (e) {}
+      }
+
+      function safeRemoveStorage(key) {
+        try {
+          localStorage.removeItem(key);
+        } catch (e) {}
+      }
+
+      var toastTimer = null;
       function showToast(msg, isError) {
         var toast = document.getElementById('toast-notice');
         if (!toast) return;
+        if (toastTimer) clearTimeout(toastTimer);
         toast.innerHTML = (isError ? icon('alert') : icon('check')) + '<span>' + escapeHtml(msg) + '</span>';
         toast.style.background = isError ? 'var(--danger)' : 'var(--accent)';
         toast.classList.add('show');
-        setTimeout(function () {
+        toastTimer = setTimeout(function () {
           toast.classList.remove('show');
+          toastTimer = null;
         }, 2400);
       }
 
@@ -3848,7 +3941,7 @@ footer.ws-footer {
       }
 
       // Theme initialization
-      var savedTheme = localStorage.getItem('sxng_ai_theme') || 'dark';
+      var savedTheme = safeGetStorage('sxng_ai_theme', 'dark') || 'dark';
       document.documentElement.setAttribute('data-theme', savedTheme);
       function updateThemeIcon(t) {
         var btn = document.getElementById('theme-toggle-btn');
@@ -3861,7 +3954,7 @@ footer.ws-footer {
       addListener('theme-toggle-btn', 'click', function () {
         var cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
         document.documentElement.setAttribute('data-theme', cur);
-        localStorage.setItem('sxng_ai_theme', cur);
+        safeSetStorage('sxng_ai_theme', cur);
         updateThemeIcon(cur);
       });
 
@@ -3896,11 +3989,18 @@ footer.ws-footer {
       }
 
       function copyWithFeedback(text, btn, label) {
-        if (!text) return;
-        var orig = btn.innerHTML;
+        if (!text || !btn) return;
+        if (!btn.dataset.origHtml) {
+          btn.dataset.origHtml = btn.innerHTML;
+        }
+        var orig = btn.dataset.origHtml;
         var done = function () {
+          if (btn._copyTimer) clearTimeout(btn._copyTimer);
           btn.innerHTML = icon('check') + '<span>' + (label || 'コピー完了') + '</span>';
-          setTimeout(function () { btn.innerHTML = orig; }, 1600);
+          btn._copyTimer = setTimeout(function () {
+            btn.innerHTML = orig;
+            btn._copyTimer = null;
+          }, 1600);
         };
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(text).then(done).catch(done);
@@ -3918,7 +4018,34 @@ footer.ws-footer {
       /* -------------------------------------------------------------
        * URL & Browser History Synchronization (pushState / popstate)
        * ------------------------------------------------------------- */
+      var suppressUrlSync = false;
+      var activeRequestContainer = null;
+      var initialResultsEmptyHtml = (document.getElementById('results-container') || {}).innerHTML || '';
+      var initialClassicEmptyHtml = (document.getElementById('classic-results-container') || {}).innerHTML || '';
+
+      function bindSampleQueryChips() {
+        document.querySelectorAll('.sample-q').forEach(function (chip) {
+          if (chip.dataset.bound) return;
+          chip.dataset.bound = '1';
+          chip.addEventListener('click', function () {
+            document.getElementById('q').value = chip.dataset.q;
+            setMode('deep');
+            executeCurrentAction();
+          });
+        });
+        document.querySelectorAll('.sample-classic-q').forEach(function (chip) {
+          if (chip.dataset.bound) return;
+          chip.dataset.bound = '1';
+          chip.addEventListener('click', function () {
+            document.getElementById('q').value = chip.dataset.q;
+            setMode('classic');
+            executeCurrentAction();
+          });
+        });
+      }
+
       function updateUrlState(replace) {
+        if (suppressUrlSync) return;
         var params = new URLSearchParams();
         var qVal = document.getElementById('q').value.trim();
         if (qVal) params.set('q', qVal);
@@ -3928,6 +4055,9 @@ footer.ws-footer {
           if (depth && depth !== 'advanced') params.set('depth', depth);
         } else if (state.mode === 'classic') {
           if (state.classicCategory) params.set('category', state.classicCategory);
+          var trEl = document.getElementById('classic-time-range');
+          var trVal = trEl ? trEl.value : '';
+          if (trVal) params.set('time_range', trVal);
           if (state.classicPage > 1) params.set('page', String(state.classicPage));
         }
 
@@ -3950,12 +4080,17 @@ footer.ws-footer {
         var q = p.get('q') || '';
         var m = p.get('mode') || 'deep';
         var cat = p.get('category') || p.get('categories') || '';
+        var tr = p.get('time_range') || '';
         var pg = parseInt(p.get('page') || '1', 10) || 1;
         var depth = p.get('depth') || 'advanced';
 
         document.getElementById('q').value = q;
         document.getElementById('opt-depth').value = depth;
+        if (document.getElementById('classic-time-range')) {
+          document.getElementById('classic-time-range').value = tr;
+        }
         state.classicCategory = cat;
+        state.classicTimeRange = tr;
         state.classicPage = pg;
 
         document.querySelectorAll('#classic-cat-chips .cat-btn').forEach(function (b) {
@@ -3964,11 +4099,34 @@ footer.ws-footer {
           b.setAttribute('aria-pressed', active ? 'true' : 'false');
         });
 
-        setMode(m, true);
-        if (q) {
-          if (isUrlText(q)) runScrapeMode(q);
-          else if (m === 'classic') runClassicSearch(q, pg);
-          else runUnifiedSearch(q);
+        suppressUrlSync = true;
+        try {
+          setMode(m, true);
+          if (q) {
+            if (isUrlText(q)) runScrapeMode(q);
+            else if (m === 'classic') runClassicSearch(q, pg);
+            else runUnifiedSearch(q);
+          } else {
+            var rList = document.getElementById('results-container');
+            if (rList && initialResultsEmptyHtml) {
+              rList.innerHTML = initialResultsEmptyHtml;
+            }
+            var cList = document.getElementById('classic-results-container');
+            if (cList && initialClassicEmptyHtml) {
+              cList.innerHTML = initialClassicEmptyHtml;
+            }
+            var tBar = document.getElementById('telemetry-bar');
+            if (tBar) tBar.classList.remove('visible');
+            var cMeta = document.getElementById('classic-telemetry-pill');
+            if (cMeta) cMeta.style.display = 'none';
+            var cAns = document.getElementById('classic-answers-container');
+            if (cAns) cAns.innerHTML = '';
+            var cPag = document.getElementById('classic-pagination-bar');
+            if (cPag) cPag.style.display = 'none';
+            bindSampleQueryChips();
+          }
+        } finally {
+          suppressUrlSync = false;
         }
       });
 
@@ -3978,7 +4136,7 @@ footer.ws-footer {
       var HISTORY_STORAGE_KEY = 'sxng_query_history';
       function getQueryHistory() {
         try {
-          return JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || '[]');
+          return JSON.parse(safeGetStorage(HISTORY_STORAGE_KEY, '[]') || '[]');
         } catch (e) {
           return [];
         }
@@ -3989,7 +4147,7 @@ footer.ws-footer {
         var hist = getQueryHistory().filter(function (item) { return item !== q; });
         hist.unshift(q);
         if (hist.length > 8) hist = hist.slice(0, 8);
-        try { localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(hist)); } catch (e) {}
+        safeSetStorage(HISTORY_STORAGE_KEY, JSON.stringify(hist));
         renderQueryHistory();
       }
       function renderQueryHistory() {
@@ -4019,7 +4177,7 @@ footer.ws-footer {
         clearBtn.className = 'recent-clear-btn';
         clearBtn.textContent = '履歴クリア';
         clearBtn.addEventListener('click', function () {
-          localStorage.removeItem(HISTORY_STORAGE_KEY);
+          safeRemoveStorage(HISTORY_STORAGE_KEY);
           renderQueryHistory();
         });
         wrap.appendChild(clearBtn);
@@ -4162,16 +4320,22 @@ footer.ws-footer {
             el.classList.toggle('active', i === activeSuggestIndex);
             el.setAttribute('aria-selected', i === activeSuggestIndex ? 'true' : 'false');
           });
+          if (items[activeSuggestIndex] && items[activeSuggestIndex].scrollIntoView) {
+            items[activeSuggestIndex].scrollIntoView({ block: 'nearest' });
+          }
           var selText = items[activeSuggestIndex].querySelector('span').textContent;
           document.getElementById('q').value = selText;
           setActiveSuggestAria();
         } else if (e.key === 'ArrowUp') {
           e.preventDefault();
-          activeSuggestIndex = (activeSuggestIndex - 1 + items.length) % items.length;
+          activeSuggestIndex = activeSuggestIndex <= 0 ? (items.length - 1) : (activeSuggestIndex - 1);
           items.forEach(function (el, i) {
             el.classList.toggle('active', i === activeSuggestIndex);
             el.setAttribute('aria-selected', i === activeSuggestIndex ? 'true' : 'false');
           });
+          if (items[activeSuggestIndex] && items[activeSuggestIndex].scrollIntoView) {
+            items[activeSuggestIndex].scrollIntoView({ block: 'nearest' });
+          }
           var selText2 = items[activeSuggestIndex].querySelector('span').textContent;
           document.getElementById('q').value = selText2;
           setActiveSuggestAria();
@@ -4184,6 +4348,7 @@ footer.ws-footer {
             executeCurrentAction();
           }
         } else if (e.key === 'Escape') {
+          e.stopPropagation();
           closeSuggest();
         }
       });
@@ -4313,46 +4478,39 @@ footer.ws-footer {
         });
       });
 
-      document.querySelectorAll('.sample-q').forEach(function (chip) {
-        chip.addEventListener('click', function () {
-          document.getElementById('q').value = chip.dataset.q;
-          setMode('deep');
-          executeCurrentAction();
-        });
-      });
-
-      document.querySelectorAll('.sample-classic-q').forEach(function (chip) {
-        chip.addEventListener('click', function () {
-          document.getElementById('q').value = chip.dataset.q;
-          setMode('classic');
-          executeCurrentAction();
-        });
-      });
+      bindSampleQueryChips();
 
       /* -------------------------------------------------------------
        * Lightweight Vanilla Markdown Preview Renderer
        * ------------------------------------------------------------- */
       function renderSimpleMarkdown(md) {
         if (!md) return '<p style="color:var(--text-muted);">(コンテキストが空です)</p>';
-        var text = escapeHtml(md).replace(/\r\n/g, '\n');
+        var text = escapeHtml(String(md).replace(/[\u0001\u0002]/g, '')).replace(/\r\n/g, '\n');
 
-        // 1. Extract fenced code blocks with unique tokens
+        // 1. Extract fenced code blocks with unique non-printable tokens
         var codeBlocks = [];
         text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, function (_, lang, code) {
-          var token = '@@CODE_BLOCK_' + codeBlocks.length + '@@';
+          var token = '\u0001@@CODE_BLOCK_' + codeBlocks.length + '@@\u0001';
           codeBlocks.push('<pre><code class="lang-' + lang + '">' + code + '</code></pre>');
           return '\n\n' + token + '\n\n';
         });
 
-        // 2. Extract inline code with tokens
+        // 2. Extract inline code with unique non-printable tokens
         var inlineCodes = [];
-        text = text.replace(/`([^`]+)`/g, function (_, code) {
-          var token = '@@INLINE_CODE_' + inlineCodes.length + '@@';
+        text = text.replace(/`([^`\n]+)`/g, function (_, code) {
+          var token = '\u0002@@INLINE_CODE_' + inlineCodes.length + '@@\u0002';
           inlineCodes.push('<code>' + code + '</code>');
           return token;
         });
 
-        // 3. Process blocks (split by double newlines)
+        // 3. Normalize single-newline block transitions so packed markdown renders headings, lists, and blockquotes cleanly
+        text = text.replace(/^(#{1,3} .*)$/gm, '\n\n$1\n\n');
+        text = text.replace(/^(-{3,})$/gm, '\n\n$1\n\n');
+        text = text.replace(/^(?!&gt;)(.+)\n(?=&gt;)/gm, '$1\n\n');
+        text = text.replace(/^(&gt;.*)\n(?!&gt;|\n)/gm, '$1\n\n');
+        text = text.replace(/^(?![\-\*]\s)(.+)\n(?=[\-\*]\s)/gm, '$1\n\n');
+        text = text.replace(/^([\-\*]\s.*)\n(?![\-\*]\s|\n)/gm, '$1\n\n');
+
         var rawBlocks = text.split(/\n{2,}/);
         var htmlBlocks = [];
 
@@ -4361,8 +4519,14 @@ footer.ws-footer {
           if (!block) continue;
 
           // Check if block is a preserved code block token
-          if (/^@@CODE_BLOCK_\d+@@$/.test(block)) {
+          if (/^\u0001@@CODE_BLOCK_\d+@@\u0001$/.test(block)) {
             htmlBlocks.push(block);
+            continue;
+          }
+
+          // Check if block is horizontal rule
+          if (/^-{3,}$/.test(block)) {
+            htmlBlocks.push('<hr>');
             continue;
           }
 
@@ -4381,7 +4545,7 @@ footer.ws-footer {
           }
 
           // Check if block is blockquote
-          if (/^&gt; (.*$)/m.test(block)) {
+          if (/^&gt;\s?(.*$)/m.test(block)) {
             var bqLines = block.split(/\n/).map(function (line) {
               return line.replace(/^&gt;\s?/, '');
             });
@@ -4410,8 +4574,8 @@ footer.ws-footer {
         fullHtml = fullHtml.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
         fullHtml = fullHtml.replace(/\*([^*]+)\*/g, '<em>$1</em>');
 
-        // 5. Links (handles escaped brackets in titles from escape_markdown_link)
-        fullHtml = fullHtml.replace(/\[((?:\\\]|[^\]])+)\]\((https?:\/\/[^\s\)\"\']+)\)/g, function (_, label, rawUrl) {
+        // 5. Links (handles escaped brackets in titles from escape_markdown_link and rejects code tokens in URL)
+        fullHtml = fullHtml.replace(/\[((?:\\\]|[^\]])+)\]\((https?:\/\/[^\s\)\"\'\u0001\u0002]+)\)/g, function (_, label, rawUrl) {
           var cleanUrl = safeHttpUrl(rawUrl.replace(/&amp;/g, '&'));
           var displayLabel = label.replace(/\\([\[\]])/g, '$1');
           if (cleanUrl === '#') {
@@ -4420,12 +4584,12 @@ footer.ws-footer {
           return '<a href="' + escapeHtml(cleanUrl) + '" target="_blank" rel="noopener noreferrer">' + displayLabel + '</a>';
         });
 
-        // 6. Restore code blocks and inline code (using function return to prevent $ pattern interpretation)
-        for (var k = 0; k < codeBlocks.length; k++) {
-          fullHtml = fullHtml.replace('@@CODE_BLOCK_' + k + '@@', function () { return codeBlocks[k]; });
-        }
+        // 6. Restore inline code first, then fenced code blocks (prevents token substitution inside code)
         for (var j = 0; j < inlineCodes.length; j++) {
-          fullHtml = fullHtml.replace('@@INLINE_CODE_' + j + '@@', function () { return inlineCodes[j]; });
+          fullHtml = fullHtml.replace('\u0002@@INLINE_CODE_' + j + '@@\u0002', function () { return inlineCodes[j]; });
+        }
+        for (var k = 0; k < codeBlocks.length; k++) {
+          fullHtml = fullHtml.replace('\u0001@@CODE_BLOCK_' + k + '@@\u0001', function () { return codeBlocks[k]; });
         }
 
         return fullHtml;
@@ -4651,28 +4815,32 @@ footer.ws-footer {
           scrapeBtn.setAttribute('aria-controls', drawerId);
           scrapeBtn.addEventListener('click', function () {
             var existing = card.querySelector('.inline-scrape-drawer');
-            if (existing) {
+            if (existing && existing.dataset.failed !== '1') {
               var isHidden = existing.style.display === 'none';
               existing.style.display = isHidden ? 'block' : 'none';
               scrapeBtn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
               return;
             }
-            var drawer = document.createElement('div');
+            var drawer = existing || document.createElement('div');
             drawer.className = 'inline-scrape-drawer';
             drawer.id = drawerId;
+            drawer.style.display = 'block';
+            delete drawer.dataset.failed;
             drawer.innerHTML = '<span class="ui-spinner"></span> URLから本文を抽出中...';
-            card.appendChild(drawer);
+            if (!existing) card.appendChild(drawer);
             scrapeBtn.setAttribute('aria-expanded', 'true');
             fetch('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
               .then(function (r) { return r.json(); })
               .then(function (res) {
                 if (res.error) {
+                  drawer.dataset.failed = '1';
                   drawer.innerHTML = icon('alert') + ' 抽出失敗: ' + escapeHtml(res.error);
                   return;
                 }
                 drawer.textContent = res.content || '(本文なし)';
               })
               .catch(function (e) {
+                drawer.dataset.failed = '1';
                 drawer.innerHTML = icon('alert') + ' 通信エラー: ' + escapeHtml(e);
               });
           });
@@ -4724,6 +4892,7 @@ footer.ws-footer {
         state.maxTokens = maxTok;
 
         var container = document.getElementById('results-container');
+        activeRequestContainer = container;
         renderSkeletonCards(container, parseInt(count, 10) || 4);
 
         saveQueryHistory(query);
@@ -4744,6 +4913,7 @@ footer.ws-footer {
         fetch(url, { signal: signal })
           .then(function (r) { return r.json(); })
           .then(function (res) {
+            if (signal.aborted) return;
             container.setAttribute('aria-busy', 'false');
             var telBar = document.getElementById('telemetry-bar');
             if (res.error && (!res.results || !res.results.length)) {
@@ -4770,7 +4940,16 @@ footer.ws-footer {
             updateUrlState(false);
           })
           .catch(function (err) {
-            if (err.name === 'AbortError') return;
+            if (err.name === 'AbortError') {
+              if (activeRequestContainer !== container) {
+                container.setAttribute('aria-busy', 'false');
+                if (container.querySelector('.skeleton-card') && initialResultsEmptyHtml) {
+                  container.innerHTML = initialResultsEmptyHtml;
+                  bindSampleQueryChips();
+                }
+              }
+              return;
+            }
             container.setAttribute('aria-busy', 'false');
             var telBar = document.getElementById('telemetry-bar');
             if (telBar) telBar.classList.remove('visible');
@@ -4831,31 +5010,31 @@ footer.ws-footer {
             var thumbSrc = item.thumbnail_src || item.thumbnail;
             var fullSrc = item.img_src || thumbSrc;
             var displaySrc = thumbSrc || fullSrc;
+            var safeSrc = displaySrc ? safeImageUrl(displaySrc) : '';
+            var safeFullSrc = fullSrc ? safeImageUrl(fullSrc) : '';
 
-            if (displaySrc) {
-              var safeSrc = safeImageUrl(displaySrc);
-              if (safeSrc) {
-                var img = document.createElement('img');
-                img.className = 'image-card-thumb';
-                img.src = safeSrc;
-                img.alt = item.title || '';
-                img.loading = 'lazy';
-                img.referrerPolicy = 'no-referrer';
-                img.onerror = function () {
-                  if (fullSrc && safeSrc !== safeImageUrl(fullSrc)) {
-                    this.src = safeImageUrl(fullSrc);
-                  } else {
-                    this.style.display = 'none';
-                    if (!thumbWrap.querySelector('.image-card-placeholder')) {
-                      var ph = document.createElement('div');
-                      ph.className = 'image-card-placeholder';
-                      ph.innerHTML = icon('image') + '<span>画像を表示できません</span>';
-                      thumbWrap.appendChild(ph);
-                    }
+            if (safeSrc) {
+              var img = document.createElement('img');
+              img.className = 'image-card-thumb';
+              img.src = safeSrc;
+              img.alt = item.title || '';
+              img.loading = 'lazy';
+              img.referrerPolicy = 'no-referrer';
+              img.onerror = function () {
+                if (!this.dataset.retried && safeFullSrc && safeSrc !== safeFullSrc) {
+                  this.dataset.retried = '1';
+                  this.src = safeFullSrc;
+                } else {
+                  this.style.display = 'none';
+                  if (!thumbWrap.querySelector('.image-card-placeholder')) {
+                    var ph = document.createElement('div');
+                    ph.className = 'image-card-placeholder';
+                    ph.innerHTML = icon('image') + '<span>画像を表示できません</span>';
+                    thumbWrap.appendChild(ph);
                   }
-                };
-                thumbWrap.appendChild(img);
-              }
+                }
+              };
+              thumbWrap.appendChild(img);
             } else {
               var ph = document.createElement('div');
               ph.className = 'image-card-placeholder';
@@ -4937,27 +5116,25 @@ footer.ws-footer {
               var yt = (item.url || '').match(/(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
               if (yt) videoThumb = 'https://i.ytimg.com/vi/' + yt[1] + '/hqdefault.jpg';
             }
+            var safeVideoSrc = videoThumb ? safeImageUrl(videoThumb) : '';
 
-            if (videoThumb) {
-              var safeSrc = safeImageUrl(videoThumb);
-              if (safeSrc) {
-                var img = document.createElement('img');
-                img.className = 'video-thumb-img';
-                img.src = safeSrc;
-                img.alt = item.title || '';
-                img.loading = 'lazy';
-                img.referrerPolicy = 'no-referrer';
-                img.onerror = function () {
-                  this.style.display = 'none';
-                  if (!thumbWrap.querySelector('.video-thumb-placeholder')) {
-                    var ph = document.createElement('div');
-                    ph.className = 'video-thumb-placeholder';
-                    ph.innerHTML = icon('play') + '<span>動画プレビュー</span>';
-                    thumbWrap.appendChild(ph);
-                  }
-                };
-                thumbWrap.appendChild(img);
-              }
+            if (safeVideoSrc) {
+              var img = document.createElement('img');
+              img.className = 'video-thumb-img';
+              img.src = safeVideoSrc;
+              img.alt = item.title || '';
+              img.loading = 'lazy';
+              img.referrerPolicy = 'no-referrer';
+              img.onerror = function () {
+                this.style.display = 'none';
+                if (!thumbWrap.querySelector('.video-thumb-placeholder')) {
+                  var ph = document.createElement('div');
+                  ph.className = 'video-thumb-placeholder';
+                  ph.innerHTML = icon('play') + '<span>動画プレビュー</span>';
+                  thumbWrap.appendChild(ph);
+                }
+              };
+              thumbWrap.appendChild(img);
             } else {
               var ph = document.createElement('div');
               ph.className = 'video-thumb-placeholder';
@@ -5139,28 +5316,34 @@ footer.ws-footer {
           scrapeBtn.setAttribute('aria-controls', drawerId);
           scrapeBtn.addEventListener('click', function () {
             var ex = card.querySelector('.inline-scrape-drawer');
-            if (ex) {
+            if (ex && ex.dataset.failed !== '1') {
               var isHidden = ex.style.display === 'none';
               ex.style.display = isHidden ? 'block' : 'none';
               scrapeBtn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
               return;
             }
-            var d = document.createElement('div');
+            var d = ex || document.createElement('div');
             d.className = 'inline-scrape-drawer';
             d.id = drawerId;
+            d.style.display = 'block';
+            delete d.dataset.failed;
             d.innerHTML = '<span class="ui-spinner"></span> URL本文を抽出中...';
-            card.appendChild(d);
+            if (!ex) card.appendChild(d);
             scrapeBtn.setAttribute('aria-expanded', 'true');
             fetch('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
               .then(function (r) { return r.json(); })
               .then(function (res) {
                 if (res.error) {
+                  d.dataset.failed = '1';
                   d.innerHTML = icon('alert') + ' 抽出エラー: ' + escapeHtml(res.error);
                 } else {
                   d.textContent = res.content || '(本文なし)';
                 }
               })
-              .catch(function (e) { d.innerHTML = icon('alert') + ' 抽出エラー: ' + escapeHtml(e); });
+              .catch(function (e) {
+                d.dataset.failed = '1';
+                d.innerHTML = icon('alert') + ' 抽出エラー: ' + escapeHtml(e);
+              });
           });
 
           var copyBtn = document.createElement('button');
@@ -5200,6 +5383,7 @@ footer.ws-footer {
 
         var container = document.getElementById('classic-results-container');
         var telPill = document.getElementById('classic-telemetry-pill');
+        activeRequestContainer = container;
         renderSkeletonCards(container, parseInt(count, 10) || 5);
 
         saveQueryHistory(query);
@@ -5218,6 +5402,7 @@ footer.ws-footer {
         fetch('/deep_search?' + params.toString(), { signal: signal })
           .then(function (r) { return r.json(); })
           .then(function (res) {
+            if (signal.aborted) return;
             container.setAttribute('aria-busy', 'false');
             var ansContainer = document.getElementById('classic-answers-container');
             var pagBar = document.getElementById('classic-pagination-bar');
@@ -5260,7 +5445,16 @@ footer.ws-footer {
             updateUrlState(false);
           })
           .catch(function (err) {
-            if (err.name === 'AbortError') return;
+            if (err.name === 'AbortError') {
+              if (activeRequestContainer !== container) {
+                container.setAttribute('aria-busy', 'false');
+                if (container.querySelector('.skeleton-card') && initialClassicEmptyHtml) {
+                  container.innerHTML = initialClassicEmptyHtml;
+                  bindSampleQueryChips();
+                }
+              }
+              return;
+            }
             container.setAttribute('aria-busy', 'false');
             if (telPill) telPill.style.display = 'none';
             var ansContainer = document.getElementById('classic-answers-container');
@@ -5314,6 +5508,8 @@ footer.ws-footer {
         var maxLen = document.getElementById('opt-scrape-len').value || '8000';
         var focusQ = document.getElementById('opt-scrape-query').value.trim();
         var container = document.getElementById('results-container');
+        activeRequestContainer = container;
+        container.setAttribute('aria-busy', 'true');
         container.innerHTML = '<div class="empty-state"><h2><span class="ui-spinner"></span> URL 本文抽出中...</h2><p>' + escapeHtml(targetUrl) + '</p></div>';
 
         closeSuggest();
@@ -5325,6 +5521,7 @@ footer.ws-footer {
         fetch(api, { signal: signal })
           .then(function (r) { return r.json(); })
           .then(function (res) {
+            if (signal.aborted) return;
             container.setAttribute('aria-busy', 'false');
             var telBar = document.getElementById('telemetry-bar');
             if (res.error) {
@@ -5376,7 +5573,16 @@ footer.ws-footer {
             updateUrlState(false);
           })
           .catch(function (err) {
-            if (err.name === 'AbortError') return;
+            if (err.name === 'AbortError') {
+              if (activeRequestContainer !== container) {
+                container.setAttribute('aria-busy', 'false');
+                if (initialResultsEmptyHtml) {
+                  container.innerHTML = initialResultsEmptyHtml;
+                  bindSampleQueryChips();
+                }
+              }
+              return;
+            }
             var telBar = document.getElementById('telemetry-bar');
             if (telBar) telBar.classList.remove('visible');
             var oldBar = document.querySelector('.telemetry-bar:not(#telemetry-bar)');
@@ -5762,17 +5968,28 @@ footer.ws-footer {
           });
       });
 
+      function applySearchPreferenceControls(countVal, tokVal) {
+        if (countVal) {
+          if (document.getElementById('pref-default-count')) document.getElementById('pref-default-count').value = countVal;
+          if (document.getElementById('opt-count')) document.getElementById('opt-count').value = countVal;
+          if (document.getElementById('classic-count')) document.getElementById('classic-count').value = countVal;
+        }
+        if (tokVal) {
+          if (document.getElementById('pref-default-tokens')) document.getElementById('pref-default-tokens').value = tokVal;
+          if (document.getElementById('opt-tokens')) document.getElementById('opt-tokens').value = tokVal;
+        }
+      }
+
       function loadGeneralPreferences() {
-        var mode = localStorage.getItem('sxng_pref_mode');
-        var ss = localStorage.getItem('sxng_pref_safesearch');
-        var count = localStorage.getItem('sxng_pref_count');
-        var tok = localStorage.getItem('sxng_pref_tokens');
-        var ac = localStorage.getItem('sxng_pref_autocomplete');
+        var mode = safeGetStorage('sxng_pref_mode', null);
+        var ss = safeGetStorage('sxng_pref_safesearch', null);
+        var count = safeGetStorage('sxng_pref_count', null);
+        var tok = safeGetStorage('sxng_pref_tokens', null);
+        var ac = safeGetStorage('sxng_pref_autocomplete', null);
 
         if (mode && document.getElementById('pref-default-mode')) document.getElementById('pref-default-mode').value = mode;
         if (ss && document.getElementById('pref-safesearch')) document.getElementById('pref-safesearch').value = ss;
-        if (count && document.getElementById('pref-default-count')) document.getElementById('pref-default-count').value = count;
-        if (tok && document.getElementById('pref-default-tokens')) document.getElementById('pref-default-tokens').value = tok;
+        applySearchPreferenceControls(count, tok);
         if (ac && document.getElementById('pref-autocomplete')) document.getElementById('pref-autocomplete').value = ac;
       }
       loadGeneralPreferences();
@@ -5784,11 +6001,12 @@ footer.ws-footer {
         var tok = document.getElementById('pref-default-tokens') ? document.getElementById('pref-default-tokens').value : '3000';
         var ac = document.getElementById('pref-autocomplete') ? document.getElementById('pref-autocomplete').value : 'duckduckgo';
 
-        localStorage.setItem('sxng_pref_mode', mode);
-        localStorage.setItem('sxng_pref_safesearch', ss);
-        localStorage.setItem('sxng_pref_count', count);
-        localStorage.setItem('sxng_pref_tokens', tok);
-        localStorage.setItem('sxng_pref_autocomplete', ac);
+        safeSetStorage('sxng_pref_mode', mode);
+        safeSetStorage('sxng_pref_safesearch', ss);
+        safeSetStorage('sxng_pref_count', count);
+        safeSetStorage('sxng_pref_tokens', tok);
+        safeSetStorage('sxng_pref_autocomplete', ac);
+        applySearchPreferenceControls(count, tok);
 
         fetch('/api/settings/engines', {
           method: 'POST',
@@ -5810,16 +6028,18 @@ footer.ws-footer {
       addListener('btn-reset-general-prefs', 'click', function () {
         if (document.getElementById('pref-default-mode')) document.getElementById('pref-default-mode').value = 'deep';
         if (document.getElementById('pref-safesearch')) document.getElementById('pref-safesearch').value = '1';
-        if (document.getElementById('pref-default-count')) document.getElementById('pref-default-count').value = '10';
-        document.getElementById('pref-default-tokens').value = '3000';
+        applySearchPreferenceControls('10', '3000');
+        if (document.getElementById('opt-count')) document.getElementById('opt-count').value = '5';
         if (document.getElementById('pref-autocomplete')) {
           document.getElementById('pref-autocomplete').value = 'duckduckgo';
         }
-        localStorage.removeItem('sxng_pref_mode');
-        localStorage.removeItem('sxng_pref_safesearch');
-        localStorage.removeItem('sxng_pref_count');
-        localStorage.removeItem('sxng_pref_tokens');
-        localStorage.removeItem('sxng_pref_autocomplete');
+        try {
+          localStorage.removeItem('sxng_pref_mode');
+          localStorage.removeItem('sxng_pref_safesearch');
+          localStorage.removeItem('sxng_pref_count');
+          localStorage.removeItem('sxng_pref_tokens');
+          localStorage.removeItem('sxng_pref_autocomplete');
+        } catch (e) {}
         showToast('初期設定を復元しました');
       });
 
@@ -6014,34 +6234,34 @@ footer.ws-footer {
       });
 
       // Restore user preferences from localStorage
-      var savedMode = localStorage.getItem('sxng_pref_mode');
+      var savedMode = safeGetStorage('sxng_pref_mode', null);
       if (savedMode && ['deep', 'classic', 'balanced'].indexOf(savedMode) !== -1) {
         document.getElementById('pref-default-mode').value = savedMode;
         if (!window.location.search) {
           setMode(savedMode === 'balanced' ? 'deep' : savedMode, true);
         }
       }
-      var savedCount = localStorage.getItem('sxng_pref_count');
-      if (savedCount) {
-        document.getElementById('pref-default-count').value = savedCount;
-        document.getElementById('classic-count').value = savedCount;
-      }
-      var savedTok = localStorage.getItem('sxng_pref_tokens');
-      if (savedTok) {
-        document.getElementById('pref-default-tokens').value = savedTok;
-        document.getElementById('opt-tokens').value = savedTok;
-      }
+      var savedCount = safeGetStorage('sxng_pref_count', null);
+      var savedTok = safeGetStorage('sxng_pref_tokens', null);
+      applySearchPreferenceControls(savedCount, savedTok);
 
       // Parse initial URL parameters
       var urlParams = new URLSearchParams(window.location.search);
       var initMode = urlParams.get('mode');
       var initDepth = urlParams.get('depth');
       var initCat = urlParams.get('category') || urlParams.get('categories');
+      var initTimeRange = urlParams.get('time_range');
       var initPage = parseInt(urlParams.get('page') || urlParams.get('pageno'), 10) || 1;
       var initQ = urlParams.get('q') || urlParams.get('url');
 
       if (initDepth && ['advanced', 'code', 'basic', 'fast'].indexOf(initDepth) !== -1) {
         document.getElementById('opt-depth').value = initDepth;
+      }
+      if (initTimeRange && ['day', 'week', 'month', 'year'].indexOf(initTimeRange) !== -1) {
+        state.classicTimeRange = initTimeRange;
+        if (document.getElementById('classic-time-range')) {
+          document.getElementById('classic-time-range').value = initTimeRange;
+        }
       }
       if (initCat) {
         state.classicCategory = initCat;
@@ -6060,10 +6280,15 @@ footer.ws-footer {
       if (initQ) {
         document.getElementById('q').value = initQ;
         syncInputOptionsVisibility();
-        if (state.mode === 'classic' && initPage > 1) {
-          runClassicSearch(initQ, initPage);
-        } else {
-          executeCurrentAction();
+        suppressUrlSync = true;
+        try {
+          if (state.mode === 'classic' && initPage > 1) {
+            runClassicSearch(initQ, initPage);
+          } else {
+            executeCurrentAction();
+          }
+        } finally {
+          suppressUrlSync = false;
         }
       }
     })();
@@ -6169,10 +6394,10 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
 
     from flask import Response, jsonify, redirect, request
 
-    orig_search = app.view_functions.get("search")
-    orig_preferences = app.view_functions.get("preferences")
-    orig_about = app.view_functions.get("about")
-    orig_autocompleter = app.view_functions.get("autocompleter")
+    orig_search: Callable[..., Any] | None = app.view_functions.get("search")
+    orig_preferences: Callable[..., Any] | None = app.view_functions.get("preferences")
+    orig_about: Callable[..., Any] | None = app.view_functions.get("about")
+    orig_autocompleter: Callable[..., Any] | None = app.view_functions.get("autocompleter")
 
     def unified_autocompleter_view() -> Any:
         q = (request.args.get("q") or request.form.get("q") or "").strip()
@@ -6200,11 +6425,9 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                     parsed = json.loads(raw_data)
                     if isinstance(parsed, list):
                         if len(parsed) >= 2 and isinstance(parsed[1], list):
-                            results = [str(x) for x in parsed[1] if isinstance(x, str) and x.strip()]
+                            results = [x for x in parsed[1] if isinstance(x, str) and x.strip()]
                         else:
-                            results = [
-                                str(x) for x in parsed if isinstance(x, str) and x.strip() and x != "[object Object]"
-                            ]
+                            results = [x for x in parsed if isinstance(x, str) and x.strip() and x != "[object Object]"]
 
         if not results:
             with contextlib.suppress(Exception):
@@ -6225,7 +6448,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                         cand = sxng_ac.search_autocomplete(backend, q, "auto")
                         if cand and isinstance(cand, list):
                             clean_cand = [
-                                str(x).strip() for x in cand if isinstance(x, str) and x.strip() and str(x).strip() != q
+                                x.strip() for x in cand if isinstance(x, str) and x.strip() and x.strip() != q
                             ]
                             if clean_cand:
                                 results = clean_cand
@@ -6285,7 +6508,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
     # toggle every engine. JSON content-type already blocks classic form CSRF,
     # but a rebinding attacker can send JSON directly — so the Host header
     # must match a locally trusted name.
-    _STATE_CHANGING_PATHS = frozenset({"/api/settings/engines"})
+    _STATE_CHANGING_PATHS = frozenset({"/api/settings/engines", "/preferences", "/clear_cookies"})
     _TRUSTED_HOST_NAMES = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
 
     def _request_host_trusted() -> bool:
@@ -6310,26 +6533,42 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
     @app.before_request
     def sxng_state_change_guard() -> Any:
         if request.method in ("POST", "PUT", "DELETE") and request.path in _STATE_CHANGING_PATHS:
+            sec_fetch_site = (request.headers.get("Sec-Fetch-Site") or "").strip().lower()
+            if sec_fetch_site == "cross-site":
+                return jsonify({"error": "Cross-site request rejected"}), 403
+
+            req_name = (request.host or "").lower()
+            req_name = (
+                req_name.rsplit(":", 1)[0]
+                if req_name and ":" in req_name and not req_name.startswith("[")
+                else req_name
+            )
+
             # Standard browser CSRF defense: a cross-site form cannot set a
             # custom Origin; fetch/XHR always carry it for cross-origin calls.
             origin = (request.headers.get("Origin") or "").strip()
             if origin:
+                if origin.lower() == "null":
+                    return jsonify({"error": "Cross-origin request rejected"}), 403
                 with contextlib.suppress(ValueError):
                     o_host = urllib.parse.urlsplit(origin).netloc.lower()
-                    # Compare hostname (port-insensitive): loopback requests
-                    # legitimately vary the port across instances, and the
-                    # Host guard below still enforces a local name.
                     o_name = (
                         o_host.rsplit(":", 1)[0] if o_host and ":" in o_host and not o_host.startswith("[") else o_host
                     )
-                    req_name = (request.host or "").lower()
-                    req_name = (
-                        req_name.rsplit(":", 1)[0]
-                        if req_name and ":" in req_name and not req_name.startswith("[")
-                        else req_name
-                    )
-                    if o_name and o_name != req_name and o_name.strip("[]") not in _TRUSTED_HOST_NAMES:
+                    if not o_name or (o_name != req_name and o_name.strip("[]") not in _TRUSTED_HOST_NAMES):
                         return jsonify({"error": "Cross-origin request rejected"}), 403
+            else:
+                referer = (request.headers.get("Referer") or "").strip()
+                if referer:
+                    with contextlib.suppress(ValueError):
+                        r_host = urllib.parse.urlsplit(referer).netloc.lower()
+                        r_name = (
+                            r_host.rsplit(":", 1)[0]
+                            if r_host and ":" in r_host and not r_host.startswith("[")
+                            else r_host
+                        )
+                        if not r_name or (r_name != req_name and r_name.strip("[]") not in _TRUSTED_HOST_NAMES):
+                            return jsonify({"error": "Cross-origin request rejected"}), 403
             if not _request_host_trusted():
                 return jsonify({"error": "Untrusted Host header"}), 403
         return None
@@ -6365,10 +6604,6 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         return None
 
     # --- Tier B: app.view_functions replacement ---
-    orig_search = app.view_functions.get("search")
-    orig_preferences = app.view_functions.get("preferences")
-    orig_about = app.view_functions.get("about")
-    orig_autocompleter = app.view_functions.get("autocompleter")
 
     def unified_index_view() -> Any:
         return Response(AI_WORKSPACE_HTML, mimetype="text/html")

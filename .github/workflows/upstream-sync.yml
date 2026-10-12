@@ -59,8 +59,8 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($ref)) {
             $ref = "${{ env.DEFAULT_REF }}"
           }
-          if ($ref -match '[\x00-\x1F\x7F]') {
-            throw "Requested ref contains control characters."
+          if ($ref -match '[\x00-\x1F\x7F]' -or $ref -notmatch '^[a-zA-Z0-9._/-]+$' -or $ref.StartsWith('-')) {
+            throw "Requested ref contains invalid characters."
           }
           "requested_ref=$ref" >> $env:GITHUB_OUTPUT
 
@@ -81,13 +81,16 @@ jobs:
       - name: Handle sync failure
         if: steps.sync.outcome == 'failure'
         uses: actions/github-script@v7
+        env:
+          REQUESTED_REF: ${{ steps.ref.outputs.requested_ref }}
         with:
          script: |
            const issueNumber = context.issue && context.issue.number;
+           const requestedRef = process.env.REQUESTED_REF || 'unknown';
            const detailsBody = '❌ **Upstream sync failed** (Workflow run: ${{ github.run_id }})\n\n' +
                                'Upstream synchronization step failed.\n' +
                                'Please check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.\n\n' +
-                               '- Requested Ref: `' + '${{ steps.ref.outputs.requested_ref }}' + '`\n';
+                               '- Requested Ref: `' + requestedRef + '`\n';
            if (issueNumber) {
              await github.rest.issues.createComment({
                issue_number: issueNumber,

@@ -9,6 +9,7 @@ ranks passages via BM25, and flags prompt injection risks.
 from __future__ import annotations
 
 import re
+import unicodedata
 import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -100,15 +101,23 @@ class EvidencePassage:
 class SecurityScanner:
     """Scans untrusted web text for adversarial prompt injection patterns."""
 
+    _ZERO_WIDTH_PAT: ClassVar[re.Pattern[str]] = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]")
+
     INJECTION_PATTERNS: ClassVar[tuple[re.Pattern, ...]] = (
         re.compile(r"ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|directives|rules)", re.IGNORECASE),
-        re.compile(r"disregard\s+(all\s+)?(previous|prior|above)\s+(instructions|directives)", re.IGNORECASE),
-        re.compile(r"(system\s+prompt|initial\s+prompt|developer\s+mode)", re.IGNORECASE),
-        re.compile(r"(reveal|leak|print|show)\s+(your\s+)?(secret|token|api_key|system\s+prompt)", re.IGNORECASE),
+        re.compile(r"disregard\s+(all\s+)?(previous|prior|above)\s+(instructions|directives|rules)", re.IGNORECASE),
+        re.compile(r"(system\s+prompt|initial\s+prompt)", re.IGNORECASE),
+        re.compile(
+            r"(reveal|leak|print|show|output)\s+(your\s+|the\s+)?(secret|token|api[_ ]?keys?|system\s+prompt)",
+            re.IGNORECASE,
+        ),
         re.compile(r"(前の指示を(すべて|全部)?(無視|取り消|忘れて))", re.IGNORECASE),
-        re.compile(r"((システムプロンプト|機密情報|環境変数)を(開示|送信|表示|出力))", re.IGNORECASE),
-        re.compile(r"(You are now in developer mode|DAN mode)", re.IGNORECASE),
-        re.compile(r"(exfiltrate\s+to|curl\s+-X\s+POST\s+http)", re.IGNORECASE),
+        re.compile(
+            r"((システムプロンプト|機密情報|社内シークレット)[^\n。]{0,12}を(開示|送信|表示|出力))", re.IGNORECASE
+        ),
+        re.compile(r"(環境変数を(外部へ)?(開示|送信|漏洩))", re.IGNORECASE),
+        re.compile(r"(You are now in developer mode|act as developer mode|DAN mode)", re.IGNORECASE),
+        re.compile(r"(exfiltrate\s+(data\s+)?to)", re.IGNORECASE),
     )
 
     @classmethod
@@ -116,9 +125,11 @@ class SecurityScanner:
         """Scan text and return security warning flags if adversarial injection detected."""
         if not text:
             return []
+        norm_text = unicodedata.normalize("NFKC", text)
+        norm_text = cls._ZERO_WIDTH_PAT.sub("", norm_text)
         flags: list[str] = []
         for pat in cls.INJECTION_PATTERNS:
-            if pat.search(text):
+            if pat.search(norm_text):
                 flags.append("possible_prompt_injection")
                 break
         return flags
@@ -306,7 +317,7 @@ class HeadingPassageChunker:
         passages: list[EvidencePassage] = []
         if len(body) <= self.config.max_chunk_chars:
             if len(body) >= self.config.min_chunk_chars:
-                flags = SecurityScanner.scan_for_injection(body)
+                flags = SecurityScanner.scan_for_injection(f"{heading}\n{body}")
                 passages.append(
                     EvidencePassage(
                         id="",  # assigned later
@@ -355,7 +366,7 @@ class HeadingPassageChunker:
 
             if buffer and (len(buffer) + len(unit_clean) + 1 > self.config.target_chunk_chars):
                 if len(buffer) >= self.config.min_chunk_chars:
-                    flags = SecurityScanner.scan_for_injection(buffer)
+                    flags = SecurityScanner.scan_for_injection(f"{heading}\n{buffer}")
                     passages.append(
                         EvidencePassage(
                             id="",
@@ -375,7 +386,7 @@ class HeadingPassageChunker:
                 else:
                     if len(buffer) + len(unit_clean) + 1 > self.config.max_chunk_chars:
                         if len(buffer) >= self.config.min_chunk_chars:
-                            flags = SecurityScanner.scan_for_injection(buffer)
+                            flags = SecurityScanner.scan_for_injection(f"{heading}\n{buffer}")
                             passages.append(
                                 EvidencePassage(
                                     id="",
@@ -398,7 +409,7 @@ class HeadingPassageChunker:
             final_text = buffer.strip()
             if len(final_text) > self.config.max_chunk_chars:
                 final_text = final_text[: self.config.max_chunk_chars].strip()
-            flags = SecurityScanner.scan_for_injection(final_text)
+            flags = SecurityScanner.scan_for_injection(f"{heading}\n{final_text}")
             passages.append(
                 EvidencePassage(
                     id="",
@@ -449,7 +460,7 @@ class HeadingPassageChunker:
             )
             text_clean = content.strip()[: self.config.max_chunk_chars]
             if text_clean:
-                flags = SecurityScanner.scan_for_injection(text_clean)
+                flags = SecurityScanner.scan_for_injection(f"{first_heading}\n{text_clean}")
                 all_candidates.append(
                     EvidencePassage(
                         id=f"{source_id}_p01",
@@ -518,7 +529,7 @@ class HeadingPassageChunker:
             )
             text_clean = content.strip()[: self.config.max_chunk_chars]
             if text_clean:
-                flags = SecurityScanner.scan_for_injection(text_clean)
+                flags = SecurityScanner.scan_for_injection(f"{first_heading}\n{text_clean}")
                 all_candidates.append(
                     EvidencePassage(
                         id=f"{source_id}_p01",

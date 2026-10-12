@@ -40,6 +40,7 @@ class RetrievalService:
     """Unified service orchestrating high-quality retrieval for AI agents and LLMs."""
 
     # Class-level shared stateless components to prevent GC pressure and re-allocation
+    _init_lock: threading.Lock = threading.Lock()
     _shared_query_processor: QueryProcessor | None = None
     _shared_deduplicator: ResultDeduplicator | None = None
     _shared_rank_fusion: ReciprocalRankFusion | None = None
@@ -56,20 +57,21 @@ class RetrievalService:
 
     def __init__(
         self,
-        search_func: Callable[..., dict[str, Any]] | None = None,
+        search_func: Callable[..., Any] | None = None,
         scrape_func: Callable[..., dict[str, Any]] | None = None,
         cross_encoder: CrossEncoderReranker | None = None,
     ) -> None:
         self.search_func = search_func or (lambda **kwargs: {"results": []})
         self.scrape_func = scrape_func
 
-        if RetrievalService._shared_query_processor is None:
-            RetrievalService._shared_query_processor = QueryProcessor()
-            RetrievalService._shared_deduplicator = ResultDeduplicator()
-            RetrievalService._shared_rank_fusion = ReciprocalRankFusion()
-            RetrievalService._shared_lexical_reranker = LexicalReranker()
-            RetrievalService._shared_passage_chunker = HeadingPassageChunker()
-            RetrievalService._shared_cross_encoder = CrossEncoderReranker()
+        with RetrievalService._init_lock:
+            if RetrievalService._shared_query_processor is None:
+                RetrievalService._shared_query_processor = QueryProcessor()
+                RetrievalService._shared_deduplicator = ResultDeduplicator()
+                RetrievalService._shared_rank_fusion = ReciprocalRankFusion()
+                RetrievalService._shared_lexical_reranker = LexicalReranker()
+                RetrievalService._shared_passage_chunker = HeadingPassageChunker()
+                RetrievalService._shared_cross_encoder = CrossEncoderReranker()
 
         assert RetrievalService._shared_query_processor is not None
         assert RetrievalService._shared_deduplicator is not None
@@ -85,18 +87,18 @@ class RetrievalService:
         self.passage_chunker = RetrievalService._shared_passage_chunker
         self.cross_encoder = cross_encoder or RetrievalService._shared_cross_encoder
 
-    def _fetch_query_results(self, **kwargs: Any) -> list[dict[str, Any]]:
-        """Fetch raw results using self.search_func."""
+    def _fetch_query_results(self, **kwargs: Any) -> dict[str, Any]:
+        """Fetch raw results using self.search_func, preserving error/partial metadata."""
         try:
             res = self.search_func(**kwargs)
-            if isinstance(res, list):
-                return res
             if isinstance(res, dict):
-                return res.get("results") or []
-            return []
+                return res
+            if isinstance(res, list):
+                return {"results": res}
+            return {"results": []}
         except Exception as exc:  # noqa: BLE001
             logger.warning("Search query failed: %s", exc)
-            return []
+            return {"error": str(exc), "results": []}
 
     def _scrape_page(self, url: str, **kwargs: Any) -> dict[str, Any]:
         """Scrape page content using self.scrape_func."""
@@ -268,23 +270,23 @@ class RetrievalService:
             if time_range:
                 search_args["time_range"] = time_range
 
-            try:
-                fetched = self._fetch_query_results(**search_args)
-            except Exception as exc:  # noqa: BLE001
-                fetched = {"error": str(exc), "results": []}
-
-            if isinstance(fetched, list):
-                raw_results = fetched
-                raw_run_res = {"results": fetched}
-            elif isinstance(fetched, dict):
-                raw_run_res = fetched
-                if raw_run_res.get("error"):
-                    warnings_list.append(f"Query '{q_exec}' error: {raw_run_res['error']}")
-                    is_partial = True
-                raw_results = raw_run_res.get("results") or []
-            else:
+            raw_run_res = self._fetch_query_results(**search_args)
+            if isinstance(raw_run_res, list):
+                raw_run_res = {"results": raw_run_res}
+            elif not isinstance(raw_run_res, dict):
+                raw_run_res = {"results": []}
+            if raw_run_res.get("error"):
+                warnings_list.append(f"Query '{q_exec}' error: {raw_run_res['error']}")
+                is_partial = True
+            if raw_run_res.get("partial") or raw_run_res.get("is_partial"):
+                is_partial = True
+            for w in raw_run_res.get("warnings") or []:
+                w_str = str(w).strip()
+                if w_str and w_str not in warnings_list:
+                    warnings_list.append(w_str)
+            raw_results = raw_run_res.get("results") or []
+            if not isinstance(raw_results, list):
                 raw_results = []
-                raw_run_res = {}
 
             # Collect direct answers and infoboxes
             for ans in raw_run_res.get("answers", []):
@@ -359,6 +361,8 @@ class RetrievalService:
             # ranking stale 2015 pages above undated fresh results.
             fresh_score = 0.0
             pub_date = item.get("published_date") or item.get("published_at")
+            if isinstance(pub_date, bool):
+                pub_date = None
             if processed_q.freshness and pub_date:
                 pub_date_str = str(pub_date)
                 if processed_q.freshness.isdigit() and processed_q.freshness in pub_date_str:
@@ -395,9 +399,11 @@ class RetrievalService:
         # budget default, returning 1 result instead of 0.
         if count is None:
             final_count = budget.max_candidate_results
+        elif isinstance(count, int) and not isinstance(count, bool):
+            final_count = max(0, min(count, len(candidate_items)))
         else:
             try:
-                req_count = int(count)
+                req_count = int(str(count))
             except (ValueError, TypeError):
                 req_count = budget.max_candidate_results
             final_count = max(0, min(req_count, len(candidate_items)))
@@ -427,10 +433,14 @@ class RetrievalService:
             raw_body = item.get("raw_content") or ""
             raw_html = item.get("raw_html") or ""
             snippet = str(item.get("content") or item.get("snippet") or "").strip()
+            item_title = str(item.get("title") or "Untitled").strip()
 
             # Metadata extraction from HTML if present
             meta = HTMLMetadataExtractor.extract_metadata(raw_html, fallback_url=norm_url)
-            canonical = meta.get("canonical_url") or item.get("canonical_url") or norm_url
+            raw_canonical = str(meta.get("canonical_url") or item.get("canonical_url") or "")
+            canonical = (
+                normalize_url(raw_canonical) if raw_canonical and is_safe_retrieval_url(raw_canonical) else norm_url
+            )
             pub_at = meta.get("published_at") or item.get("published_date") or None
             upd_at = meta.get("updated_at") or None
             date_src = meta.get("date_source")
@@ -439,6 +449,10 @@ class RetrievalService:
             # Extract evidence passages if scraped body is available
             evidence_list = []
             security_flags: list[str] = []
+
+            for meta_flag in SecurityScanner.scan_for_injection(f"{item_title}\n{snippet}"):
+                if meta_flag not in security_flags:
+                    security_flags.append(meta_flag)
 
             if raw_body and total_passages_budget > 0:
                 passages = self.passage_chunker.extract_evidence(
@@ -454,14 +468,10 @@ class RetrievalService:
                     for f in p.security_flags:
                         if f not in security_flags:
                             security_flags.append(f)
-            elif snippet:
-                # Fallback to snippet if not scraped
-                flags = SecurityScanner.scan_for_injection(snippet)
-                security_flags.extend(flags)
 
             res_item = RetrievalResultItem(
                 id=source_id,
-                title=str(item.get("title") or "Untitled").strip(),
+                title=item_title,
                 url=norm_url,
                 canonical_url=canonical,
                 domain=dom,
@@ -501,10 +511,11 @@ class RetrievalService:
 
 
 _RETRIEVAL_SERVICE_SINGLETON: RetrievalService | None = None
+_SINGLETON_LOCK = threading.Lock()
 
 
 def get_retrieval_service(
-    search_func: Callable[..., dict[str, Any]] | None = None,
+    search_func: Callable[..., Any] | None = None,
     scrape_func: Callable[..., dict[str, Any]] | None = None,
 ) -> RetrievalService:
     """Get or create RetrievalService instance.
@@ -517,6 +528,7 @@ def get_retrieval_service(
     global _RETRIEVAL_SERVICE_SINGLETON
     if search_func is not None or scrape_func is not None:
         return RetrievalService(search_func=search_func, scrape_func=scrape_func)
-    if _RETRIEVAL_SERVICE_SINGLETON is None:
-        _RETRIEVAL_SERVICE_SINGLETON = RetrievalService()
-    return _RETRIEVAL_SERVICE_SINGLETON
+    with _SINGLETON_LOCK:
+        if _RETRIEVAL_SERVICE_SINGLETON is None:
+            _RETRIEVAL_SERVICE_SINGLETON = RetrievalService()
+        return _RETRIEVAL_SERVICE_SINGLETON

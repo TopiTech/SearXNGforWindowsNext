@@ -914,6 +914,35 @@ class TestRegressionHardening(unittest.TestCase):
         self.assertEqual(item2.engine, "bing")
         self.assertEqual(item2.source, "bing")
 
+    def test_bm25_extract_passages_selects_top_k_and_preserves_document_order(self) -> None:
+        """Verify BM25PassageExtractor ranks by score (including zero-score fallback) and restores document order."""
+        extractor = agentic_search.BM25PassageExtractor()
+        p1 = "First paragraph about unrelated cooking recipes and kitchen utensils. " * 10
+        p2 = "Second paragraph specifically about Python asyncio event loop and coroutines. " * 10
+        p3 = "Third paragraph about gardening and growing tomatoes in summer. " * 10
+        p4 = "Fourth paragraph detailing Python asyncio Tasks, Futures, and async await syntax. " * 10
+        content = f"{p1}\n\n{p2}\n\n{p3}\n\n{p4}"
+        top = extractor.extract_highlights(content, "Python asyncio", top_k=2)
+        self.assertEqual(len(top), 2)
+        self.assertIn("Second paragraph", top[0])
+        self.assertIn("Fourth paragraph", top[1])
+
+        # Fallback when query has no overlap with content (score == 0.0) returns the lead passage
+        fallback = extractor.extract_highlights(content, "quantum chromodynamics", top_k=2)
+        self.assertEqual(len(fallback), 1)
+        self.assertIn("First paragraph", fallback[0])
+
+    def test_execute_scrape_pipeline_blocks_unsafe_url_without_calling_scraper(self) -> None:
+        """Verify execute_scrape_pipeline blocks loopback/private URLs before calling scrape_func."""
+        spy_scrape = MagicMock(return_value={"content": "should not be called"})
+        res = agentic_search.execute_scrape_pipeline(
+            url="http://127.0.0.1:8888/config",
+            scrape_func=spy_scrape,
+        )
+        spy_scrape.assert_not_called()
+        self.assertIn("error", res)
+        self.assertEqual(res.get("scraped_count"), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

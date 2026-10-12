@@ -148,6 +148,12 @@ SPAM_PATTERNS: list[re.Pattern] = [
 ]
 
 
+_NEWS_DOMAIN_PATTERN: re.Pattern[str] = re.compile(
+    r"(?:^|[.-])(news|nytimes|ft|wsj|bbc|cnn|asahi|nikkei|mainichi|yomiuri|reuters|bloomberg|nhk|kyodo|guardian|washingtonpost|huffpost|nypost|japantimes|latimes|thetimes|time)(?:[.-]|$)",
+    re.IGNORECASE,
+)
+
+
 def classify_source_type(domain_or_url: str) -> str:
     """Classify domain or URL into documentation, source_code, academic, community, news, or general."""
     if not domain_or_url:
@@ -168,7 +174,9 @@ def classify_source_type(domain_or_url: str) -> str:
         return "academic"
     if any(dom == d or dom.endswith("." + d) for d in COMMUNITY_DOMAINS):
         return "community"
-    if any(word in dom for word in ("news", "times", "post", "asahi", "nikkei", "reuters", "bloomberg")):
+    if _NEWS_DOMAIN_PATTERN.search(dom) or any(
+        w in dom for w in ("news", "asahi", "nikkei", "reuters", "bloomberg", "nytimes", "washingtonpost", "japantimes")
+    ):
         return "news"
     return "general"
 
@@ -190,7 +198,7 @@ def compute_source_quality(
     """
     if not domain_or_url:
         return 0.5
-    domain = extract_domain(domain_or_url) if "://" in domain_or_url else domain_or_url
+    domain = extract_domain(domain_or_url) if ("://" in domain_or_url or "/" in domain_or_url) else domain_or_url
     if not domain:
         return 0.5
     dom = domain.lower().removeprefix("www.")

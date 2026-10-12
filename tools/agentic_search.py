@@ -18,7 +18,6 @@ import re
 import threading
 import time
 import unicodedata
-import urllib.error
 import urllib.parse
 from collections.abc import Callable
 from concurrent.futures import Future
@@ -431,7 +430,7 @@ class QueryOptimizer:
         words = set(re.findall(r"\b[a-z0-9_+#.-]+\b", lower))
 
         code_matches = len(words & cls.CODE_KEYWORDS)
-        academic_matches = len(words & cls.ACADEMIC_KEYWORDS)
+        academic_matches = sum(1 for kw in cls.ACADEMIC_KEYWORDS if (kw in words if " " not in kw else kw in lower))
         news_matches = len(words & cls.NEWS_KEYWORDS)
 
         # Check for stacktrace or code patterns
@@ -606,11 +605,27 @@ class BM25PassageExtractor:
     def _tokenize(self, text: str) -> list[str]:
         """Tokenize text into lowercase words and CJK fragments with Unicode NFKC normalization."""
         norm_text = unicodedata.normalize("NFKC", text.lower())
-        words = re.findall(
-            r"[A-Za-z0-9_+#.-]+|[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef]",
-            norm_text,
-        )
-        return [w for w in words if w not in STOP_WORDS]
+        tokens: list[str] = []
+        for match in re.finditer(r"[a-z0-9_+#.-]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]+", norm_text):
+            chunk = match.group(0)
+            if chunk.isascii():
+                w = chunk.strip(".-_")
+                if w and w not in STOP_WORDS:
+                    tokens.append(w)
+            else:
+                if len(chunk) == 1:
+                    if chunk not in STOP_WORDS:
+                        tokens.append(chunk)
+                else:
+                    for i in range(len(chunk)):
+                        ch = chunk[i]
+                        if ch not in STOP_WORDS:
+                            tokens.append(ch)
+                    for i in range(len(chunk) - 1):
+                        bg = chunk[i : i + 2]
+                        if bg not in STOP_WORDS:
+                            tokens.append(bg)
+        return tokens
 
     def split_passages(self, text: str, min_chars: int = 40, max_chars: int = 800) -> list[str]:
         """Split text into coherent paragraphs and code blocks."""
@@ -686,6 +701,7 @@ class BM25PassageExtractor:
         if not query_tokens:
             return passages[:top_k]
 
+        unique_q_tokens = list(dict.fromkeys(query_tokens))
         doc_tokens_list = [self._tokenize(p) for p in passages]
         doc_lens = [len(dt) for dt in doc_tokens_list]
         avgdl = sum(doc_lens) / max(len(doc_lens), 1)
@@ -693,7 +709,7 @@ class BM25PassageExtractor:
 
         # Calculate document frequency for each query term
         df: dict[str, int] = {}
-        for qt in set(query_tokens):
+        for qt in unique_q_tokens:
             df[qt] = sum(1 for dt in doc_tokens_list if qt in dt)
 
         # BM25 Scoring
@@ -710,7 +726,7 @@ class BM25PassageExtractor:
                 tf[token] = tf.get(token, 0) + 1
 
             score = 0.0
-            for qt in query_tokens:
+            for qt in unique_q_tokens:
                 if qt not in tf:
                     continue
                 q_df = df.get(qt, 0)
@@ -1433,7 +1449,10 @@ def execute_deep_search(
 ) -> dict[str, Any]:
     """Execute the deep search pipeline (delegates to the unified search pipeline)."""
     depth_norm = (search_depth or "advanced").strip().lower()
-    mode = "fast" if depth_norm in ("fast", "json_lite") else "deep"
+    if is_url_input(query):
+        mode = "scrape"
+    else:
+        mode = "fast" if depth_norm in ("fast", "json_lite") else "deep"
     return execute_unified_search(
         query=query,
         search_func=search_func,

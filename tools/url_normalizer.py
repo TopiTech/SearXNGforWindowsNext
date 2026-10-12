@@ -150,11 +150,16 @@ class URLNormalizer:
             h_clean = h_clean.replace(dot, ".")
         h_clean = h_clean.rstrip(".").lower()
 
-        # Handle IDN (Internationalized Domain Names): encode to punycode
+        # Handle IDN (Internationalized Domain Names): encode to punycode (prefer UTS-46)
         try:
-            h_clean = h_clean.encode("idna").decode("ascii").lower()
-        except (UnicodeError, ValueError):
-            pass
+            import idna
+
+            h_clean = idna.encode(h_clean, uts46=True).decode("ascii").lower()
+        except Exception:  # noqa: BLE001
+            try:
+                h_clean = h_clean.encode("idna").decode("ascii").lower()
+            except (UnicodeError, ValueError):
+                pass
 
         return f"{h_clean}{port_suffix}"
 
@@ -251,7 +256,12 @@ class URLNormalizer:
     def extract_domain(cls, url: str) -> str:
         """Extract lowercase domain/netloc without www. prefix."""
         try:
-            parsed = urllib.parse.urlsplit(url.strip())
+            raw = (url or "").strip()
+            if not raw:
+                return ""
+            if "://" not in raw and not raw.startswith("//") and "/" in raw and "." in raw.split("/", 1)[0]:
+                raw = f"http://{raw}"
+            parsed = urllib.parse.urlsplit(raw)
             netloc = (parsed.hostname or "").lower()
             return netloc.removeprefix("www.")
         except ValueError:
@@ -311,8 +321,8 @@ WILDCARD_DNS_DOMAINS: tuple[str, ...] = (
     ".sslip.io",
 )
 
-_WILDCARD_IPV4_PATTERN: re.Pattern[str] = re.compile(r"(?:^|[.-])(?P<ip>\d{1,4}(?:[.-]\d{1,4}){3})(?:[.-]|$)")
-_WILDCARD_HEX_PATTERN: re.Pattern[str] = re.compile(r"(?:^|[.-])(?P<hex>[0-9a-fA-F]{8})(?:[.-]|$)")
+_WILDCARD_IPV4_PATTERN: re.Pattern[str] = re.compile(r"(?:^|[.-])(?P<ip>\d{1,4}(?:[.-]\d{1,4}){3})(?=[.-]|$)")
+_WILDCARD_HEX_PATTERN: re.Pattern[str] = re.compile(r"(?:^|[.-])(?P<hex>[0-9a-fA-F]{8})(?=[.-]|$)")
 
 
 def _is_ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address | str) -> bool:
@@ -362,8 +372,7 @@ def _is_reserved_scrape_host(host: str) -> bool:
             prefix = h[: -len(wc_dom)] if h.endswith(wc_dom) else ""
             if not prefix:
                 return True
-            match_ip = _WILDCARD_IPV4_PATTERN.search(prefix)
-            if match_ip:
+            for match_ip in _WILDCARD_IPV4_PATTERN.finditer(prefix):
                 raw_ip = match_ip.group("ip").replace("-", ".")
                 try:
                     ip_addr = ipaddress.IPv4Address(raw_ip)
@@ -376,14 +385,22 @@ def _is_reserved_scrape_host(host: str) -> bool:
                             return True
                     except (OSError, ValueError):
                         pass
-            match_hex = _WILDCARD_HEX_PATTERN.search(prefix)
-            if match_hex:
+            for match_hex in _WILDCARD_HEX_PATTERN.finditer(prefix):
                 try:
                     ip_int = int(match_hex.group("hex"), 16)
                     if _is_ip_blocked(ipaddress.IPv4Address(ip_int)):
                         return True
                 except (ValueError, ipaddress.AddressValueError):
                     pass
+            for label in prefix.split("."):
+                if "-" in label:
+                    candidate_v6 = label.replace("-", ":")
+                    try:
+                        ip_v6 = ipaddress.IPv6Address(candidate_v6)
+                        if _is_ip_blocked(ip_v6):
+                            return True
+                    except (ValueError, ipaddress.AddressValueError):
+                        pass
     return False
 
 
@@ -460,19 +477,26 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
 
     # Check numeric or obfuscated IP representations (e.g. 2130706433, 017700000001, or 0x7f000001)
     if host.replace(".", "").isdigit():
+        if host.isdigit():
+            try:
+                ip_int = int(host)
+                if not (0 <= ip_int <= 0xFFFFFFFF) or _is_ip_blocked(ipaddress.IPv4Address(ip_int)):
+                    return False
+            except (ValueError, ipaddress.AddressValueError):
+                return False
+            try:
+                packed = socket.inet_aton(host)
+                if _is_ip_blocked(ipaddress.IPv4Address(packed)):
+                    return False
+            except (OSError, ValueError, ipaddress.AddressValueError):
+                pass
+            return True
+
         try:
             packed = socket.inet_aton(host)
             ip_v4 = ipaddress.IPv4Address(packed)
             return not _is_ip_blocked(ip_v4)
         except (OSError, ValueError, ipaddress.AddressValueError):
-            pass
-
-        try:
-            ip_int = int(host)
-            if 0 <= ip_int <= 0xFFFFFFFF:
-                ip_v4 = ipaddress.IPv4Address(ip_int)
-                return not _is_ip_blocked(ip_v4)
-        except (ValueError, ipaddress.AddressValueError):
             pass
 
         # An all-numeric host (with or without dots) that cannot be parsed as a valid IPv4 address

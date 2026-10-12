@@ -39,8 +39,8 @@ def validate_assets(css: str, body: str, js: str) -> None:
     for name, content in (("styles.css", css), ("body.html", body), ("app.js", js)):
         if '"""' in content:
             raise ValueError(f'{name} contains \'"""\' which would break the r-string embedding in webui_next.py')
-        if content.endswith('"'):
-            raise ValueError(f"{name} ends with a double quote which would break the r-string embedding")
+        if content.endswith(('"', "\\")):
+            raise ValueError(f"{name} ends with a double quote or backslash which would break the r-string embedding")
         if "</script" in content.lower():
             raise ValueError(f"{name} contains '</script' which would break the inline <script> block in the HTML")
 

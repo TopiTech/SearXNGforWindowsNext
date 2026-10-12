@@ -351,6 +351,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         or depth is not None
         or bool(inc_domains)
         or bool(exc_domains)
+        or not getattr(args, "include_highlights", True)
         or (mode == "auto" and _is_url_arg(args.query))
     )
 

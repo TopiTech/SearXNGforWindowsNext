@@ -196,7 +196,8 @@ def disable_engine_in_text(yaml_content, engine_name):
             except (yaml.YAMLError, ValueError, TypeError, AttributeError):
                 pass
         if parsed_name is None:
-            parsed_name = _unquote(raw_name.strip())
+            raw_uncommented = re.split(r"\s+#", raw_name.strip(), maxsplit=1)[0].strip()
+            parsed_name = _unquote(raw_uncommented)
         if parsed_name != engine_name:
             continue
 
@@ -213,7 +214,7 @@ def disable_engine_in_text(yaml_content, engine_name):
 
         inactive_match = re.search(rf"(?m)^{re.escape(child_indent)}inactive:\s*([^\r\n]*)", block)
         if inactive_match:
-            val = inactive_match.group(1).strip().lower()
+            val = re.split(r"\s+#", inactive_match.group(1), maxsplit=1)[0].strip().lower()
             if val in ("true", "yes", "on", "1"):
                 return yaml_content
             line_end = (
@@ -255,7 +256,7 @@ def process_file(settings_path, engines_dir):
     if not os.path.exists(engines_dir):
         raise FileNotFoundError(f"Engines directory not found: {engines_dir}")
 
-    with open(settings_path, "r", encoding="utf-8") as f:
+    with open(settings_path, "r", encoding="utf-8-sig") as f:
         yaml_content = f.read()
 
     engines = extract_engines(yaml_content)

@@ -370,7 +370,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
     if tool_name == "searxng_search":
         query = str(arguments.get("query") or "")
         try:
-            count = int(arguments.get("count", 5))
+            count = max(1, min(int(arguments.get("count", 5)), 50))
         except (ValueError, TypeError):
             count = 5
         categories = str(arguments.get("categories") or "")
@@ -408,7 +408,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
             formatted_text = searxng_client.format_markdown(data)
         elif use_unified:
             try:
-                max_tokens = int(arguments.get("max_tokens", 3000))
+                max_tokens = max(500, min(int(arguments.get("max_tokens", 3000)), 16000))
             except (ValueError, TypeError):
                 max_tokens = 3000
             effective_mode = _resolve_effective_mode(mode, search_depth, query)
@@ -453,7 +453,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         if ret_mode not in ("fast", "balanced", "deep"):
             ret_mode = "balanced"
         try:
-            count = int(arguments.get("count", 5))
+            count = max(1, min(int(arguments.get("count", 5)), 50))
         except (ValueError, TypeError):
             count = 5
         categories = str(arguments.get("categories") or "")
@@ -493,7 +493,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
     elif tool_name == "searxng_scrape":
         url = str(arguments.get("url") or "")
         try:
-            max_length = int(arguments.get("max_length", 4000))
+            max_length = max(500, min(int(arguments.get("max_length", 4000)), 50000))
         except (ValueError, TypeError):
             max_length = 4000
         focus_query = str(arguments.get("query") or "").strip()
@@ -525,7 +525,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         query = str(arguments.get("query") or "")
         search_depth = str(arguments.get("search_depth") or "advanced")
         try:
-            max_results = int(arguments.get("max_results", 5))
+            max_results = max(1, min(int(arguments.get("max_results", 5)), 50))
         except (ValueError, TypeError):
             max_results = 5
         raw_hl = arguments.get("include_highlights")
@@ -535,7 +535,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         raw_exc = arguments.get("exclude_domains")
         exclude_domains = [str(d) for d in raw_exc] if isinstance(raw_exc, list) else None
         try:
-            max_tokens = int(arguments.get("max_tokens", 3000))
+            max_tokens = max(500, min(int(arguments.get("max_tokens", 3000)), 16000))
         except (ValueError, TypeError):
             max_tokens = 3000
 
@@ -598,18 +598,22 @@ def process_message(line: str) -> dict[str, Any] | None:
 
     msg_id = req.get("id")
     method = req.get("method")
-    params = req.get("params") or {}
+    raw_params = req.get("params")
 
     # Notifications (messages without id) require no response. A request with
     # an explicit JSON-RPC "id": null is still a request and MUST be answered,
     # so only a *missing* id key makes it a notification.
-    if "id" not in req and method:
+    if "id" not in req and isinstance(method, str) and method:
         if method == "notifications/initialized":
             log_debug("Notification received: initialized")
         return None
 
-    if not method:
-        return make_jsonrpc_error(msg_id, -32600, "Invalid Request: missing method")
+    if not isinstance(method, str) or not method:
+        return make_jsonrpc_error(msg_id, -32600, "Invalid Request: missing or invalid method")
+
+    if raw_params is not None and not isinstance(raw_params, dict):
+        return make_jsonrpc_error(msg_id, -32602, "Invalid params: params must be an object")
+    params: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
 
     if method == "initialize":
         return handle_initialize(msg_id, params)
@@ -618,8 +622,6 @@ def process_message(line: str) -> dict[str, Any] | None:
     elif method == "tools/list":
         return handle_tools_list(msg_id, params)
     elif method == "tools/call":
-        if not isinstance(params, dict):
-            return make_jsonrpc_error(msg_id, -32602, "Invalid params: params must be an object")
         try:
             return handle_tools_call(msg_id, params)
         except Exception as exc:  # noqa: BLE001 - keep stdio loop alive
@@ -638,13 +640,13 @@ def main() -> None:
     # Ensure Windows stdio uses UTF-8
     with contextlib.suppress(Exception):
         if hasattr(sys.stdin, "reconfigure"):
-            sys.stdin.reconfigure(encoding="utf-8")
+            sys.stdin.reconfigure(encoding="utf-8", errors="replace")
     with contextlib.suppress(Exception):
         if hasattr(sys.stdout, "reconfigure"):
-            sys.stdout.reconfigure(encoding="utf-8")
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     with contextlib.suppress(Exception):
         if hasattr(sys.stderr, "reconfigure"):
-            sys.stderr.reconfigure(encoding="utf-8")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     log_debug(f"Starting {SERVER_NAME} v{SERVER_VERSION} (stdio mode)...")
 

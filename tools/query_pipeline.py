@@ -136,7 +136,7 @@ class QueryProcessor:
 
     COMPARISON_PATTERNS: ClassVar[list[re.Pattern]] = [
         re.compile(
-            r"(?:^|\s|[^\w])['\"「『【]?([a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]{1,50}+)['\"」』】]?\s*(?:vs\.?|versus|compared\s+to)\s*['\"「『【]?([a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]{1,50}+)['\"」』】]?(?:\s|[^\w]|$)",
+            r"(?:^|\s|[^\w])['\"「『【]?([a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]+(?:\s+[a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]+){0,3})['\"」』】]?\s*(?:vs\.?|versus|compared\s+to)\s*['\"「『【]?([a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]+(?:\s+[a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]+){0,3})['\"」』】]?(?:\s|[^\w]|$)",
             re.IGNORECASE,
         ),
         re.compile(
@@ -230,23 +230,31 @@ class QueryProcessor:
 
         words = set(re.findall(r"\b[a-z0-9_+#.-]+\b", low))
         has_code_keywords = bool(words & cls.CODE_KEYWORDS)
+        has_howto_keywords = any(w in low for w in cls.HOWTO_KEYWORDS)
+        has_research_keywords = any(w in low for w in cls.RESEARCH_KEYWORDS)
+        has_stacktrace = "traceback" in low or "error:" in low or "exception" in low or "line " in low
 
         # Check navigation
-        nav_matches = {w for w in cls.NAVIGATION_KEYWORDS if w in low}
-        if nav_matches or low.endswith((".com", ".org", ".io", ".dev", ".net")):
-            # If navigation match is solely docs/documentation and query contains code keywords,
-            # prioritize code intent (e.g. "Python documentation", "FastAPI docs")
-            if has_code_keywords and nav_matches.issubset({"docs", "documentation"}):
+        nav_matches = {
+            w for w in cls.NAVIGATION_KEYWORDS if (w in words if re.fullmatch(r"[a-z0-9_+#.-]+", w) else w in low)
+        }
+        is_domain_like = low.endswith((".com", ".org", ".io", ".dev", ".net")) and " " not in low.strip()
+        if nav_matches or is_domain_like:
+            # Do not let generic words like "docs", "login", or "portal" override explicit
+            # howto, code error, or research queries.
+            if (has_code_keywords and nav_matches.issubset({"docs", "documentation"})) or (
+                not is_domain_like and (has_howto_keywords or has_stacktrace or has_research_keywords)
+            ):
                 pass
             else:
                 return "navigation"
 
         # Check research / security advisory
-        if any(w in low for w in cls.RESEARCH_KEYWORDS):
+        if has_research_keywords:
             return "research"
 
         # Check code / stack trace
-        if "traceback" in low or "error:" in low or "exception" in low or "line " in low:
+        if has_stacktrace:
             return "code"
 
         # Check fresh news (evaluated before generic language names in CODE_KEYWORDS)
@@ -254,7 +262,7 @@ class QueryProcessor:
             return "fresh"
 
         # Check howto / tutorials
-        if any(w in low for w in cls.HOWTO_KEYWORDS):
+        if has_howto_keywords:
             return "howto"
 
         # Check code / programming languages
@@ -398,8 +406,11 @@ class QueryProcessor:
                         if item_b.endswith("の"):
                             item_b = item_b[:-1].strip()
                         if item_a and item_b:
-                            expansions.append(item_a)
-                            expansions.append(item_b)
+                            if mode == "balanced":
+                                expansions.append(f"{item_a} {item_b}")
+                            else:
+                                expansions.append(item_a)
+                                expansions.append(item_b)
                             break
 
         elif processed.intent == "code":

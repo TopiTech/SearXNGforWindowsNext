@@ -107,14 +107,23 @@ class PatchTransaction:
             return
         try:
             os.makedirs(self.backup_dir, exist_ok=True)
-            manifest = {}
+            manifest_file = os.path.join(self.backup_dir, "manifest.json")
+            manifest: dict[str, str] = {}
+            if os.path.exists(manifest_file):
+                try:
+                    with open(manifest_file, "r", encoding="utf-8") as mf:
+                        loaded = json.load(mf)
+                        if isinstance(loaded, dict):
+                            manifest = loaded
+                except (OSError, json.JSONDecodeError):
+                    pass
             for path, content in self.originals.items():
                 safe_rel = _safe_relpath(path, REPO_ROOT).replace(":", "_").replace("/", "_")
                 backup_file = os.path.join(self.backup_dir, f"{safe_rel}.bak")
-                with open(backup_file, "w", encoding="utf-8") as f:
-                    f.write(content)
+                if path not in manifest or not os.path.exists(backup_file):
+                    with open(backup_file, "w", encoding="utf-8") as f:
+                        f.write(content)
                 manifest[path] = backup_file
-            manifest_file = os.path.join(self.backup_dir, "manifest.json")
             with open(manifest_file, "w", encoding="utf-8") as f:
                 json.dump(manifest, f, indent=2)
         except OSError as exc:
@@ -184,7 +193,7 @@ def get_upstream_version_info() -> dict[str, str]:
     info = {}
     if os.path.exists(v_file):
         try:
-            with open(v_file, "r", encoding="utf-8") as f:
+            with open(v_file, "r", encoding="utf-8-sig") as f:
                 for line in f:
                     line = line.strip()
                     if "=" in line:
@@ -264,6 +273,7 @@ def _get_tracked_targets() -> list[str]:
         os.path.join(REPO_ROOT, "tools", "disable-missing-engines.py"),
         os.path.join(REPO_ROOT, "tools", "webui_next.py"),
         os.path.join(REPO_ROOT, "UPSTREAM_VERSION.txt"),
+        os.path.join(REPO_ROOT, "config", "settings.yml.example"),
     }
     for spec in PATCH_SPECS:
         core_targets.add(os.path.abspath(spec.target_path))
@@ -426,10 +436,6 @@ def update_file(
     # Normalize CRLF to LF for consistent regex and anchor matching
     normalized_content = content.replace("\r\n", "\n")
 
-    # Record original content in transaction for safe rollback
-    if transaction is not None:
-        transaction.record_original(file_path, content)
-
     try:
         result = patch_func(normalized_content, file_path)
     except Exception as exc:
@@ -524,6 +530,9 @@ def update_file(
                 )
 
         if not dry_run:
+            # Record original content in transaction for safe rollback before modifying
+            if transaction is not None:
+                transaction.record_original(file_path, content)
             _atomic_write(file_path, result, encoding="utf-8", newline="\n")
             logger.info(f"Patched: {description}")
         else:
@@ -1218,7 +1227,9 @@ def patch_webapp_scrape_route(content, path):
         "URLs with embedded credentials or backslashes are not allowed",
         "except _ScrapeBlockedError:",
     ]
-    if all(anchor in content for anchor in required_anchors):
+    if all(anchor in content for anchor in required_anchors) and (
+        "def pinned_dns(" not in content or "prev_pin = getattr(_thread_local_dns, 'pin', None)" in content
+    ):
         return "ALREADY_APPLIED"
 
     # 1. Add imports at module level (ensure re, html, httpx, idna, time, and urllib are present)
@@ -1484,11 +1495,12 @@ def pinned_dns(host, ip, port):
     """
     ips = [ip] if isinstance(ip, str) else list(ip)
     primary = ips[0] if ips else ''
+    prev_pin = getattr(_thread_local_dns, 'pin', None)
     _thread_local_dns.pin = {'host': host, 'ip': primary, 'ips': ips, 'port': port}
     try:
         yield
     finally:
-        _thread_local_dns.pin = None
+        _thread_local_dns.pin = prev_pin
 
 
 _RESERVED_TLDS = (
@@ -1514,6 +1526,39 @@ def _is_reserved_scrape_host(host):
         bare = tld.lstrip('.')
         if h == bare or h.endswith(tld):
             return True
+    for loop_tld in ('.lvh.me', '.localtest.me', '.vcap.me'):
+        if h == loop_tld.lstrip('.') or h.endswith(loop_tld):
+            return True
+    for wc_tld in ('.nip.io', '.sslip.io', '.xip.io', '.traefik.me'):
+        bare = wc_tld.lstrip('.')
+        if h == bare:
+            return True
+        if h.endswith(wc_tld):
+            import re as _re
+            prefix = h[: -len(wc_tld)]
+            matched_any = False
+            for m in _re.finditer(r'(?:^|[^0-9])(\d{1,3})[-.](\d{1,3})[-.](\d{1,3})[-.](\d{1,3})(?=[^0-9]|$)', prefix):
+                candidate_v4 = f'{m.group(1)}.{m.group(2)}.{m.group(3)}.{m.group(4)}'
+                try:
+                    ip_v4 = ipaddress.IPv4Address(candidate_v4)
+                    matched_any = True
+                    if _is_ip_blocked(ip_v4):
+                        return True
+                except ValueError:
+                    return True
+            if '--' in prefix or prefix.count('-') >= 2:
+                for label in prefix.split('.'):
+                    if '--' in label or label.count('-') >= 2:
+                        candidate_v6 = label.replace('-', ':')
+                        try:
+                            ip_v6 = ipaddress.IPv6Address(candidate_v6)
+                            matched_any = True
+                            if _is_ip_blocked(ip_v6):
+                                return True
+                        except ValueError:
+                            pass
+            if not matched_any:
+                return True
     return False
 
 
@@ -1571,18 +1616,23 @@ def _is_blocked_scrape_host(host, resolve_dns=True):
         if ':' in host_clean:
             return True
         if host_clean.replace('.', '').isdigit():
+            matched_num = False
             try:
                 packed_ip = socket.inet_aton(host_clean)
-                return _is_ip_blocked(ipaddress.IPv4Address(packed_ip))
+                matched_num = True
+                if _is_ip_blocked(ipaddress.IPv4Address(packed_ip)):
+                    return True
             except Exception:
                 pass
             try:
                 ip_int = int(host_clean)
                 if 0 <= ip_int <= 0xFFFFFFFF:
-                    return _is_ip_blocked(ipaddress.IPv4Address(ip_int))
+                    matched_num = True
+                    if _is_ip_blocked(ipaddress.IPv4Address(ip_int)):
+                        return True
             except Exception:
                 pass
-            return True
+            return True if not matched_num else False
         if host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B')):
             try:
                 ip_int = int(host_clean, 0)
@@ -1638,6 +1688,8 @@ def scrape():
 
     # v22-credentials-backslash-scrape-fix
     def _parse_scrape_url(value):
+        if any(ord(c) <= 0x20 or ord(c) == 0x7F for c in value) or '\\' in value:
+            raise _ScrapeBlockedError('URLs with embedded credentials or backslashes are not allowed')
         try:
             parsed_url = urllib.parse.urlparse(value)
             # Accessing .port validates malformed or out-of-range ports.
@@ -1939,7 +1991,21 @@ def patch_engines_init(content, path):
 # --- Patch 6b: engines/__init__.py (fast-path skip inactive & unconfigured onion engines) ---
 def patch_engines_fast_load(content: str, path: str) -> str:
     """Optimize engine loading by skipping inactive and unavailable onion engines before importing."""
-    if "sxng-fast-engine-load-v1" in content:
+    old_log_fmt = (
+        "logger.error(\n"
+        '                "(PID %s) %s: can\'t register engine (loading engine failed)",\n'
+        "                os.getpid(),\n"
+        '                engine_data.get("name", "???"),\n'
+        "            )"
+    )
+    new_log_fmt = (
+        "logger.debug(\n"
+        '                "(PID %s) %s: can\'t register engine (loading engine skipped or failed)",\n'
+        "                os.getpid(),\n"
+        '                engine_data.get("name", "???"),\n'
+        "            )"
+    )
+    if "sxng-fast-engine-load-v1" in content and old_log_fmt not in content:
         return "ALREADY_APPLIED"
 
     fast_load_code = (
@@ -1953,20 +2019,23 @@ def patch_engines_fast_load(content: str, path: str) -> str:
         "        return None\n"
     )
 
-    target = "    try:\n        engine = load_module(module_name + '.py', ENGINE_DIR)"
-    if target in content:
-        content = content.replace(target, fast_load_code + target, 1)
-    else:
-        target_fb = "        return None\n    try:"
-        if target_fb in content:
-            content = content.replace(target_fb, "        return None\n" + fast_load_code + "    try:", 1)
+    if "sxng-fast-engine-load-v1" not in content:
+        target = "    try:\n        engine = load_module(module_name + '.py', ENGINE_DIR)"
+        if target in content:
+            content = content.replace(target, fast_load_code + target, 1)
         else:
-            raise RuntimeError("Could not find injection point in engines/__init__.py for fast-load")
+            target_fb = "        return None\n    try:"
+            if target_fb in content:
+                content = content.replace(target_fb, "        return None\n" + fast_load_code + "    try:", 1)
+            else:
+                raise RuntimeError("Could not find injection point in engines/__init__.py for fast-load")
 
     old_log = "logger.error(\n                f\"(PID {os.getpid()}) {engine_data.get('name', '???')}: can't register engine (loading engine failed)\"\n            )"
     new_log = "logger.debug(\n                f\"(PID {os.getpid()}) {engine_data.get('name', '???')}: can't register engine (loading engine skipped or failed)\"\n            )"
     if old_log in content:
         content = content.replace(old_log, new_log)
+    if old_log_fmt in content:
+        content = content.replace(old_log_fmt, new_log_fmt)
 
     return content
 
@@ -2317,13 +2386,20 @@ def patch_webapp_ai_webui(content, path):
         "# --- GenAI Next WebUI Integration ---",
         "_webui_next.register_next_webui(app, sys.modules.get(__name__))",
     )
-    if all(anchor in content for anchor in required_anchors):
+    has_def_run = bool(re.search(r"(?m)^\s*def run\s*\(", content))
+    already_at_run = bool(
+        re.search(
+            r"(?m)# --- GenAI Next WebUI Integration ---[\s\S]{1,600}?^\s*def run\s*\(",
+            content,
+        )
+    )
+    if all(anchor in content for anchor in required_anchors) and (not has_def_run or already_at_run):
         return "ALREADY_APPLIED"
 
-    # Remove any previous integration block for idempotency
+    # Remove any previous integration block for idempotency without eating scrape helpers
     while "# --- GenAI Next WebUI Integration ---" in content:
         content = re.sub(
-            r"(?s)\n# --- GenAI Next WebUI Integration ---.*?(?=\n@app\.route|\Z)",
+            r"(?s)\n+# --- GenAI Next WebUI Integration ---.*?(?=\n# --- GenAI Scrape Helpers ---|\n@app\.route|\ndef run\s*\(|\Z)",
             "",
             content,
             count=1,
@@ -2343,12 +2419,21 @@ except Exception as _webui_exc:
 
 """
 
-    content, count = re.subn(
-        r"(?m)^(\s*@app\.route\(\s*['\"]/search['\"])",
-        lambda m: integration_code + m.group(1),
-        content,
-        count=1,
-    )
+    count = 0
+    if has_def_run:
+        content, count = re.subn(
+            r"(?m)^(\s*def run\s*\()",
+            lambda m: integration_code + m.group(1),
+            content,
+            count=1,
+        )
+    if count == 0:
+        content, count = re.subn(
+            r"(?m)^(\s*@app\.route\(\s*['\"]/search['\"])",
+            lambda m: integration_code + m.group(1),
+            content,
+            count=1,
+        )
     if count == 0:
         raise RuntimeError(f"Patch failed for {path}: Could not find @app.route('/search') anchor to inject AI WebUI.")
     return content
@@ -2905,7 +2990,11 @@ def main() -> int:
         "--strict", action="store_true", help="Treat any patch failure (including optional) as fatal (exit 1)"
     )
     parser.add_argument(
-        "--rollback", action="store_true", help="Roll back files to their pre-patch state using stored backups"
+        "--rollback",
+        "--revert",
+        action="store_true",
+        dest="rollback",
+        help="Roll back files to their pre-patch state using stored backups",
     )
     parser.add_argument(
         "--rollback-on-failure", action="store_true", help="Automatically rollback changes if any CRITICAL patch fails"
@@ -2935,6 +3024,11 @@ def main() -> int:
         logger.info("Executing rollback to pre-patch state...")
         restored = transaction.rollback()
         if restored:
+            if os.path.exists(CACHE_FILE):
+                try:
+                    os.remove(CACHE_FILE)
+                except OSError:
+                    pass
             logger.info(f"Successfully rolled back {len(restored)} file(s):\n  " + "\n  ".join(restored))
             return 0
         else:
@@ -2980,7 +3074,7 @@ def main() -> int:
     optional_failures = [r for r in results if r.status == PatchStatus.FAILED and r.severity == PatchSeverity.OPTIONAL]
     all_failures = critical_failures + feature_failures + optional_failures
 
-    # Persist backups to disk if there are any failures or if requested
+    # Persist backups to disk if any files were modified
     if not args.check and transaction.originals:
         transaction.persist_backups()
 
@@ -3057,7 +3151,6 @@ def main() -> int:
     if not all_failures and not args.check:
         logger.info("All patches processed successfully.")
         save_patch_cache()
-        transaction.cleanup()
         return 0
 
     if critical_failures:

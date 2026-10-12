@@ -169,34 +169,24 @@ class LexicalReranker:
         self.config = config or LexicalConfig()
         self.tokenizer = MultilingualTokenizer()
 
-    def score_document(
+    def _score_tokenized_document(
         self,
+        q_tokens: set[str],
         query: str,
         title: str,
-        headings: list[str] | None,
         content: str,
+        title_tokens: list[str],
+        headings_tokens: list[str],
+        content_tokens: list[str],
+        doc_len: float,
         avgdl: float,
         df_map: dict[str, int],
         num_docs: int,
     ) -> float:
-        """Calculate weighted BM25 score for a single document against a query."""
-        q_tokens = self.tokenizer.tokenize(query)
-        if not q_tokens:
+        """Calculate weighted BM25 score from pre-tokenized document fields."""
+        if not q_tokens or doc_len == 0:
             return 0.0
 
-        title_tokens = self.tokenizer.tokenize(title)
-        headings_tokens = self.tokenizer.tokenize(" ".join(headings or []))
-        content_tokens = self.tokenizer.tokenize(content)
-
-        doc_len = (
-            len(title_tokens) * self.config.title_weight
-            + len(headings_tokens) * self.config.heading_weight
-            + len(content_tokens) * self.config.content_weight
-        )
-        if doc_len == 0:
-            return 0.0
-
-        # Term frequency per field
         tf_title: dict[str, int] = {}
         for t in title_tokens:
             tf_title[t] = tf_title.get(t, 0) + 1
@@ -212,11 +202,10 @@ class LexicalReranker:
         score = 0.0
         norm_avgdl = max(avgdl, 1.0)
 
-        for qt in set(q_tokens):
+        for qt in q_tokens:
             q_df = df_map.get(qt, 0)
             idf = math.log(1.0 + (num_docs - q_df + 0.5) / (q_df + 0.5))
 
-            # Weighted term frequency across fields
             w_tf = (
                 tf_title.get(qt, 0) * self.config.title_weight
                 + tf_headings.get(qt, 0) * self.config.heading_weight
@@ -229,7 +218,6 @@ class LexicalReranker:
             denominator = w_tf + self.config.k1 * (1.0 - self.config.b + self.config.b * (doc_len / norm_avgdl))
             score += idf * (numerator / max(denominator, 0.001))
 
-        # Bonuses for exact continuous string match
         q_clean = query.strip().lower()
         if q_clean and len(q_clean) >= 3:
             if q_clean in title.lower():
@@ -238,6 +226,44 @@ class LexicalReranker:
                 score += self.config.exact_content_bonus
 
         return max(score, 0.0)
+
+    def score_document(
+        self,
+        query: str,
+        title: str,
+        headings: list[str] | None,
+        content: str,
+        avgdl: float,
+        df_map: dict[str, int],
+        num_docs: int,
+    ) -> float:
+        """Calculate weighted BM25 score for a single document against a query."""
+        q_tokens = set(self.tokenizer.tokenize(query))
+        if not q_tokens:
+            return 0.0
+
+        title_tokens = self.tokenizer.tokenize(title)
+        headings_tokens = self.tokenizer.tokenize(" ".join(headings or []))
+        content_tokens = self.tokenizer.tokenize(content)
+
+        doc_len = (
+            len(title_tokens) * self.config.title_weight
+            + len(headings_tokens) * self.config.heading_weight
+            + len(content_tokens) * self.config.content_weight
+        )
+        return self._score_tokenized_document(
+            q_tokens=q_tokens,
+            query=query,
+            title=title,
+            content=content,
+            title_tokens=title_tokens,
+            headings_tokens=headings_tokens,
+            content_tokens=content_tokens,
+            doc_len=doc_len,
+            avgdl=avgdl,
+            df_map=df_map,
+            num_docs=num_docs,
+        )
 
     def rerank(
         self,
@@ -280,13 +306,17 @@ class LexicalReranker:
         raw_scores: list[float] = []
         for idx, item in enumerate(items):
             title = str(item.get("title") or "")
-            headings = item.get("headings")
             content = str(item.get("content") or item.get("snippet") or "")
-            s = self.score_document(
+            t_toks, h_toks, c_toks, w_len = doc_data[idx]
+            s = self._score_tokenized_document(
+                q_tokens=q_tokens,
                 query=query,
                 title=title,
-                headings=headings,
                 content=content,
+                title_tokens=t_toks,
+                headings_tokens=h_toks,
+                content_tokens=c_toks,
+                doc_len=w_len,
                 avgdl=avgdl,
                 df_map=df_map,
                 num_docs=num_docs,

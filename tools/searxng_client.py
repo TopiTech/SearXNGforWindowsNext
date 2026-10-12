@@ -255,6 +255,29 @@ def scrape(
     if not clean_url:
         return {"url": "", "content": "", "error": "URL が指定されていません。"}
 
+    try:
+        try:
+            from url_normalizer import is_safe_retrieval_url
+        except ImportError:
+            import sys
+
+            sys_path = os.path.dirname(os.path.abspath(__file__))
+            if sys_path not in sys.path:
+                sys.path.insert(0, sys_path)
+            from url_normalizer import is_safe_retrieval_url
+
+        if not is_safe_retrieval_url(clean_url, resolve_dns=True):
+            return {
+                "url": clean_url,
+                "content": "",
+                "error": (
+                    f"スクレイピング拒否 (400): 対象 URL ({clean_url}) はプライベートネットワーク、"
+                    "ループバック、または許可されていないスキームのため安全機構 (SSRF対策) によりブロックされました。"
+                ),
+            }
+    except Exception:  # noqa: BLE001, S110
+        pass
+
     target_base = (base_url or get_base_url()).rstrip("/")
     t = timeout or get_timeout()
     try:
@@ -277,18 +300,22 @@ def scrape(
 
         raw_content = data.get("content", "") if isinstance(data, dict) else ""
         content = str(raw_content) if raw_content is not None else ""
+        raw_html = str(data.get("raw_html") or "") if isinstance(data, dict) else ""
         original_length = len(content)
         is_truncated = False
         if max_length and len(content) > max_length:
             content = content[:max_length]
             is_truncated = True
 
-        return {
+        out_dict: dict[str, Any] = {
             "url": clean_url,
             "content": content,
             "is_truncated": is_truncated,
             "original_length": original_length,
         }
+        if raw_html:
+            out_dict["raw_html"] = raw_html
+        return out_dict
 
     except urllib.error.HTTPError as e:
         if e.code == 400:
@@ -553,6 +580,8 @@ def retrieval_search(
     )
     data = resp.to_dict()
     data["markdown"] = resp.to_markdown()
+    if not resp.results and resp.warnings:
+        data["error"] = "; ".join(resp.warnings)
     return data
 
 

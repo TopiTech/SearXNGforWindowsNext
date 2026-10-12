@@ -61,7 +61,10 @@ if not "%SEARXNG_SECRET:~64,1%"=="" (
 REM === Verify and apply Windows compatibility patches ===
 echo Verifying Windows compatibility patches...
 ".\python\python.exe" "tools\apply-patches.py"
-if errorlevel 1 (
+set "PATCH_EXIT=%ERRORLEVEL%"
+if "%PATCH_EXIT%"=="2" (
+  echo [WARN] Some non-critical patches could not be applied. Starting server with available patches...
+) else if not "%PATCH_EXIT%"=="0" (
   echo [ERROR] Failed to apply Windows compatibility patches.
   pause
   exit /b 1
@@ -77,6 +80,6 @@ echo [INFO] Web server: http://%SEARXNG_BIND_ADDRESS%:%SEARXNG_PORT%
 echo [INFO] Blocking threads: %SEARXNG_BLOCKING_THREADS%
 echo.
 
-".\python\python.exe" -m granian --interface wsgi searx.webapp:application --host %SEARXNG_BIND_ADDRESS% --port %SEARXNG_PORT% --blocking-threads %SEARXNG_BLOCKING_THREADS% --no-ws
+".\python\python.exe" -m granian --interface wsgi searx.webapp:application --host "%SEARXNG_BIND_ADDRESS%" --port "%SEARXNG_PORT%" --blocking-threads "%SEARXNG_BLOCKING_THREADS%" --no-ws
 
 pause

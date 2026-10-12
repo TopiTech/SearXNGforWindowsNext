@@ -260,13 +260,19 @@ try {
     }
 
     Write-Host "Updating UPSTREAM_VERSION.txt..." -ForegroundColor Green
-    @"
+    $versionText = @"
 upstream_url=$UpstreamUrl
 ref_requested=$Ref
 resolved_commit=$commitSha
 resolved_commit_date=$commitDate
 synced_at=$(Get-Date -Format o)
-"@ | Set-Content (Join-Path $repoRoot "UPSTREAM_VERSION.txt") -Encoding utf8
+
+"@
+    [System.IO.File]::WriteAllText(
+        (Join-Path $repoRoot "UPSTREAM_VERSION.txt"),
+        ($versionText -replace "`r`n", "`n"),
+        [System.Text.UTF8Encoding]::new($false)
+    )
 
     Write-Host ""
     Write-Host "Applying Windows-specific patches..." -ForegroundColor Green

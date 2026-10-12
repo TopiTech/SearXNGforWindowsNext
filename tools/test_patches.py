@@ -4081,6 +4081,44 @@ class TestPatchHardeningM2(unittest.TestCase):
             f"apply-patches.py --check found pending or failed patches: {unclean}",
         )
 
+    def test_patch_transaction_persists_original_backup_across_runs(self):
+        """Verify PatchTransaction.persist_backups preserves existing .bak files so --revert restores original state."""
+        import json
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bak_dir = os.path.join(tmpdir, "backups")
+            target = os.path.join(apply_patches.REPO_ROOT, "tools", "dummy_test_target.py")
+
+            tx1 = apply_patches.PatchTransaction(backup_dir=bak_dir)
+            tx1.record_original(target, "original = True\n")
+            tx1.persist_backups()
+
+            manifest_path = os.path.join(bak_dir, "manifest.json")
+            self.assertTrue(os.path.exists(manifest_path))
+            with open(manifest_path, "r", encoding="utf-8") as mf:
+                manifest = json.load(mf)
+            bak_file = manifest[os.path.abspath(target)]
+            with open(bak_file, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), "original = True\n")
+
+            # Second patch run must not overwrite the original .bak with patched_v1
+            tx2 = apply_patches.PatchTransaction(backup_dir=bak_dir)
+            tx2.record_original(target, "patched_v1 = True\n")
+            tx2.persist_backups()
+
+            with open(bak_file, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), "original = True\n")
+
+    def test_deployed_webapp_scrape_wildcard_dns_and_decimal_ip_blocking(self):
+        """Verify deployed searx/webapp.py contains multi-IP wildcard DNS, IPv6 wildcard DNS, and decimal IP guards."""
+        webapp_path = os.path.join(apply_patches.SITE_PACKAGES, "searx", "webapp.py")
+        with open(webapp_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        self.assertIn("candidate_v6 = label.replace('-', ':')", content)
+        self.assertIn("socket.inet_aton(host_clean)", content)
+        self.assertIn("prev_pin = getattr(_thread_local_dns, 'pin', None)", content)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

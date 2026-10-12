@@ -63,15 +63,16 @@ class FusionConfig:
         k: float | None = None,
         consensus_weight: float | None = None,
     ) -> None:
-        object.__setattr__(self, "rrf_k", int(k) if k is not None else rrf_k)
+        raw_k = int(k) if k is not None else rrf_k
+        object.__setattr__(self, "rrf_k", max(1, raw_k))
         object.__setattr__(
             self,
             "consensus_bonus_per_engine",
-            float(consensus_weight) if consensus_weight is not None else float(consensus_bonus_per_engine),
+            consensus_weight if consensus_weight is not None else consensus_bonus_per_engine,
         )
-        object.__setattr__(self, "max_consensus_bonus", float(max_consensus_bonus))
-        object.__setattr__(self, "multi_query_bonus", float(multi_query_bonus))
-        object.__setattr__(self, "max_multi_query_bonus", float(max_multi_query_bonus))
+        object.__setattr__(self, "max_consensus_bonus", max_consensus_bonus)
+        object.__setattr__(self, "multi_query_bonus", multi_query_bonus)
+        object.__setattr__(self, "max_multi_query_bonus", max_multi_query_bonus)
 
 
 @dataclass
@@ -150,10 +151,16 @@ class ReciprocalRankFusion:
             # First deduplicate within the query run to avoid duplicate spam from same engine
             deduped_run_results = deduplicate_results(raw_results, query=q_text)
 
-            for rank_idx, item in enumerate(deduped_run_results, start=1):
+            for pos_idx, item in enumerate(deduped_run_results, start=1):
                 url = str(item.get("url") or "").strip()
                 if not url:
                     continue
+
+                raw_rank = item.get("rank")
+                try:
+                    rank_idx = max(1, int(raw_rank)) if raw_rank is not None else pos_idx
+                except (ValueError, TypeError):
+                    rank_idx = pos_idx
 
                 d_key = get_dedup_key(url)
                 eng = str(item.get("engine") or item.get("source") or "unknown").strip()
@@ -203,7 +210,7 @@ class ReciprocalRankFusion:
         max_raw_rrf = max(s["rrf_score"] for s in doc_states.values()) or 1.0
 
         fused_items: list[dict[str, Any]] = []
-        for d_key, state in doc_states.items():
+        for state in doc_states.values():
             base_item = state["item"]
             normalized_rrf = state["rrf_score"] / max_raw_rrf
 
@@ -277,6 +284,7 @@ def reciprocal_rank_fusion(
             "snippet": c.snippet,
             "engine": c.engine,
             "source": c.engine,
+            "rank": max(1, c.rank),
             "canonical_url": c.canonical_url,
         }
         query_runs_map.setdefault(q, []).append(item_dict)
