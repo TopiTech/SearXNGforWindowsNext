@@ -697,7 +697,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "_searxng_original_getaddrinfo\n"
             "v19-bulletproof-scrape-fix\n"
             "v20-redosos-scrape-fix\n"
-            "v21-credentials-scrape-fix\n"
+            "v22-credentials-backslash-scrape-fix\n"
             "host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B'))\n"
             ".localdomain\n"
             ".arpa\n"
@@ -719,7 +719,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "max_duration=15.0\n"
             "Invalid port: 0\n"
             "Port mismatch for pinned host\n"
-            "URLs with embedded credentials are not allowed\n"
+            "URLs with embedded credentials or backslashes are not allowed\n"
             "except _ScrapeBlockedError:\n"
             "_normalize_scrape_host\n"
             "return ordered_ips, host_clean, port, safe_url\n"
@@ -2145,7 +2145,7 @@ class TestHardeningEnhancements(unittest.TestCase):
         self.assertEqual(p443.port, 443)
 
     def test_scrape_embedded_credentials_blocked(self):
-        """Verify _parse_scrape_url rejects URLs with embedded credentials or '@' in netloc."""
+        """Verify _parse_scrape_url rejects URLs with embedded credentials, '@', or backslashes in netloc."""
         import urllib.parse
 
         class _ScrapeBlockedError(Exception):
@@ -2157,24 +2157,33 @@ class TestHardeningEnhancements(unittest.TestCase):
                 p = parsed_url.port
                 if p is not None and (p == 0 or p > 65535):
                     raise _ScrapeBlockedError("Invalid port: 0")
-                if parsed_url.username or parsed_url.password or "@" in (parsed_url.netloc or ""):
-                    raise _ScrapeBlockedError("URLs with embedded credentials are not allowed")
+                if (
+                    parsed_url.username
+                    or parsed_url.password
+                    or "@" in (parsed_url.netloc or "")
+                    or "\\" in (parsed_url.netloc or "")
+                ):
+                    raise _ScrapeBlockedError("URLs with embedded credentials or backslashes are not allowed")
                 return parsed_url
             except ValueError as exc:
                 raise _ScrapeBlockedError("Invalid URL") from exc
 
-        # Credentials must raise _ScrapeBlockedError
+        # Credentials and backslashes must raise _ScrapeBlockedError
         with self.assertRaises(_ScrapeBlockedError) as ctx:
             parse_scrape_url("http://user:pass@example.com/path")
-        self.assertEqual(str(ctx.exception), "URLs with embedded credentials are not allowed")
+        self.assertEqual(str(ctx.exception), "URLs with embedded credentials or backslashes are not allowed")
 
         with self.assertRaises(_ScrapeBlockedError) as ctx:
             parse_scrape_url("http://admin@example.com/path")
-        self.assertEqual(str(ctx.exception), "URLs with embedded credentials are not allowed")
+        self.assertEqual(str(ctx.exception), "URLs with embedded credentials or backslashes are not allowed")
 
         with self.assertRaises(_ScrapeBlockedError) as ctx:
             parse_scrape_url("http://@example.com/path")
-        self.assertEqual(str(ctx.exception), "URLs with embedded credentials are not allowed")
+        self.assertEqual(str(ctx.exception), "URLs with embedded credentials or backslashes are not allowed")
+
+        with self.assertRaises(_ScrapeBlockedError) as ctx:
+            parse_scrape_url("http://127.0.0.1\\example.com/path")
+        self.assertEqual(str(ctx.exception), "URLs with embedded credentials or backslashes are not allowed")
 
         # Clean URL must pass
         clean = parse_scrape_url("https://example.com/path")

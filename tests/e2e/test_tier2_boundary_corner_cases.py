@@ -249,6 +249,16 @@ class TestTier2SSRFBoundaries(unittest.TestCase):
         self._assert_blocked("http://nas.private/", ".private")
         self._assert_blocked("http://router.arpa/", ".arpa")
 
+    def test_ssrf_embedded_credentials_blocked(self) -> None:
+        """Verify URLs with embedded credentials or '@' are blocked."""
+        self._assert_blocked("http://user:pass@example.com/", "embedded user:pass")
+        self._assert_blocked("http://admin@example.com/", "embedded userinfo")
+        self._assert_blocked("http://@example.com/", "empty userinfo with @")
+
+    def test_ssrf_netloc_backslash_blocked(self) -> None:
+        """Verify URLs with backslashes in netloc are blocked to prevent parser differentials."""
+        self._assert_blocked("http://127.0.0.1\\example.com/", "backslash in authority")
+
 
 class TestTier2InvalidInputCombinations(unittest.TestCase):
     """Tier 2: Verification of invalid input combinations and error handling."""

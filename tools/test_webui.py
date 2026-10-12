@@ -539,12 +539,16 @@ class TestWebUIScraperLimits(unittest.TestCase):
         mock_mod._ScrapeBlockedError = ValueError
 
         res = webui_next._scrape_url_direct(mock_mod, "http://user:pass@example.com/page")
-        self.assertIn("URLs with embedded credentials are not allowed", res.get("error", ""))
+        self.assertIn("URLs with embedded credentials or backslashes are not allowed", res.get("error", ""))
         self.assertEqual(res.get("content"), "")
 
         res_at = webui_next._scrape_url_direct(mock_mod, "http://admin@example.com/page")
-        self.assertIn("URLs with embedded credentials are not allowed", res_at.get("error", ""))
+        self.assertIn("URLs with embedded credentials or backslashes are not allowed", res_at.get("error", ""))
         self.assertEqual(res_at.get("content"), "")
+
+        res_bs = webui_next._scrape_url_direct(mock_mod, "http://127.0.0.1\\example.com/page")
+        self.assertIn("URLs with embedded credentials or backslashes are not allowed", res_bs.get("error", ""))
+        self.assertEqual(res_bs.get("content"), "")
 
 
 class TestRunTestsHarnessRuffFallback(unittest.TestCase):
@@ -1316,6 +1320,26 @@ class TestWebUIRefinedBehaviors(unittest.TestCase):
             )
             self.assertEqual(resp.status_code, 403)
             self.assertEqual(mock_save.call_count, 0)
+
+    def test_settings_engines_post_accepts_configured_bind_address(self) -> None:
+        """CSRF guard: a POST to a non-loopback SEARXNG_BIND_ADDRESS must be trusted."""
+        app = Flask(__name__)
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        with (
+            patch.dict(os.environ, {"SEARXNG_BIND_ADDRESS": "192.168.1.100"}),
+            patch("webui_next.save_engines_settings_data") as mock_save,
+            patch("webui_next.apply_settings_cookies"),
+        ):
+            mock_save.return_value = {"success": True}
+            resp = client.post(
+                "/api/settings/engines",
+                json={"enabled_engines": ["google"]},
+                headers={"Host": "192.168.1.100:8888"},
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(mock_save.call_count, 1)
 
     def test_settings_engines_post_accepts_local_origin(self) -> None:
         """CSRF guard: same-origin POSTs from the local UI keep working."""

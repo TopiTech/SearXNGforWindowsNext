@@ -88,7 +88,7 @@ class TestTier1SearchEndpoint(unittest.TestCase):
 
     def test_autocompleter_endpoint(self) -> None:
         """Verify GET /autocompleter returns 200."""
-        resp = self.client.get("/autocompleter", params={"q": "python"})
+        resp = self.client.get("/autocompleter", params={"q": "python"}, timeout=30.0)
         self.assertEqual(resp.status_code, 200)
 
 

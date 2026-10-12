@@ -722,7 +722,8 @@ class BM25PassageExtractor:
                 score += idf * (numerator / max(denominator, 0.001))
 
             # Bonus for containing exact continuous query string
-            if query.lower() in passages[i].lower():
+            q_stripped = query.strip().lower()
+            if q_stripped and q_stripped in passages[i].lower():
                 score += 3.0
 
             scores.append((score, i))

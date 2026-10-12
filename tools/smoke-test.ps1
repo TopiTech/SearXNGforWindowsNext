@@ -202,6 +202,8 @@ try {
     Assert-HttpStatusCode -Uri "$base/scrape" -Method Post -Body '{"url": 12345}' -ContentType "application/json" -ExpectedStatusCode 400 -Label "Scrape invalid URL type"
     Assert-HttpStatusCode -Uri "$base/scrape?url=http%3A%2F%2F%5B%3A%3A1" -ExpectedStatusCode 400 -Label "Scrape malformed URL"
     Assert-HttpStatusCode -Uri "$base/scrape?url=http://example.com:0/" -ExpectedStatusCode 400 -Label "Scrape port 0 blocked"
+    Assert-HttpStatusCode -Uri "$base/scrape?url=http://user:pass@example.com/" -ExpectedStatusCode 400 -Label "Scrape credentials blocked"
+    Assert-HttpStatusCode -Uri "$base/scrape?url=http://127.0.0.1%5Cexample.com/" -ExpectedStatusCode 400 -Label "Scrape backslash blocked"
     Write-Host ""
 
     # Test 30: json_lite with empty query (server should reject with 400 "No query")

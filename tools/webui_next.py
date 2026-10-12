@@ -218,8 +218,8 @@ def _scrape_url_direct(
             raise
         except ValueError as exc:
             raise blocked_exc_cls("Invalid URL") from exc
-        if parsed_u.username or parsed_u.password or "@" in (parsed_u.netloc or ""):
-            raise blocked_exc_cls("URLs with embedded credentials are not allowed")
+        if parsed_u.username or parsed_u.password or "@" in (parsed_u.netloc or "") or "\\" in (parsed_u.netloc or ""):
+            raise blocked_exc_cls("URLs with embedded credentials or backslashes are not allowed")
         return parsed_u
 
     def _is_static_host_blocked(host: str | None) -> bool:
@@ -6304,7 +6304,8 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                 parsed = urllib.parse.urlsplit(configured)
                 if (parsed.hostname or "").lower() == host_name.strip("[]"):
                     return True
-        return False
+        bind_addr = (os.environ.get("SEARXNG_BIND_ADDRESS") or "").strip().lower()
+        return bool(bind_addr and bind_addr != "0.0.0.0" and host_name.strip("[]") == bind_addr.strip("[]"))
 
     @app.before_request
     def sxng_state_change_guard() -> Any:
@@ -6474,6 +6475,8 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             or "invalid port" in err_lower
             or "loopback" in err_lower
             or "ssrf" in err_lower
+            or "credentials" in err_lower
+            or "backslash" in err_lower
         )
         status_code = 400 if is_blocked else (422 if err else 200)
         return jsonify(res), status_code

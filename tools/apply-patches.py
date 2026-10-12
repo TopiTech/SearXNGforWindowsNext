@@ -1193,7 +1193,7 @@ def patch_webapp_scrape_route(content, path):
         "_searxng_original_getaddrinfo",
         "v19-bulletproof-scrape-fix",
         "v20-redosos-scrape-fix",
-        "v21-credentials-scrape-fix",
+        "v22-credentials-backslash-scrape-fix",
         "host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B'))",
         ".localdomain",
         ".arpa",
@@ -1215,7 +1215,7 @@ def patch_webapp_scrape_route(content, path):
         "max_duration=15.0",
         "Invalid port: 0",
         "Port mismatch for pinned host",
-        "URLs with embedded credentials are not allowed",
+        "URLs with embedded credentials or backslashes are not allowed",
         "except _ScrapeBlockedError:",
     ]
     if all(anchor in content for anchor in required_anchors):
@@ -1636,7 +1636,7 @@ def scrape():
         return jsonify({'error': 'No URL provided'}), 400
     url = url.strip()
 
-    # v21-credentials-scrape-fix
+    # v22-credentials-backslash-scrape-fix
     def _parse_scrape_url(value):
         try:
             parsed_url = urllib.parse.urlparse(value)
@@ -1648,8 +1648,13 @@ def scrape():
             raise
         except ValueError as exc:
             raise _ScrapeBlockedError('Invalid URL') from exc
-        if parsed_url.username or parsed_url.password or '@' in (parsed_url.netloc or ''):
-            raise _ScrapeBlockedError('URLs with embedded credentials are not allowed')
+        if (
+            parsed_url.username
+            or parsed_url.password
+            or '@' in (parsed_url.netloc or '')
+            or '\\' in (parsed_url.netloc or '')
+        ):
+            raise _ScrapeBlockedError('URLs with embedded credentials or backslashes are not allowed')
         return parsed_url
 
     def _fetch_scrape_url(request_url):
@@ -1791,7 +1796,7 @@ def scrape():
                 return ordered_ips, host_clean, port, safe_url
             except _ScrapeBlockedError:
                 raise
-            except socket.gaierror as e:
+            except (socket.gaierror, OSError) as e:
                 raise _ScrapeBlockedError(f'DNS resolution failed for {host}: {e}')
             except Exception as e:
                 raise RuntimeError(f'DNS resolution failed for {host}: {e}')
