@@ -606,6 +606,30 @@ class TestSearXNGCLI(unittest.TestCase):
         self.assertIn("Deep Search Results", resp["result"]["content"][0]["text"])
         mock_unified.assert_called_once()
 
+    @patch("searxng_client.unified_search")
+    def test_mcp_search_with_no_highlights_routes_unified(self, mock_unified: MagicMock) -> None:
+        mock_unified.return_value = {
+            "mode": "deep",
+            "query": "fastapi",
+            "markdown": "## Deep Search Results: `fastapi`",
+        }
+        raw_msg = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 45,
+                "method": "tools/call",
+                "params": {
+                    "name": "searxng_search",
+                    "arguments": {"query": "fastapi", "include_highlights": False},
+                },
+            }
+        )
+        resp = mcp_server.process_message(raw_msg)
+        self.assertIsNotNone(resp)
+        self.assertFalse(resp["result"]["isError"])
+        mock_unified.assert_called_once()
+        self.assertFalse(mock_unified.call_args[1]["include_highlights"])
+
     def test_resolve_effective_mode_prefers_explicit_mode(self) -> None:
         # Explicit mode wins over a conflicting search_depth.
         self.assertEqual(mcp_server._resolve_effective_mode("fast", "advanced", "fastapi"), "fast")

@@ -390,6 +390,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
             or search_depth is not None
             or bool(include_domains)
             or bool(exclude_domains)
+            or (raw_hl is not None and not include_highlights)
             or (mode == "auto" and _is_url_query(query))
         )
 
