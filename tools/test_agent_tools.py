@@ -1239,6 +1239,46 @@ class TestAgentQueryPipelineIntegration(unittest.TestCase):
             _, kwargs = mock_unified.call_args
             self.assertEqual(kwargs.get("pageno"), 5)
 
+        # Test tool call with pageno=7 alias
+        with patch("searxng_client.unified_search") as mock_unified:
+            mock_unified.return_value = {"mode": "deep", "query": "pytest", "markdown": "Results", "page": 7}
+            msg = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "searxng_search",
+                        "arguments": {"query": "pytest", "mode": "deep", "pageno": 7},
+                    },
+                }
+            )
+            resp = mcp_server.process_message(msg)
+            self.assertIsNotNone(resp)
+            assert resp is not None
+            self.assertFalse(resp["result"]["isError"])
+            mock_unified.assert_called_once()
+            _, kwargs = mock_unified.call_args
+            self.assertEqual(kwargs.get("pageno"), 7)
+
+    def test_cli_retrieval_and_deep_pagination_support(self) -> None:
+        """Verify CLI retrieval and deep subcommands accept -p/--page and forward pageno."""
+        with patch("searxng_client.retrieval_search") as mock_retrieval:
+            mock_retrieval.return_value = {"results": [], "query": "test"}
+            code = searxng_cli.main(["retrieval", "test", "-p", "3", "--json"])
+            self.assertEqual(code, 0)
+            mock_retrieval.assert_called_once()
+            _, kwargs = mock_retrieval.call_args
+            self.assertEqual(kwargs.get("pageno"), 3)
+
+        with patch("searxng_client.search_deep") as mock_deep:
+            mock_deep.return_value = {"results": [], "query": "test"}
+            code = searxng_cli.main(["deep", "test", "--page", "2", "--json"])
+            self.assertEqual(code, 0)
+            mock_deep.assert_called_once()
+            _, kwargs = mock_deep.call_args
+            self.assertEqual(kwargs.get("pageno"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -59,7 +59,7 @@ workspace/
 This project **stays synchronized with upstream SearXNG** while maintaining Windows compatibility and AI-first unification via **idempotent patches**. Patches are applied after every upstream sync and are safe to run multiple times.
 The `webapp_ai_webui` patch is elevated to `CRITICAL` severity to guarantee that any upstream modification that breaks UI unification halts the sync process immediately rather than silently reviving the legacy Jinja2 UI.
 
-### Patch Targets (27 Patch Specs across Target Files)
+### Patch Targets (28 Patch Specs across Target Files)
 
 | # | File | Patch Spec | Severity | Purpose |
 |---|------|------------|:---:|---------|
@@ -90,6 +90,7 @@ The `webapp_ai_webui` patch is elevated to `CRITICAL` severity to guarantee that
 | 25 | `webadapter.py` | `webadapter_categories` | CRITICAL | Safe categories lookup using `.get()` to prevent KeyError |
 | 26 | `webapp.py` | `webapp_preferences_validation` | CRITICAL | Tab categories in Preferences & safe pre_request validation handling |
 | 27 | `settings_loader.py` | `settings_loader_quotes` | CRITICAL | Quoted and whitespace-padded `SEARXNG_SETTINGS_PATH` handling |
+| 28 | `autocomplete.py` | `autocomplete_timeout` | CRITICAL | Autocomplete request timeout enforcement & exception resilience |
 
 ### Patch Execution Flow
 

@@ -2652,6 +2652,77 @@ def patch_settings_loader(content: str, path: str) -> str:
     return content
 
 
+# --- Patch 18: autocomplete.py (request timeout & exception resilience) ---
+def patch_autocomplete_timeout(content: str, path: str) -> str:
+    """Ensure autocomplete requests use an explicit timeout and do not discard kwargs or crash on errors."""
+    required_anchors = (
+        "def update_kwargs(kwargs: dict[str, t.Any]) -> None:",
+        'min(float(settings.get("outgoing", {}).get("request_timeout", 3.0) or 3.0), 3.0)',
+        "except (RequestException, SearxEngineResponseException, Exception):",
+    )
+    if all(anchor in content for anchor in required_anchors):
+        return "ALREADY_APPLIED"
+
+    # 1. Update update_kwargs and get/post to pass kwargs dictionary
+    target1_pattern = (
+        r"def update_kwargs\(\*\*kwargs\)[^:]*:[^\n]*\r?\n"
+        r"[ \t]*if ['\"]timeout['\"] not in kwargs:\r?\n"
+        r"[ \t]*kwargs\['timeout'\]\s*=\s*settings\['outgoing'\]\['request_timeout'\]\r?\n"
+        r"[ \t]*kwargs\['raise_for_httperror'\]\s*=\s*True\r?\n\r?\n\r?\n"
+        r"def get\(\*args,[^)]*\)[^:]*:[^\n]*\r?\n"
+        r"[ \t]*update_kwargs\(\*\*kwargs\)[^\n]*\r?\n"
+        r"[ \t]*return http_get\(\*args,\s*\*\*kwargs\)[^\n]*\r?\n\r?\n\r?\n"
+        r"def post\(\*args,[^)]*\)[^:]*:[^\n]*\r?\n"
+        r"[ \t]*update_kwargs\(\*\*kwargs\)[^\n]*\r?\n"
+        r"[ \t]*return http_post\(\*args,\s*\*\*kwargs\)"
+    )
+    replacement1 = (
+        "def update_kwargs(kwargs: dict[str, t.Any]) -> None:\n"
+        '    if "timeout" not in kwargs:\n'
+        '        kwargs["timeout"] = min(float(settings.get("outgoing", {}).get("request_timeout", 3.0) or 3.0), 3.0)\n'
+        '    kwargs["raise_for_httperror"] = True\n\n\n'
+        'def get(*args: t.Any, **kwargs: t.Any) -> "SXNG_Response":\n'
+        "    update_kwargs(kwargs)\n"
+        "    return http_get(*args, **kwargs)\n\n\n"
+        'def post(*args: t.Any, **kwargs: t.Any) -> "SXNG_Response":\n'
+        "    update_kwargs(kwargs)\n"
+        "    return http_post(*args, **kwargs)"
+    )
+    if "def update_kwargs(kwargs: dict[str, t.Any]) -> None:" not in content:
+        content, c1 = re.subn(target1_pattern, replacement1, content, count=1)
+        if c1 == 0:
+            raise RuntimeError(f"Patch failed for {path}: Could not locate update_kwargs in autocomplete.py.")
+
+    # 2. Update search_autocomplete to catch Exception
+    if "except (RequestException, SearxEngineResponseException, Exception):" not in content:
+        target2 = "except (RequestException, SearxEngineResponseException):"
+        repl2 = "except (RequestException, SearxEngineResponseException, Exception):"
+        if target2 in content:
+            content = content.replace(target2, repl2, 1)
+
+    # 3. Update duckduckgo to safe traits lookup
+    if "ddg_engine = engines.get('duckduckgo')" not in content and "traits = engines['duckduckgo'].traits" in content:
+        target3 = (
+            "    traits = engines['duckduckgo'].traits\n"
+            "    args: dict[str, str] = {\n"
+            "        'q': query,\n"
+            "        'kl': traits.get_region(sxng_locale, traits.all_locale),\n"
+            "    }"
+        )
+        repl3 = (
+            "    ddg_engine = engines.get('duckduckgo')\n"
+            "    traits = getattr(ddg_engine, 'traits', None)\n"
+            "    args: dict[str, str] = {\n"
+            "        'q': query,\n"
+            "    }\n"
+            "    if traits is not None:\n"
+            "        args['kl'] = traits.get_region(sxng_locale, traits.all_locale)"
+        )
+        content = content.replace(target3, repl3, 1)
+
+    return content
+
+
 PATCH_SPECS = [
     PatchSpec(
         name="valkeydb_pwd",
@@ -2943,6 +3014,20 @@ PATCH_SPECS = [
             "load_settings",
         ],
         diagnostic_hint="Ensures SEARXNG_SETTINGS_PATH strips quotes and whitespace in get_user_cfg_folder and load_settings.",
+    ),
+    PatchSpec(
+        name="autocomplete_timeout",
+        target_path=os.path.join(SITE_PACKAGES, "searx", "autocomplete.py"),
+        description="autocomplete.py (timeout enforcement & exception resilience)",
+        patch_func=patch_autocomplete_timeout,
+        severity=PatchSeverity.CRITICAL,
+        required_file=True,
+        expected_anchors=[
+            "def update_kwargs(kwargs: dict[str, t.Any]) -> None:",
+            'min(float(settings.get("outgoing", {}).get("request_timeout", 3.0) or 3.0), 3.0)',
+            "except (RequestException, SearxEngineResponseException, Exception):",
+        ],
+        diagnostic_hint="Ensures autocompleter passes explicit timeout to get/post to prevent request thread hangs.",
     ),
 ]
 

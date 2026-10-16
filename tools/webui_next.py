@@ -3651,9 +3651,9 @@ footer.ws-footer {
         </div>
       </div>
       <div id="classic-pagination-bar" class="classic-pagination-row" style="display:none;">
-        <button type="button" class="btn btn-sm" id="classic-prev-btn">&larr; 前のページ</button>
+        <button type="button" class="btn btn-sm" id="classic-prev-btn" aria-label="前のページ">&larr; 前のページ</button>
         <span id="classic-page-indicator" class="pill">ページ 1 / 10</span>
-        <button type="button" class="btn btn-sm" id="classic-next-btn">次のページ &rarr;</button>
+        <button type="button" class="btn btn-sm" id="classic-next-btn" aria-label="次のページ">次のページ &rarr;</button>
       </div>
     </section>
 
@@ -5482,6 +5482,8 @@ footer.ws-footer {
       }
 
       addListener('classic-prev-btn', 'click', function () {
+        var prevBtn = document.getElementById('classic-prev-btn');
+        if (prevBtn && prevBtn.disabled) return;
         if (state.classicPage > 1) {
           var qVal = document.getElementById('q').value.trim();
           if (qVal) {
@@ -5491,6 +5493,8 @@ footer.ws-footer {
         }
       });
       addListener('classic-next-btn', 'click', function () {
+        var nextBtn = document.getElementById('classic-next-btn');
+        if (nextBtn && nextBtn.disabled) return;
         var qVal = document.getElementById('q').value.trim();
         if (qVal) {
           runClassicSearch(qVal, state.classicPage + 1);
@@ -6451,7 +6455,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                         else:
                             results = [x for x in parsed if isinstance(x, str) and x.strip() and x != "[object Object]"]
 
-        if not results:
+        if not results and orig_autocompleter is None:
             with contextlib.suppress(Exception):
                 import searx.autocomplete as sxng_ac
 

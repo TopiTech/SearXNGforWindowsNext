@@ -4204,6 +4204,45 @@ class TestPatchHardeningM2(unittest.TestCase):
             self.assertEqual(named_temp_calls[0].get("prefix"), ".tmp_settings_sync_")
             self.assertEqual(named_temp_calls[0].get("suffix"), ".tmp")
 
+    def test_patch_autocomplete_timeout_and_idempotency(self):
+        """Verify patch_autocomplete_timeout correctly updates update_kwargs, duckduckgo, and exception handling."""
+        raw_upstream = (
+            "def update_kwargs(**kwargs) -> None:  # type: ignore\n"
+            "    if 'timeout' not in kwargs:\n"
+            "        kwargs['timeout'] = settings['outgoing']['request_timeout']\n"
+            "    kwargs['raise_for_httperror'] = True\n\n\n"
+            'def get(*args, **kwargs) -> "SXNG_Response":  # type: ignore\n'
+            "    update_kwargs(**kwargs)  # pyright: ignore[reportUnknownArgumentType]\n"
+            "    return http_get(*args, **kwargs)  # pyright: ignore[reportUnknownArgumentType]\n\n\n"
+            'def post(*args, **kwargs) -> "SXNG_Response":  # type: ignore\n'
+            "    update_kwargs(**kwargs)  # pyright: ignore[reportUnknownArgumentType]\n"
+            "    return http_post(*args, **kwargs)  # pyright: ignore[reportUnknownArgumentType]\n\n"
+            "def duckduckgo(query: str, sxng_locale: str) -> list[str]:\n"
+            "    traits = engines['duckduckgo'].traits\n"
+            "    args: dict[str, str] = {\n"
+            "        'q': query,\n"
+            "        'kl': traits.get_region(sxng_locale, traits.all_locale),\n"
+            "    }\n\n"
+            "def search_autocomplete(backend_name: str, query: str, sxng_locale: str) -> list[str]:\n"
+            "    backend = backends.get(backend_name)\n"
+            "    if backend is None:\n"
+            "        return []\n"
+            "    try:\n"
+            "        return backend(query, sxng_locale)\n"
+            "    except (RequestException, SearxEngineResponseException):\n"
+            "        return []\n"
+        )
+        patched = apply_patches.patch_autocomplete_timeout(raw_upstream, "searx/autocomplete.py")
+        self.assertIn("def update_kwargs(kwargs: dict[str, t.Any]) -> None:", patched)
+        self.assertIn('min(float(settings.get("outgoing", {}).get("request_timeout", 3.0) or 3.0), 3.0)', patched)
+        self.assertIn("update_kwargs(kwargs)", patched)
+        self.assertIn("ddg_engine = engines.get('duckduckgo')", patched)
+        self.assertIn("except (RequestException, SearxEngineResponseException, Exception):", patched)
+
+        # Idempotency check
+        reapplied = apply_patches.patch_autocomplete_timeout(patched, "searx/autocomplete.py")
+        self.assertEqual(reapplied, "ALREADY_APPLIED")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

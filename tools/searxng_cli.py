@@ -202,6 +202,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exclude specific domain(s)",
     )
     retrieval_parser.add_argument(
+        "-p",
+        "--page",
+        "--pageno",
+        dest="page",
+        type=int,
+        default=1,
+        help="Search results page number (default: 1)",
+    )
+    retrieval_parser.add_argument(
         "--json",
         dest="as_json",
         action="store_true",
@@ -255,6 +264,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["basic", "advanced", "code", "fast"],
         default="advanced",
         help="Search depth: 'basic' (snippets), 'advanced' (highlights), 'code' (tech/code priority), or 'fast' (json_lite)",
+    )
+    deep_parser.add_argument(
+        "-p",
+        "--page",
+        "--pageno",
+        dest="page",
+        type=int,
+        default=1,
+        help="Search results page number (default: 1)",
     )
     deep_parser.add_argument(
         "--no-highlights",
@@ -461,6 +479,7 @@ def cmd_deep(args: argparse.Namespace) -> int:
         include_domains=args.include_domains if args.include_domains else None,
         exclude_domains=args.exclude_domains if args.exclude_domains else None,
         max_tokens=args.max_tokens,
+        pageno=getattr(args, "page", 1),
         base_url=args.base_url,
         timeout=args.timeout,
     )
@@ -483,6 +502,7 @@ def cmd_retrieval(args: argparse.Namespace) -> int:
         time_range=args.time_range,
         include_domains=args.include_domains if args.include_domains else None,
         exclude_domains=args.exclude_domains if args.exclude_domains else None,
+        pageno=getattr(args, "page", 1),
         base_url=args.base_url,
         timeout=args.timeout,
     )
@@ -514,7 +534,7 @@ def cmd_health(args: argparse.Namespace) -> int:
     return 0 if is_healthy else 1
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
     # Ensure Windows stdout/stderr handles UTF-8 correctly
     if hasattr(sys.stdout, "reconfigure"):
@@ -525,7 +545,7 @@ def main() -> None:
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     exit_code = 0
     if args.command == "search":
@@ -542,6 +562,8 @@ def main() -> None:
         parser.print_help()
         exit_code = 1
 
+    if argv is not None:
+        return exit_code
     sys.exit(exit_code)
 
 

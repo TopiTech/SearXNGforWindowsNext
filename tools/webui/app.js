@@ -1666,6 +1666,8 @@
       }
 
       addListener('classic-prev-btn', 'click', function () {
+        var prevBtn = document.getElementById('classic-prev-btn');
+        if (prevBtn && prevBtn.disabled) return;
         if (state.classicPage > 1) {
           var qVal = document.getElementById('q').value.trim();
           if (qVal) {
@@ -1675,6 +1677,8 @@
         }
       });
       addListener('classic-next-btn', 'click', function () {
+        var nextBtn = document.getElementById('classic-next-btn');
+        if (nextBtn && nextBtn.disabled) return;
         var qVal = document.getElementById('q').value.trim();
         if (qVal) {
           runClassicSearch(qVal, state.classicPage + 1);

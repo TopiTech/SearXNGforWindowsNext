@@ -404,7 +404,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         exclude_domains = [str(d) for d in raw_exc] if isinstance(raw_exc, list) else None
 
         try:
-            page = max(1, int(arguments.get("page", 1)))
+            page = max(1, int(arguments.get("page") or arguments.get("pageno") or 1))
         except (ValueError, TypeError):
             page = 1
 
@@ -499,7 +499,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         out_format = str(arguments.get("format") or "markdown").strip().lower()
 
         try:
-            page = max(1, int(arguments.get("page", 1)))
+            page = max(1, int(arguments.get("page") or arguments.get("pageno") or 1))
         except (ValueError, TypeError):
             page = 1
 
@@ -581,7 +581,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
             max_tokens = 3000
 
         try:
-            page = max(1, int(arguments.get("page", 1)))
+            page = max(1, int(arguments.get("page") or arguments.get("pageno") or 1))
         except (ValueError, TypeError):
             page = 1
 
