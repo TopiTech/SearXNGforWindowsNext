@@ -1140,9 +1140,11 @@ class TestWebUIAccessibilityDeepSearchAndKeybindings(unittest.TestCase):
         self.assertNotIn('button[aria-label*="コピー"], .btn:last-of-type', html)
 
     def test_classic_pagination_next_button_disabled_when_under_limit(self) -> None:
-        """Classic search next page button must be disabled when fewer items than count are returned."""
+        """Classic search next page button must be disabled only when empty or max pages reached, not on under-limit items."""
         html = webui_next.AI_WORKSPACE_HTML
-        self.assertIn("classic-next-btn').disabled = (items.length < countVal)", html)
+        self.assertIn("var isLastPage = !hasItems || (page >= maxPages);", html)
+        self.assertIn("classic-next-btn').disabled = isLastPage", html)
+        self.assertNotIn("classic-next-btn').disabled = (items.length < countVal)", html)
 
     def test_responsive_options_row_reflow_css(self) -> None:
         """Mobile stylesheet must include width 100% reflow for .options-row .opt-group on <=640px viewports."""
@@ -1202,6 +1204,13 @@ class TestWebUIAccessibilityDeepSearchAndKeybindings(unittest.TestCase):
         self.assertIn('id="classic-page-indicator" class="pill">ページ 1 / 10</span>', html)
         self.assertIn("indicator.textContent = 'ページ ' + page + ' / ' + totalPages;", html)
         self.assertIn("updateClassicPagination(page, items)", html)
+
+    def test_classic_pagination_empty_subsequent_page_retains_prev_button(self) -> None:
+        """Verify page > 1 with empty results displays exhaustion state while preserving pagination navigation."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("if (page > 1)", html)
+        self.assertIn("これ以上の検索結果はありません", html)
+        self.assertIn("updateClassicPagination(page, []);", html)
 
     def test_btn_save_general_prefs_error_handling(self) -> None:
         """Verify btn-save-general-prefs handles HTTP errors and displays error toast on failure."""

@@ -1159,10 +1159,9 @@
         var pagBar = document.getElementById('classic-pagination-bar');
         if (!pagBar) return;
         pagBar.style.display = 'flex';
-        var countVal = parseInt((document.getElementById('classic-count') || {}).value || '10', 10);
-        if (isNaN(countVal) || countVal < 1) countVal = 10;
         var maxPages = 10;
-        var isLastPage = (items.length < countVal);
+        var hasItems = Boolean(items && items.length > 0);
+        var isLastPage = !hasItems || (page >= maxPages);
         var totalPages = isLastPage ? Math.max(page, 1) : Math.max(page, maxPages);
 
         var indicator = document.getElementById('classic-page-indicator');
@@ -1173,7 +1172,7 @@
         var prevBtn = document.getElementById('classic-prev-btn');
         if (prevBtn) prevBtn.disabled = (page <= 1);
         var nextBtn = document.getElementById('classic-next-btn');
-        if (nextBtn) document.getElementById('classic-next-btn').disabled = (items.length < countVal) || (page >= totalPages);
+        if (nextBtn) document.getElementById('classic-next-btn').disabled = isLastPage;
       }
 
       function renderClassicSearchResults(items, query, page) {
@@ -1182,8 +1181,14 @@
         state.selectedCardIndex = -1;
 
         if (!items || !items.length) {
-          container.innerHTML = '<div class="empty-state"><h2>検索結果が見つかりませんでした</h2><p>キーワードを変更するか、カテゴリーフィルターを切り替えてみてください。</p></div>';
-          document.getElementById('classic-pagination-bar').style.display = 'none';
+          if (page > 1) {
+            container.innerHTML = '<div class="empty-state"><h2>これ以上の検索結果はありません</h2><p>前のページに戻るか、キーワードを変更してください。</p></div>';
+            updateClassicPagination(page, []);
+          } else {
+            container.innerHTML = '<div class="empty-state"><h2>検索結果が見つかりませんでした</h2><p>キーワードを変更するか、カテゴリーフィルターを切り替えてみてください。</p></div>';
+            var pagBar = document.getElementById('classic-pagination-bar');
+            if (pagBar) pagBar.style.display = 'none';
+          }
           return;
         }
 
@@ -1663,12 +1668,18 @@
       addListener('classic-prev-btn', 'click', function () {
         if (state.classicPage > 1) {
           var qVal = document.getElementById('q').value.trim();
-          if (qVal) runClassicSearch(qVal, state.classicPage - 1);
+          if (qVal) {
+            runClassicSearch(qVal, state.classicPage - 1);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }
         }
       });
       addListener('classic-next-btn', 'click', function () {
         var qVal = document.getElementById('q').value.trim();
-        if (qVal) runClassicSearch(qVal, state.classicPage + 1);
+        if (qVal) {
+          runClassicSearch(qVal, state.classicPage + 1);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
       });
       var classicDeepBtn = document.getElementById('classic-deep-btn');
       if (classicDeepBtn) {
