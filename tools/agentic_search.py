@@ -1169,8 +1169,10 @@ def execute_unified_search(
     focus_query: str | None = "",
     max_tokens: int = 3000,
     max_scrape_length: int = 8000,
+    pageno: int = 1,
     base_url: str | None = None,
     timeout: float | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """Execute the unified search & scrape pipeline.
 
@@ -1216,8 +1218,10 @@ def execute_unified_search(
             time_range=time_range or "",
             include_domains=include_domains,
             exclude_domains=exclude_domains,
+            pageno=pageno,
             base_url=base_url,
             timeout=timeout,
+            **kwargs,
         )
         out = retrieval_resp.to_dict()
         out["markdown"] = retrieval_resp.to_markdown()
@@ -1226,6 +1230,7 @@ def execute_unified_search(
         out["search_depth"] = norm_depth
         out["results_count"] = len(out.get("results", []))
         out["scraped_count"] = sum(1 for r in retrieval_resp.results if r.is_scraped)
+        out["page"] = pageno
         return out
 
     # 1. URL Scrape Pipeline
@@ -1252,6 +1257,7 @@ def execute_unified_search(
             "scraped_count": 0,
             "estimated_tokens": 0,
             "max_tokens": max_tokens,
+            "page": pageno,
             "elapsed_ms": 0.0,
             "error": "検索クエリが空です。検索したいキーワードを指定してください。",
             "markdown": "検索クエリが空です。",
@@ -1304,11 +1310,14 @@ def execute_unified_search(
     }
     if tr_str:
         search_kwargs["time_range"] = tr_str
+    if pageno > 1:
+        search_kwargs["pageno"] = pageno
 
     try:
         search_res = search_func(**search_kwargs)
     except TypeError:
         search_kwargs.pop("time_range", None)
+        search_kwargs.pop("pageno", None)
         try:
             search_res = search_func(**search_kwargs)
         except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError) as exc:
@@ -1334,6 +1343,7 @@ def execute_unified_search(
             "scraped_count": 0,
             "estimated_tokens": 0,
             "max_tokens": max_tok,
+            "page": pageno,
             "elapsed_ms": elapsed_ms,
             "error": err_text,
             "markdown": f"### 検索エラー\n\n{err_text}",
@@ -1428,6 +1438,7 @@ def execute_unified_search(
         "infoboxes": infoboxes,
         "max_tokens": max_tok,
         "estimated_tokens": est_tokens,
+        "page": pageno,
         "elapsed_ms": elapsed_ms,
         "markdown": packed_markdown,
         "rag_prompt": TokenBudgeter.build_rag_prompt(clean_q, packed_markdown),
@@ -1443,9 +1454,16 @@ def execute_deep_search(
     include_highlights: bool = True,
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
+    categories: str | None = "",
+    engines: str | None = "",
+    time_range: str | None = "",
+    focus_query: str | None = "",
     max_tokens: int = 3000,
+    max_scrape_length: int = 8000,
+    pageno: int = 1,
     base_url: str | None = None,
     timeout: float | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """Execute the deep search pipeline (delegates to the unified search pipeline)."""
     depth_norm = (search_depth or "advanced").strip().lower()
@@ -1463,9 +1481,16 @@ def execute_deep_search(
         include_highlights=include_highlights,
         include_domains=include_domains,
         exclude_domains=exclude_domains,
+        categories=categories,
+        engines=engines,
+        time_range=time_range,
+        focus_query=focus_query,
         max_tokens=max_tokens,
+        max_scrape_length=max_scrape_length,
+        pageno=pageno,
         base_url=base_url,
         timeout=timeout,
+        **kwargs,
     )
 
 
@@ -1480,8 +1505,10 @@ def execute_retrieval_search(
     time_range: str = "",
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
+    pageno: int = 1,
     base_url: str | None = None,
     timeout: float | None = None,
+    **kwargs: Any,
 ) -> retrieval_models.RetrievalResponse:
     """Execute high-quality retrieval pipeline returning structured GenAI RetrievalResponse."""
     svc = retrieval_service.get_retrieval_service(search_func=search_func, scrape_func=scrape_func)
@@ -1494,6 +1521,8 @@ def execute_retrieval_search(
         time_range=time_range,
         include_domains=include_domains,
         exclude_domains=exclude_domains,
+        pageno=pageno,
         base_url=base_url,
         timeout=timeout,
+        **kwargs,
     )

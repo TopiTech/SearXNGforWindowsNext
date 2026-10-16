@@ -589,9 +589,12 @@ def execute_server_deep_search(
         categories: str = "",
         engines: str = "",
         time_range: str = "",
+        pageno: int = 1,
         base_url: str | None = None,
         timeout: float | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
+        eff_page = pageno if pageno > 1 else page_num
         return _search_in_process(
             webapp_mod=webapp_mod,
             query=query,
@@ -599,7 +602,7 @@ def execute_server_deep_search(
             categories=categories,
             engines=engines,
             time_range=time_range,
-            pageno=page_num,
+            pageno=eff_page,
             base_url=base_url,
             timeout=timeout,
         )
@@ -634,6 +637,7 @@ def execute_server_deep_search(
         focus_query=focus_query,
         max_tokens=max_tok,
         max_scrape_length=max_scrape_length,
+        pageno=page_num,
         base_url=safe_base_url,
         timeout=timeout,
     )
@@ -1103,7 +1107,14 @@ def sync_engines_to_settings_file(
                 dir_name = os.path.dirname(settings_path)
                 temp_path = None
                 try:
-                    with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8") as temp_file:
+                    with tempfile.NamedTemporaryFile(
+                        "w",
+                        dir=dir_name,
+                        prefix=".tmp_settings_sync_",
+                        suffix=".tmp",
+                        delete=False,
+                        encoding="utf-8",
+                    ) as temp_file:
                         temp_path = temp_file.name
                         temp_file.write(new_content)
                         temp_file.flush()

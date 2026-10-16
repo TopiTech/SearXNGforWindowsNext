@@ -18,6 +18,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+import agentic_search
 import mcp_server
 import searxng_cli
 import searxng_client
@@ -1140,6 +1141,103 @@ class TestAgentQueryPipelineIntegration(unittest.TestCase):
         assert null_id_resp is not None
         self.assertIsNone(null_id_resp["id"])
         self.assertEqual(null_id_resp["result"], {})
+
+    def test_unified_and_deep_search_pagination_passthrough(self) -> None:
+        """Verify pageno and kwargs passthrough in execute_unified_search and execute_deep_search."""
+        captured_kwargs: dict[str, Any] = {}
+
+        def mock_search(**kwargs: Any) -> dict[str, Any]:
+            captured_kwargs.update(kwargs)
+            return {"results": [{"title": "Page 2 Result", "url": "https://example.com/p2", "content": "Sample"}]}
+
+        def mock_scrape(url: str, **kwargs: Any) -> dict[str, Any]:
+            return {"title": "Page", "content": "Full content", "url": url}
+
+        # 1. execute_unified_search with pageno=2
+        res1 = agentic_search.execute_unified_search(
+            query="python async",
+            search_func=mock_search,
+            scrape_func=mock_scrape,
+            mode="fast",
+            pageno=2,
+        )
+        self.assertEqual(res1.get("page"), 2)
+        self.assertEqual(captured_kwargs.get("pageno"), 2)
+
+        # 2. execute_deep_search with categories, engines, time_range, pageno, and extra kwargs
+        captured_kwargs.clear()
+        res2 = agentic_search.execute_deep_search(
+            query="python generators",
+            search_func=mock_search,
+            scrape_func=mock_scrape,
+            search_depth="fast",
+            categories="it",
+            engines="duckduckgo",
+            time_range="month",
+            pageno=3,
+            custom_extra_param="safe_passthrough",
+        )
+        self.assertEqual(res2.get("page"), 3)
+        self.assertEqual(captured_kwargs.get("pageno"), 3)
+        self.assertEqual(captured_kwargs.get("categories"), "it")
+        self.assertEqual(captured_kwargs.get("engines"), "duckduckgo")
+        self.assertEqual(captured_kwargs.get("time_range"), "month")
+
+    @patch("searxng_client.unified_search")
+    def test_cli_search_pagination_unified_mode(self, mock_unified: MagicMock) -> None:
+        """Verify CLI search command forwards page argument when running in unified mode."""
+        mock_unified.return_value = {
+            "mode": "deep",
+            "query": "searxng",
+            "page": 4,
+            "markdown": "## Deep Search Results: `searxng`",
+        }
+        parser = searxng_cli.build_parser()
+        args = parser.parse_args(["search", "searxng", "--mode", "deep", "-p", "4"])
+
+        with patch("sys.stdout", new_callable=io.StringIO):
+            code = searxng_cli.cmd_search(args)
+            self.assertEqual(code, 0)
+            mock_unified.assert_called_once()
+            _, kwargs = mock_unified.call_args
+            self.assertEqual(kwargs.get("pageno"), 4)
+
+    def test_mcp_server_pagination_support(self) -> None:
+        """Verify MCP tools declare page property in schema and forward pageno in execution."""
+        # Check tool schemas
+        tools_resp = mcp_server.process_message(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+        )
+        self.assertIsNotNone(tools_resp)
+        assert tools_resp is not None
+        tools = tools_resp["result"]["tools"]
+        tool_map = {t["name"]: t for t in tools}
+
+        self.assertIn("page", tool_map["searxng_search"]["inputSchema"]["properties"])
+        self.assertIn("page", tool_map["searxng_deep_search"]["inputSchema"]["properties"])
+        self.assertIn("page", tool_map["searxng_retrieval"]["inputSchema"]["properties"])
+
+        # Test tool call with page=5
+        with patch("searxng_client.unified_search") as mock_unified:
+            mock_unified.return_value = {"mode": "deep", "query": "pytest", "markdown": "Results", "page": 5}
+            msg = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "searxng_search",
+                        "arguments": {"query": "pytest", "mode": "deep", "page": 5},
+                    },
+                }
+            )
+            resp = mcp_server.process_message(msg)
+            self.assertIsNotNone(resp)
+            assert resp is not None
+            self.assertFalse(resp["result"]["isError"])
+            mock_unified.assert_called_once()
+            _, kwargs = mock_unified.call_args
+            self.assertEqual(kwargs.get("pageno"), 5)
 
 
 if __name__ == "__main__":

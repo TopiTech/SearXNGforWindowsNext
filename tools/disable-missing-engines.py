@@ -17,11 +17,24 @@ def _atomic_write(file_path: str, data: str, encoding: str = "utf-8", newline: s
     directory = os.path.dirname(os.path.abspath(file_path))
     os.makedirs(directory, exist_ok=True)
     temp_fd, temp_path = tempfile.mkstemp(prefix=".tmp_cfg_", dir=directory, text=True)
+    fd_closed = False
     try:
-        with open(temp_fd, "w", encoding=encoding, newline=newline) as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
+        try:
+            with open(temp_fd, "w", encoding=encoding, newline=newline) as f:
+                fd_closed = True
+                f.write(data)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except (AttributeError, OSError):
+                    pass
+        finally:
+            if not fd_closed:
+                try:
+                    os.close(temp_fd)
+                except OSError:
+                    pass
+                fd_closed = True
 
         last_err = None
         for attempt in range(5):
@@ -46,6 +59,13 @@ def _atomic_write(file_path: str, data: str, encoding: str = "utf-8", newline: s
             except OSError:
                 pass
         raise
+    finally:
+        if not fd_closed:
+            try:
+                os.close(temp_fd)
+            except OSError:
+                pass
+            fd_closed = True
 
 
 def _unquote(s):

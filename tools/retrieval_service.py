@@ -91,14 +91,23 @@ class RetrievalService:
         """Fetch raw results using self.search_func, preserving error/partial metadata."""
         try:
             res = self.search_func(**kwargs)
-            if isinstance(res, dict):
-                return res
-            if isinstance(res, list):
-                return {"results": res}
-            return {"results": []}
+        except TypeError:
+            kwargs.pop("time_range", None)
+            kwargs.pop("pageno", None)
+            try:
+                res = self.search_func(**kwargs)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Search query failed: %s", exc)
+                return {"error": str(exc), "results": []}
         except Exception as exc:  # noqa: BLE001
             logger.warning("Search query failed: %s", exc)
             return {"error": str(exc), "results": []}
+
+        if isinstance(res, dict):
+            return res
+        if isinstance(res, list):
+            return {"results": res}
+        return {"results": []}
 
     def _scrape_page(self, url: str, **kwargs: Any) -> dict[str, Any]:
         """Scrape page content using self.scrape_func."""
@@ -220,8 +229,10 @@ class RetrievalService:
         time_range: str = "",
         include_domains: list[str] | None = None,
         exclude_domains: list[str] | None = None,
+        pageno: int = 1,
         base_url: str | None = None,
         timeout: float | None = None,
+        **kwargs: Any,
     ) -> RetrievalResponse:
         """Execute the end-to-end structured retrieval pipeline."""
         t0 = time.perf_counter()
@@ -269,6 +280,8 @@ class RetrievalService:
             }
             if time_range:
                 search_args["time_range"] = time_range
+            if pageno > 1:
+                search_args["pageno"] = pageno
 
             raw_run_res = self._fetch_query_results(**search_args)
             if isinstance(raw_run_res, list):

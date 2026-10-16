@@ -460,8 +460,10 @@ def unified_search(
     focus_query: str = "",
     max_tokens: int = 3000,
     max_scrape_length: int = 8000,
+    pageno: int = 1,
     base_url: str | None = None,
     timeout: float | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """Execute unified search or URL scraping (`auto`, `deep`, `fast`, or `scrape`).
 
@@ -485,8 +487,10 @@ def unified_search(
         focus_query=focus_query,
         max_tokens=max_tokens,
         max_scrape_length=max_scrape_length,
+        pageno=pageno,
         base_url=base_url,
         timeout=timeout,
+        **kwargs,
     )
 
 
@@ -497,9 +501,16 @@ def search_deep(
     include_highlights: bool = True,
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
+    categories: str = "",
+    engines: str = "",
+    time_range: str = "",
+    focus_query: str = "",
     max_tokens: int = 3000,
+    max_scrape_length: int = 8000,
+    pageno: int = 1,
     base_url: str | None = None,
     timeout: float | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """Execute deep, agentic search with speculative page fetching and BM25 highlights.
 
@@ -511,7 +522,13 @@ def search_deep(
         include_highlights: Whether to extract relevant passage highlights (default True).
         include_domains: Optional list of domains to restrict search to.
         exclude_domains: Optional list of domains to exclude.
+        categories: Optional category filter (e.g. 'it', 'general').
+        engines: Optional engine filter (e.g. 'bing,duckduckgo').
+        time_range: Optional time range ('day', 'week', 'month', 'year').
+        focus_query: Optional keywords for highlight extraction.
         max_tokens: Maximum tokens for packed context (default 3000).
+        max_scrape_length: Maximum characters to scrape per page.
+        pageno: Page number (default 1).
         base_url: Optional SearXNG base URL override.
         timeout: Optional request timeout in seconds.
 
@@ -528,9 +545,16 @@ def search_deep(
         include_highlights=include_highlights,
         include_domains=include_domains,
         exclude_domains=exclude_domains,
+        categories=categories,
+        engines=engines,
+        time_range=time_range,
+        focus_query=focus_query,
         max_tokens=max_tokens,
+        max_scrape_length=max_scrape_length,
+        pageno=pageno,
         base_url=base_url,
         timeout=timeout,
+        **kwargs,
     )
 
 
@@ -543,8 +567,10 @@ def retrieval_search(
     time_range: str = "",
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
+    pageno: int = 1,
     base_url: str | None = None,
     timeout: float | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """Execute high-quality retrieval pipeline returning structured GenAI schema dict.
 
@@ -557,6 +583,7 @@ def retrieval_search(
         time_range: Optional time range ('day', 'week', 'month', 'year').
         include_domains: Optional list of domains to restrict to.
         exclude_domains: Optional list of domains to exclude.
+        pageno: Optional page number (default 1).
         base_url: Optional base URL override.
         timeout: Optional request timeout in seconds.
 
@@ -575,8 +602,10 @@ def retrieval_search(
         time_range=time_range,
         include_domains=include_domains,
         exclude_domains=exclude_domains,
+        pageno=pageno,
         base_url=base_url,
         timeout=timeout,
+        **kwargs,
     )
     data = resp.to_dict()
     data["markdown"] = resp.to_markdown()

@@ -4119,6 +4119,91 @@ class TestPatchHardeningM2(unittest.TestCase):
         self.assertIn("socket.inet_aton(host_clean)", content)
         self.assertIn("prev_pin = getattr(_thread_local_dns, 'pin', None)", content)
 
+    def test_atomic_write_descriptor_closed_on_open_failure(self):
+        """Verify _atomic_write closes temp_fd even if open() fails, preventing fd leak and WinError 32."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = os.path.join(tmpdir, "out.txt")
+            captured_fds = []
+
+            orig_mkstemp = tempfile.mkstemp
+
+            def mock_mkstemp(*args, **kwargs):
+                fd, path = orig_mkstemp(*args, **kwargs)
+                captured_fds.append(fd)
+                return fd, path
+
+            # Test apply_patches._atomic_write
+            with (
+                mock.patch("tempfile.mkstemp", side_effect=mock_mkstemp),
+                mock.patch("builtins.open", side_effect=OSError("Simulated low-level open failure")),
+                self.assertRaises(OSError),
+            ):
+                apply_patches._atomic_write(target, "content")
+
+            self.assertTrue(len(captured_fds) > 0)
+            for fd in captured_fds:
+                with self.assertRaises(OSError):
+                    # If fd was properly closed, os.close(fd) must raise OSError (EBADF / invalid handle)
+                    os.close(fd)
+
+            captured_fds.clear()
+            # Test disable_missing_engines._atomic_write
+            with (
+                mock.patch("tempfile.mkstemp", side_effect=mock_mkstemp),
+                mock.patch("builtins.open", side_effect=OSError("Simulated low-level open failure")),
+                self.assertRaises(OSError),
+            ):
+                disable_missing_engines._atomic_write(target, "content")
+
+            self.assertTrue(len(captured_fds) > 0)
+            for fd in captured_fds:
+                with self.assertRaises(OSError):
+                    os.close(fd)
+
+    def test_atomic_write_success_and_cleanup(self):
+        """Verify _atomic_write creates file atomically and cleans up any temp files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = os.path.join(tmpdir, "out.txt")
+            apply_patches._atomic_write(target, "test apply_patches")
+            with open(target, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), "test apply_patches")
+            self.assertEqual(len(os.listdir(tmpdir)), 1)
+
+            disable_missing_engines._atomic_write(target, "test disable_missing_engines")
+            with open(target, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), "test disable_missing_engines")
+            self.assertEqual(len(os.listdir(tmpdir)), 1)
+
+    def test_sync_engines_temporary_file_naming(self):
+        """Verify sync_engines_to_settings_file uses prefix '.tmp_settings_sync_' and suffix '.tmp'."""
+        import webui_next
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = os.path.join(tmpdir, "settings.yml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(
+                    "use_default_settings: true\nengines:\n  - name: google\n    engine: google\n    disabled: true\n"
+                )
+
+            named_temp_calls = []
+            orig_named_temp = tempfile.NamedTemporaryFile
+
+            def mock_named_temp(*args, **kwargs):
+                named_temp_calls.append(kwargs)
+                return orig_named_temp(*args, **kwargs)
+
+            with mock.patch("tempfile.NamedTemporaryFile", side_effect=mock_named_temp):
+                res = webui_next.sync_engines_to_settings_file(
+                    enabled_engines=["google"],
+                    disabled_engines=[],
+                    settings_path=cfg_path,
+                )
+                self.assertTrue(res)
+
+            self.assertTrue(len(named_temp_calls) > 0)
+            self.assertEqual(named_temp_calls[0].get("prefix"), ".tmp_settings_sync_")
+            self.assertEqual(named_temp_calls[0].get("suffix"), ".tmp")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

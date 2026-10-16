@@ -98,6 +98,12 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                     "minimum": 500,
                     "maximum": 16000,
                 },
+                "page": {
+                    "type": "integer",
+                    "description": "Optional search page number (default 1).",
+                    "default": 1,
+                    "minimum": 1,
+                },
             },
             "required": ["query"],
         },
@@ -186,6 +192,12 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                     "minimum": 500,
                     "maximum": 16000,
                 },
+                "page": {
+                    "type": "integer",
+                    "description": "Optional search page number (default 1).",
+                    "default": 1,
+                    "minimum": 1,
+                },
             },
             "required": ["query"],
         },
@@ -244,6 +256,12 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                     "description": "Output format: 'markdown' (default) or 'json_ai' (structured schema).",
                     "enum": ["markdown", "json_ai"],
                     "default": "markdown",
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Optional search page number (default 1).",
+                    "default": 1,
+                    "minimum": 1,
                 },
             },
             "required": ["query"],
@@ -385,6 +403,11 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         raw_exc = arguments.get("exclude_domains")
         exclude_domains = [str(d) for d in raw_exc] if isinstance(raw_exc, list) else None
 
+        try:
+            page = max(1, int(arguments.get("page", 1)))
+        except (ValueError, TypeError):
+            page = 1
+
         use_unified = (
             mode in ("fast", "balanced", "deep", "scrape")
             or search_depth is not None
@@ -395,16 +418,19 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         )
 
         if mode == "balanced":
-            data = searxng_client.retrieval_search(
-                query=query,
-                mode="balanced",
-                count=count,
-                categories=categories,
-                engines=engines,
-                time_range=time_range,
-                include_domains=include_domains,
-                exclude_domains=exclude_domains,
-            )
+            ret_kwargs: dict[str, Any] = {
+                "query": query,
+                "mode": "balanced",
+                "count": count,
+                "categories": categories,
+                "engines": engines,
+                "time_range": time_range,
+                "include_domains": include_domains,
+                "exclude_domains": exclude_domains,
+            }
+            if page > 1:
+                ret_kwargs["pageno"] = page
+            data = searxng_client.retrieval_search(**ret_kwargs)
             is_error = bool(data.get("error"))
             formatted_text = searxng_client.format_markdown(data)
         elif use_unified:
@@ -413,29 +439,35 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
             except (ValueError, TypeError):
                 max_tokens = 3000
             effective_mode = _resolve_effective_mode(mode, search_depth, query)
-            data = searxng_client.unified_search(
-                query=query,
-                mode=effective_mode,
-                search_depth=str(search_depth or "advanced"),
-                max_results=count,
-                include_highlights=include_highlights,
-                categories=categories,
-                engines=engines,
-                time_range=time_range,
-                include_domains=include_domains,
-                exclude_domains=exclude_domains,
-                max_tokens=max_tokens,
-            )
+            uni_kwargs: dict[str, Any] = {
+                "query": query,
+                "mode": effective_mode,
+                "search_depth": str(search_depth or "advanced"),
+                "max_results": count,
+                "include_highlights": include_highlights,
+                "categories": categories,
+                "engines": engines,
+                "time_range": time_range,
+                "include_domains": include_domains,
+                "exclude_domains": exclude_domains,
+                "max_tokens": max_tokens,
+            }
+            if page > 1:
+                uni_kwargs["pageno"] = page
+            data = searxng_client.unified_search(**uni_kwargs)
             is_error = bool(data.get("error"))
             formatted_text = searxng_client.format_markdown(data)
         else:
-            data = searxng_client.search(
-                query=query,
-                count=count,
-                categories=categories,
-                engines=engines,
-                time_range=time_range,
-            )
+            search_kwargs: dict[str, Any] = {
+                "query": query,
+                "count": count,
+                "categories": categories,
+                "engines": engines,
+                "time_range": time_range,
+            }
+            if page > 1:
+                search_kwargs["pageno"] = page
+            data = searxng_client.search(**search_kwargs)
             is_error = bool(data.get("error"))
             formatted_text = searxng_client.format_search_markdown(data)
 
@@ -466,16 +498,24 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         exclude_domains = [str(d) for d in raw_exc] if isinstance(raw_exc, list) else None
         out_format = str(arguments.get("format") or "markdown").strip().lower()
 
-        data = searxng_client.retrieval_search(
-            query=query,
-            mode=ret_mode,
-            count=count,
-            categories=categories,
-            engines=engines,
-            time_range=time_range,
-            include_domains=include_domains,
-            exclude_domains=exclude_domains,
-        )
+        try:
+            page = max(1, int(arguments.get("page", 1)))
+        except (ValueError, TypeError):
+            page = 1
+
+        ret_kwargs = {
+            "query": query,
+            "mode": ret_mode,
+            "count": count,
+            "categories": categories,
+            "engines": engines,
+            "time_range": time_range,
+            "include_domains": include_domains,
+            "exclude_domains": exclude_domains,
+        }
+        if page > 1:
+            ret_kwargs["pageno"] = page
+        data = searxng_client.retrieval_search(**ret_kwargs)
         is_error = bool(data.get("error"))
         if out_format == "json_ai":
             formatted_text = json.dumps(data, ensure_ascii=False, indent=2)
@@ -540,15 +580,23 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         except (ValueError, TypeError):
             max_tokens = 3000
 
-        data = searxng_client.search_deep(
-            query=query,
-            search_depth=search_depth,
-            max_results=max_results,
-            include_highlights=include_highlights,
-            include_domains=include_domains,
-            exclude_domains=exclude_domains,
-            max_tokens=max_tokens,
-        )
+        try:
+            page = max(1, int(arguments.get("page", 1)))
+        except (ValueError, TypeError):
+            page = 1
+
+        deep_kwargs = {
+            "query": query,
+            "search_depth": search_depth,
+            "max_results": max_results,
+            "include_highlights": include_highlights,
+            "include_domains": include_domains,
+            "exclude_domains": exclude_domains,
+            "max_tokens": max_tokens,
+        }
+        if page > 1:
+            deep_kwargs["pageno"] = page
+        data = searxng_client.search_deep(**deep_kwargs)
         is_error = bool(data.get("error"))
         formatted_text = searxng_client.format_deep_search_markdown(data)
 

@@ -366,6 +366,7 @@ def cmd_search(args: argparse.Namespace) -> int:
             time_range=args.time_range,
             include_domains=inc_domains or None,
             exclude_domains=exc_domains or None,
+            pageno=getattr(args, "page", 1),
             base_url=args.base_url,
             timeout=args.timeout,
         )
@@ -390,6 +391,7 @@ def cmd_search(args: argparse.Namespace) -> int:
             exclude_domains=exc_domains or None,
             max_tokens=getattr(args, "max_tokens", 3000),
             max_scrape_length=getattr(args, "max_chars", 8000),
+            pageno=getattr(args, "page", 1),
             base_url=args.base_url,
             timeout=args.timeout,
         )
