@@ -885,6 +885,35 @@ class TestSearXNGCLI(unittest.TestCase):
         mock_deep.assert_called_once()
         self.assertFalse(mock_deep.call_args[1]["include_highlights"])
 
+    @patch("searxng_client.search_deep")
+    def test_mcp_deep_search_forwards_category_engine_time_range(self, mock_deep: MagicMock) -> None:
+        """Verify searxng_deep_search forwards categories, engines, and time_range."""
+        mock_deep.return_value = {"query": "python", "markdown": "## Deep Results"}
+        raw_msg = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 102,
+                "method": "tools/call",
+                "params": {
+                    "name": "searxng_deep_search",
+                    "arguments": {
+                        "query": "python",
+                        "categories": "it",
+                        "engines": "duckduckgo,bing",
+                        "time_range": "week",
+                    },
+                },
+            }
+        )
+        resp = mcp_server.process_message(raw_msg)
+        self.assertIsNotNone(resp)
+        self.assertFalse(resp["result"]["isError"])
+        mock_deep.assert_called_once()
+        kwargs = mock_deep.call_args[1]
+        self.assertEqual(kwargs.get("categories"), "it")
+        self.assertEqual(kwargs.get("engines"), "duckduckgo,bing")
+        self.assertEqual(kwargs.get("time_range"), "week")
+
     def test_cli_search_no_highlights_flag(self) -> None:
         """Verify CLI search subcommand supports --no-highlights flag."""
         parser = searxng_cli.build_parser()

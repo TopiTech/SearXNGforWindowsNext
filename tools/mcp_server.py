@@ -198,6 +198,19 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                     "default": 1,
                     "minimum": 1,
                 },
+                "categories": {
+                    "type": "string",
+                    "description": "Optional search category filter (e.g., 'it', 'general', 'science').",
+                },
+                "engines": {
+                    "type": "string",
+                    "description": "Optional comma-separated search engine names (e.g., 'duckduckgo', 'bing').",
+                },
+                "time_range": {
+                    "type": "string",
+                    "description": "Optional time filter ('day', 'week', 'month', 'year').",
+                    "enum": ["day", "week", "month", "year"],
+                },
             },
             "required": ["query"],
         },
@@ -585,6 +598,10 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         except (ValueError, TypeError):
             page = 1
 
+        categories = str(arguments.get("categories") or arguments.get("category") or "").strip()
+        engines = str(arguments.get("engines") or arguments.get("engine") or "").strip()
+        time_range = str(arguments.get("time_range") or "").strip()
+
         deep_kwargs = {
             "query": query,
             "search_depth": search_depth,
@@ -596,6 +613,12 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         }
         if page > 1:
             deep_kwargs["pageno"] = page
+        if categories:
+            deep_kwargs["categories"] = categories
+        if engines:
+            deep_kwargs["engines"] = engines
+        if time_range:
+            deep_kwargs["time_range"] = time_range
         data = searxng_client.search_deep(**deep_kwargs)
         is_error = bool(data.get("error"))
         formatted_text = searxng_client.format_deep_search_markdown(data)

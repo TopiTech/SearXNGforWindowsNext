@@ -1540,6 +1540,12 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
     return { query: query, items: items };
   }
 
+  function escapeMdLink(title, url) {
+    var safeTitle = (title || url || '').replace(/\\[/g, '\\\\[').replace(/\\]/g, '\\\\\\]');
+    var safeUrl = (url || '').replace(/\\(/g, '%28').replace(/\\)/g, '%29');
+    return { title: safeTitle, url: safeUrl };
+  }
+
   function buildPageMarkdown(asPrompt) {
     var data = collectPageResults();
     var lines = ['## Web Search Results: `' + data.query + '`\\n'];
@@ -1549,7 +1555,8 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
     });
     data.items.forEach(function (it) {
       var src = it.source ? ' `[' + it.source + ']`' : '';
-      lines.push('### [' + it.rank + '] [' + it.title + '](' + it.url + ')' + src);
+      var safe = escapeMdLink(it.title, it.url);
+      lines.push('### [' + it.rank + '] [' + safe.title + '](' + safe.url + ')' + src);
       if (it.scraped) {
         lines.push('> **抽出本文**:\\n> ' + it.scraped.replace(/\\n/g, '\\n> ') + '\\n');
       } else if (it.content) {
@@ -1600,7 +1607,8 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
       citeBtn.title = 'AIプロンプト用にMarkdown引用形式でコピー';
 
       citeBtn.addEventListener('click', function () {
-        var md = '### [' + titleText + '](' + targetUrl + ')\\n' + (snippetText ? '> ' + snippetText : '');
+        var safe = escapeMdLink(titleText, targetUrl);
+        var md = '### [' + safe.title + '](' + safe.url + ')\\n' + (snippetText ? '> ' + snippetText : '');
         copyText(md, citeBtn, '✅ 引用コピー済');
       });
 
@@ -4013,16 +4021,43 @@ footer.ws-footer {
             btn._copyTimer = null;
           }, 1600);
         };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text).then(done).catch(done);
-        } else {
+        var fail = function () {
+          if (btn._copyTimer) clearTimeout(btn._copyTimer);
+          btn.innerHTML = icon('alert') + '<span>コピー失敗</span>';
+          btn._copyTimer = setTimeout(function () {
+            btn.innerHTML = orig;
+            btn._copyTimer = null;
+          }, 2000);
+        };
+        var fallbackCopy = function () {
           var ta = document.createElement('textarea');
           ta.value = text;
+          ta.setAttribute('readonly', '');
+          ta.style.position = 'fixed';
+          ta.style.top = '0';
+          ta.style.left = '0';
+          ta.style.opacity = '0';
+          ta.style.pointerEvents = 'none';
           document.body.appendChild(ta);
+          ta.focus();
           ta.select();
-          try { document.execCommand('copy'); } catch (e) {}
+          var ok = false;
+          try {
+            ok = document.execCommand('copy');
+          } catch (e) {
+            ok = false;
+          }
           document.body.removeChild(ta);
-          done();
+          if (ok) {
+            done();
+          } else {
+            fail();
+          }
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done).catch(fallbackCopy);
+        } else {
+          fallbackCopy();
         }
       }
 
@@ -4064,6 +4099,9 @@ footer.ws-footer {
         if (state.mode === 'deep') {
           var depth = document.getElementById('opt-depth').value;
           if (depth && depth !== 'advanced') params.set('depth', depth);
+          var siteInput = document.getElementById('opt-site');
+          var siteVal = siteInput ? siteInput.value.trim() : '';
+          if (siteVal) params.set('site', siteVal);
         } else if (state.mode === 'classic') {
           if (state.classicCategory) params.set('category', state.classicCategory);
           var trEl = document.getElementById('classic-time-range');
@@ -4094,9 +4132,13 @@ footer.ws-footer {
         var tr = p.get('time_range') || '';
         var pg = parseInt(p.get('page') || '1', 10) || 1;
         var depth = p.get('depth') || 'advanced';
+        var site = p.get('site') || '';
 
         document.getElementById('q').value = q;
         document.getElementById('opt-depth').value = depth;
+        if (document.getElementById('opt-site')) {
+          document.getElementById('opt-site').value = site;
+        }
         if (document.getElementById('classic-time-range')) {
           document.getElementById('classic-time-range').value = tr;
         }
@@ -4134,6 +4176,12 @@ footer.ws-footer {
             if (cAns) cAns.innerHTML = '';
             var cPag = document.getElementById('classic-pagination-bar');
             if (cPag) cPag.style.display = 'none';
+            state.markdown = '';
+            state.prompt = '';
+            state.jsonStr = '';
+            state.curlStr = '';
+            state.raw = null;
+            updateContextView();
             bindSampleQueryChips();
           }
         } finally {
@@ -4258,18 +4306,20 @@ footer.ws-footer {
       }
 
       function getActiveAutocompleteBackend() {
-        var ac = localStorage.getItem('sxng_pref_autocomplete');
+        var ac = safeGetStorage('sxng_pref_autocomplete', null);
         if (ac) return ac;
         var sel = document.getElementById('pref-autocomplete');
         return sel ? sel.value : 'duckduckgo';
       }
 
       function fetchSuggestions(query) {
-        if (!query || query.length < 2 || isUrlText(query) || getActiveAutocompleteBackend() === 'off') {
+        var backend = getActiveAutocompleteBackend();
+        if (!query || query.length < 2 || isUrlText(query) || backend === 'off') {
           closeSuggest();
           return;
         }
-        fetch('/autocompleter?q=' + encodeURIComponent(query), {
+        var extra = (backend && backend !== 'off') ? ('&autocomplete=' + encodeURIComponent(backend)) : '';
+        fetch('/autocompleter?q=' + encodeURIComponent(query) + extra, {
           headers: {
             'X-Requested-With': 'XMLHttpRequest',
             'Accept': 'application/json'
@@ -4278,8 +4328,10 @@ footer.ws-footer {
           .then(function (r) { return r.json(); })
           .then(function (data) {
             var curQ = document.getElementById('q').value.trim();
-            if (!curQ || isUrlText(curQ)) {
-              closeSuggest();
+            if (!curQ || isUrlText(curQ) || curQ.toLowerCase() !== query.toLowerCase()) {
+              if (!curQ || isUrlText(curQ)) {
+                closeSuggest();
+              }
               return;
             }
             var list = extractSuggestions(data);
@@ -4432,6 +4484,15 @@ footer.ws-footer {
           loadSettingsDashboard();
         } else {
           syncInputOptionsVisibility();
+        }
+
+        var tBar = document.getElementById('telemetry-bar');
+        if (tBar) {
+          if (mode !== 'deep') {
+            tBar.classList.remove('visible');
+          } else if (state.markdown) {
+            tBar.classList.add('visible');
+          }
         }
 
         if (!skipHistory) {
@@ -5561,10 +5622,12 @@ footer.ws-footer {
 
             var badges = document.getElementById('telemetry-badges');
             if (telBar) telBar.classList.add('visible');
-            badges.innerHTML =
-              '<span class="pill pill-emerald">' + icon('check', 'ui-icon-sm') + ' 本文抽出完了 (' + escapeHtml(res.char_count || 0) + ' 文字)</span>' +
-              '<span class="pill pill-accent">~' + escapeHtml(res.estimated_tokens || 0) + ' tokens</span>' +
-              '<span class="pill">' + escapeHtml(res.elapsed_ms || 0) + ' ms</span>';
+            if (badges) {
+              badges.innerHTML =
+                '<span class="pill pill-emerald">' + icon('check', 'ui-icon-sm') + ' 本文抽出完了 (' + escapeHtml(res.char_count || 0) + ' 文字)</span>' +
+                '<span class="pill pill-accent">~' + escapeHtml(res.estimated_tokens || 0) + ' tokens</span>' +
+                '<span class="pill">' + escapeHtml(res.elapsed_ms || 0) + ' ms</span>';
+            }
 
             container.innerHTML = '';
             var card = document.createElement('article');
@@ -6279,6 +6342,20 @@ footer.ws-footer {
       var initTimeRange = urlParams.get('time_range');
       var initPage = parseInt(urlParams.get('page') || urlParams.get('pageno'), 10) || 1;
       var initQ = urlParams.get('q') || urlParams.get('url');
+      var initSite = urlParams.get('site');
+      var initCount = urlParams.get('count') || urlParams.get('max_results');
+      var initTokens = urlParams.get('tokens') || urlParams.get('max_tokens');
+
+      if (initSite && document.getElementById('opt-site')) {
+        document.getElementById('opt-site').value = initSite;
+      }
+      if (initCount) {
+        if (document.getElementById('opt-count')) document.getElementById('opt-count').value = initCount;
+        if (document.getElementById('classic-count')) document.getElementById('classic-count').value = initCount;
+      }
+      if (initTokens && document.getElementById('opt-tokens')) {
+        document.getElementById('opt-tokens').value = initTokens;
+      }
 
       if (initDepth && ['advanced', 'code', 'basic', 'fast'].indexOf(initDepth) !== -1) {
         document.getElementById('opt-depth').value = initDepth;
