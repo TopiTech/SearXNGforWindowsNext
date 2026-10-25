@@ -140,7 +140,7 @@ COMMUNITY_DOMAINS: set[str] = {
     "reddit.com",
 }
 
-SPAM_PATTERNS: list[re.Pattern] = [
+SPAM_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"copypaste", re.IGNORECASE),
     re.compile(r"scraper", re.IGNORECASE),
     re.compile(r"mirror\.", re.IGNORECASE),
@@ -404,7 +404,7 @@ class RetrievalResponse:
             if item.evidence:
                 for ev in item.evidence:
                     heading_str = f"**{ev.heading}**: " if ev.heading and ev.heading != "General" else ""
-                    quote_text = "\n".join(f"> {l}" for l in ev.text.split("\n"))
+                    quote_text = "\n".join(f"> {line}" for line in ev.text.split("\n"))
                     lines.append(f"- **[{ev.id}]** {heading_str}\n{quote_text}\n")
             elif item.snippet:
                 lines.append(f"> {item.snippet}\n")

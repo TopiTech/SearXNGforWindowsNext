@@ -134,7 +134,7 @@ class QueryProcessor:
         "どちら",
     }
 
-    COMPARISON_PATTERNS: ClassVar[list[re.Pattern]] = [
+    COMPARISON_PATTERNS: ClassVar[list[re.Pattern[str]]] = [
         re.compile(
             r"(?:^|\s|[^\w])['\"「『【]?([a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f-]+(?:\s+[a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f-]+){0,3})['\"」』】]?\s*(?:vs\.?|versus|compared\s+to)\s*['\"「『【]?([a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f-]+(?:\s+[a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f-]+){0,3})['\"」』】]?(?:\s|[^\w]|$)",
             re.IGNORECASE,

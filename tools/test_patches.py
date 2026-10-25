@@ -18,19 +18,22 @@ import socket
 import stat
 import sys
 import tempfile
+import types
 import unittest
 from typing import Any
 from unittest import mock
 
+idna: types.ModuleType | None
 try:
     import idna
 except ImportError:
-    idna = None  # type: ignore[assignment]
+    idna = None
 
+flask: types.ModuleType | None
 try:
     import flask
 except ImportError:
-    flask = None  # type: ignore[assignment]
+    flask = None
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -656,7 +659,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         self.assertNotIn(".x{}", out)
         self.assertEqual(strip("<script>only bad</script><!-- c -->"), "")
         self.assertEqual(strip(""), "")
-        self.assertEqual(strip(None), "")  # type: ignore[arg-type]
+        self.assertEqual(strip(None), "")
 
         # Entities are decoded (convert_charrefs=True).
         self.assertEqual(strip("a &amp; b &lt;c&gt;"), "a & b <c>")

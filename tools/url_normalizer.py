@@ -78,7 +78,7 @@ class URLNormalizer:
         "ftp": 21,
     }
 
-    UNRESERVED_PAT: ClassVar[re.Pattern] = re.compile(r"%([0-9a-fA-F]{2})")
+    UNRESERVED_PAT: ClassVar[re.Pattern[str]] = re.compile(r"%([0-9a-fA-F]{2})")
 
     @classmethod
     def is_signed_url(cls, query_params: dict[str, list[str]]) -> bool:

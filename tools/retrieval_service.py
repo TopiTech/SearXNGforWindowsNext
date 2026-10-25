@@ -23,7 +23,7 @@ from typing import Any
 from cross_encoder_rerank import CrossEncoderReranker
 from deduplication import ResultDeduplicator
 from lexical_rerank import LexicalReranker
-from passage_chunker import HeadingPassageChunker, HTMLMetadataExtractor, SecurityScanner
+from passage_chunker import EvidencePassage, HeadingPassageChunker, HTMLMetadataExtractor, SecurityScanner
 from query_pipeline import QueryProcessor
 from rank_fusion import ReciprocalRankFusion, ScoreComponents
 from retrieval_models import (
@@ -480,7 +480,7 @@ class RetrievalService:
             date_conf = meta.get("date_confidence")
 
             # Extract evidence passages if scraped body is available
-            evidence_list = []
+            evidence_list: list[EvidencePassage] = []
             security_flags: list[str] = []
 
             for meta_flag in SecurityScanner.scan_for_injection(f"{item_title}\n{snippet}"):

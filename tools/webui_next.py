@@ -99,7 +99,7 @@ class _HTMLTextExtractor(HTMLParser):
         return "".join(self._parts)
 
 
-def _strip_html_to_text(sample_html: str) -> str:
+def _strip_html_to_text(sample_html: str | None) -> str:
     """Linear-time tag stripping for the scrape fallback text extractor.
 
     Uses :class:`_HTMLTextExtractor` instead of chained regex substitutions so

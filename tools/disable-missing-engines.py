@@ -5,9 +5,11 @@ import shutil
 import sys
 import tempfile
 import time
+import types
 
+yaml: types.ModuleType | None
 try:
-    import yaml  # type: ignore[untyped-import]
+    import yaml
 except ImportError:
     yaml = None
 
