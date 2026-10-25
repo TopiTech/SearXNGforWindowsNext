@@ -932,6 +932,10 @@ class TestWebUIRateLimiting(unittest.TestCase):
                 break
         self.assertTrue(seen_429, "Spoofed XFF headers must not bypass the limiter")
 
+    def test_rate_limit_applies_to_trailing_slash_path(self) -> None:
+        """Trailing slash on rate limited routes must NOT bypass token bucket limits."""
+        self._exhaust_then_verify_429(f"{self.LIMITED_DUMMY}/", 25)
+
 
 class TestWebUIImageGrid(unittest.TestCase):
     """Test responsive image gallery grid for image category."""
@@ -1369,6 +1373,21 @@ class TestWebUIRefinedBehaviors(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(mock_save.call_count, 1)
 
+    def test_settings_engines_post_trailing_slash_rejects_cross_origin(self) -> None:
+        """Trailing slash on state-changing routes must NOT bypass CSRF Origin check."""
+        app = Flask(__name__)
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        with patch("webui_next.save_engines_settings_data") as mock_save:
+            resp = client.post(
+                "/api/settings/engines/",
+                json={"enabled_engines": ["google"]},
+                headers={"Origin": "https://evil.example.com"},
+            )
+            self.assertEqual(resp.status_code, 403)
+            self.assertEqual(mock_save.call_count, 0)
+
     def test_save_engines_rejects_yaml_injection_names(self) -> None:
         """Engine names with YAML structure characters must never reach settings.yml or cookies."""
         app = Flask(__name__)
@@ -1607,7 +1626,11 @@ class TestWebUIRefinedBehaviors(unittest.TestCase):
             def search_autocomplete(backend: str, q: str, lang: str) -> list[str]:
                 return ["検索エンジン", "検索結果"]
 
-        with patch.dict("sys.modules", {"searx.autocomplete": MockSearxAutocomplete()}):
+        mock_ac = MockSearxAutocomplete()
+        with (
+            patch.dict("sys.modules", {"searx.autocomplete": mock_ac}),
+            patch("searx.autocomplete", mock_ac, create=True),
+        ):
             resp = client.get("/autocompleter?q=検&format=json")
             self.assertEqual(resp.status_code, 200)
             raw_text = resp.get_data(as_text=True)

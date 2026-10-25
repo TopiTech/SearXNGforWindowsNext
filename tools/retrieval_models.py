@@ -158,7 +158,7 @@ def classify_source_type(domain_or_url: str) -> str:
     """Classify domain or URL into documentation, source_code, academic, community, news, or general."""
     if not domain_or_url:
         return "general"
-    domain = extract_domain(domain_or_url) if ("://" in domain_or_url or "/" in domain_or_url) else domain_or_url
+    domain = extract_domain(domain_or_url)
     if not domain:
         return "general"
     dom = domain.lower().removeprefix("www.")
@@ -198,7 +198,7 @@ def compute_source_quality(
     """
     if not domain_or_url:
         return 0.5
-    domain = extract_domain(domain_or_url) if ("://" in domain_or_url or "/" in domain_or_url) else domain_or_url
+    domain = extract_domain(domain_or_url)
     if not domain:
         return 0.5
     dom = domain.lower().removeprefix("www.")
@@ -232,8 +232,9 @@ def compute_source_quality(
 
 def escape_markdown_link(title: str, url: str) -> tuple[str, str]:
     """Escape brackets in Markdown title and parens in target URL."""
-    safe_title = (title or url or "").replace("[", "\\[").replace("]", "\\]")
-    safe_url = (url or "").replace("(", "%28").replace(")", "%29")
+    clean_title = re.sub(r"\s+", " ", (title or url or "")).strip()
+    safe_title = clean_title.replace("[", "\\[").replace("]", "\\]")
+    safe_url = (url or "").strip().replace("(", "%28").replace(")", "%29")
     return safe_title, safe_url
 
 

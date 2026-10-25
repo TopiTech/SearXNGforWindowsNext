@@ -4002,7 +4002,7 @@ footer.ws-footer {
 
       function estimateTokens(text) {
         if (!text) return 0;
-        var cjk = (text.match(/[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef]/g) || []).length;
+        var cjk = (text.match(/[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f\uff00-\uffef]/g) || []).length;
         var other = text.length - cjk;
         return Math.round(cjk / 1.5 + other / 4.0);
       }
@@ -6593,7 +6593,8 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
 
     @app.before_request
     def sxng_rate_limit_guard() -> Any:
-        if request.path in _RATE_LIMITED_PATHS:
+        norm_path = request.path.rstrip("/") or "/"
+        if norm_path in _RATE_LIMITED_PATHS:
             client_id = _rate_limit_client_id()
             if not _rate_limit_check(client_id):
                 refill_rate = _get_rate_refill()
@@ -6635,7 +6636,8 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
 
     @app.before_request
     def sxng_state_change_guard() -> Any:
-        if request.method in ("POST", "PUT", "DELETE") and request.path in _STATE_CHANGING_PATHS:
+        norm_path = request.path.rstrip("/") or "/"
+        if request.method in ("POST", "PUT", "DELETE") and norm_path in _STATE_CHANGING_PATHS:
             sec_fetch_site = (request.headers.get("Sec-Fetch-Site") or "").strip().lower()
             if sec_fetch_site == "cross-site":
                 return jsonify({"error": "Cross-site request rejected"}), 403

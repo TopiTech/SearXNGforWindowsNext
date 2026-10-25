@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
+from datetime import UTC, datetime
 from typing import Any
 
 from cross_encoder_rerank import CrossEncoderReranker
@@ -378,10 +380,28 @@ class RetrievalService:
                 pub_date = None
             if processed_q.freshness and pub_date:
                 pub_date_str = str(pub_date)
-                if processed_q.freshness.isdigit() and processed_q.freshness in pub_date_str:
-                    fresh_score = 1.0
+                if processed_q.freshness.isdigit():
+                    fresh_score = 1.0 if processed_q.freshness in pub_date_str else 0.3
                 else:
-                    fresh_score = 0.3
+                    # Relative freshness window: "week", "month", or "year"
+                    matched_relative = False
+                    curr_year = str(datetime.now(UTC).year)
+                    m = re.search(r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b", pub_date_str)
+                    if m:
+                        try:
+                            dt = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=UTC)
+                            delta_days = (datetime.now(UTC) - dt).total_seconds() / 86400.0
+                            if (
+                                (processed_q.freshness == "week" and 0 <= delta_days <= 14)
+                                or (processed_q.freshness == "month" and 0 <= delta_days <= 45)
+                                or (processed_q.freshness == "year" and 0 <= delta_days <= 400)
+                            ):
+                                matched_relative = True
+                        except (ValueError, OverflowError):
+                            matched_relative = curr_year in pub_date_str
+                    elif curr_year in pub_date_str:
+                        matched_relative = True
+                    fresh_score = 1.0 if matched_relative else 0.3
             comps.freshness = fresh_score
 
             # Composite weighted score:

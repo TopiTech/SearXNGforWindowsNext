@@ -464,7 +464,10 @@ class QueryOptimizer:
     @classmethod
     def extract_keywords(cls, query: str) -> list[str]:
         """Extract meaningful keywords removing common stopwords."""
-        raw_tokens = re.findall(r"[A-Za-z0-9_+#.-]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]+", query)
+        raw_tokens = re.findall(
+            r"[A-Za-z0-9_+#.-]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]+",
+            query,
+        )
         keywords: list[str] = []
         for t in raw_tokens:
             low = t.lower()
@@ -606,7 +609,10 @@ class BM25PassageExtractor:
         """Tokenize text into lowercase words and CJK fragments with Unicode NFKC normalization."""
         norm_text = unicodedata.normalize("NFKC", text.lower())
         tokens: list[str] = []
-        for match in re.finditer(r"[a-z0-9_+#.-]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]+", norm_text):
+        for match in re.finditer(
+            r"[a-z0-9_+#.-]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]+",
+            norm_text,
+        ):
             chunk = match.group(0)
             if chunk.isascii():
                 w = chunk.strip(".-_")
@@ -878,7 +884,12 @@ class TokenBudgeter:
         """Roughly estimate token count (English ~4 chars/token, CJK ~1.5 chars/token)."""
         if not text:
             return 0
-        cjk_chars = len(re.findall(r"[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef]", text))
+        cjk_chars = len(
+            re.findall(
+                r"[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f\uff00-\uffef]",
+                text,
+            )
+        )
         other_chars = len(text) - cjk_chars
         return int(cjk_chars / 1.5 + other_chars / 4.0)
 

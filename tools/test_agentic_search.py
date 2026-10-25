@@ -943,6 +943,26 @@ class TestRegressionHardening(unittest.TestCase):
         self.assertIn("error", res)
         self.assertEqual(res.get("scraped_count"), 0)
 
+    def test_korean_hangul_keyword_extraction_and_token_estimation(self) -> None:
+        """Verify QueryOptimizer, TokenBudgeter, and BM25PassageExtractor support Korean Hangul."""
+        keywords = agentic_search.QueryOptimizer.extract_keywords("파이썬 프로그래밍 튜토리얼")
+        self.assertTrue(any("파이썬" in k or "프로그래밍" in k for k in keywords))
+
+        # Korean string estimation: 10 Hangul chars should be ~6-7 tokens (10/1.5), not 2 tokens (10/4.0)
+        ko_text = "가나다라마바사아자차"  # 10 chars
+        est = agentic_search.TokenBudgeter.estimate_tokens(ko_text)
+        self.assertGreaterEqual(est, 6)
+
+        extractor = agentic_search.BM25PassageExtractor()
+        content = (
+            "첫 번째 문단은 요리에 관한 내용입니다.\n\n"
+            "두 번째 문단은 파이썬 비동기 프로그래밍 안내입니다.\n\n"
+            "세 번째 문단은 여행 정보입니다."
+        )
+        highlights = extractor.extract_highlights(content, "파이썬 비동기", top_k=1)
+        self.assertEqual(len(highlights), 1)
+        self.assertIn("두 번째 문단", highlights[0])
+
 
 if __name__ == "__main__":
     unittest.main()

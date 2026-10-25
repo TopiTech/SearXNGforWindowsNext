@@ -259,8 +259,10 @@ class URLNormalizer:
             raw = (url or "").strip()
             if not raw:
                 return ""
-            if "://" not in raw and not raw.startswith("//") and "/" in raw and "." in raw.split("/", 1)[0]:
-                raw = f"http://{raw}"
+            if "://" not in raw and not raw.startswith("//"):
+                first_part = raw.split("/", 1)[0]
+                if "." in first_part and not any(c.isspace() for c in first_part):
+                    raw = f"http://{raw}"
             parsed = urllib.parse.urlsplit(raw)
             netloc = (parsed.hostname or "").lower()
             return netloc.removeprefix("www.")

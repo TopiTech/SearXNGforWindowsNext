@@ -136,7 +136,7 @@ class QueryProcessor:
 
     COMPARISON_PATTERNS: ClassVar[list[re.Pattern]] = [
         re.compile(
-            r"(?:^|\s|[^\w])['\"「『【]?([a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]+(?:\s+[a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]+){0,3})['\"」』】]?\s*(?:vs\.?|versus|compared\s+to)\s*['\"「『【]?([a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]+(?:\s+[a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]+){0,3})['\"」』】]?(?:\s|[^\w]|$)",
+            r"(?:^|\s|[^\w])['\"「『【]?([a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f-]+(?:\s+[a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f-]+){0,3})['\"」』】]?\s*(?:vs\.?|versus|compared\s+to)\s*['\"「『【]?([a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f-]+(?:\s+[a-z0-9_+#.\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f-]+){0,3})['\"」』】]?(?:\s|[^\w]|$)",
             re.IGNORECASE,
         ),
         re.compile(
@@ -187,10 +187,13 @@ class QueryProcessor:
         """Lightweight language detection based on script character ranges."""
         if not text:
             return "en"
+        # Korean Hangul
+        if re.search(r"[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]", text):
+            return "ko"
         # Japanese Hiragana or Katakana
         if re.search(r"[\u3040-\u309f\u30a0-\u30ff]", text):
             return "ja"
-        # Chinese Hanzi / Kanji (without Kana)
+        # Chinese Hanzi / Kanji (without Kana or Hangul)
         if re.search(r"[\u4e00-\u9fff]", text):
             return "zh"  # Han-only text: most likely Chinese; ja requires Kana
         return "en"
@@ -344,7 +347,7 @@ class QueryProcessor:
                 if dom and dom not in exc_domains:
                     exc_domains.append(dom)
             elif t_low.startswith("filetype:") and len(t) > 9:
-                filetype = t[9:].strip().lower()
+                filetype = t[9:].strip().strip("\"'").lower()
             else:
                 clean_tokens.append(t)
 

@@ -121,7 +121,8 @@ class LexicalConfig:
 class MultilingualTokenizer:
     """Extracts words for Latin/alphanumeric scripts and character 2-grams / 3-grams for CJK text."""
 
-    CJK_RANGE_PAT = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]")
+    CJK_RANGE_PAT = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]")
+    CJK_BLOCK_PAT = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]+")
     LATIN_WORD_PAT = re.compile(r"[a-z0-9_+#.-]+")
 
     @classmethod
@@ -140,7 +141,7 @@ class MultilingualTokenizer:
 
         # 2. Extract CJK fragments and generate 2-grams & 3-grams
         # Group contiguous CJK characters
-        cjk_blocks = re.findall(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]+", norm)
+        cjk_blocks = cls.CJK_BLOCK_PAT.findall(norm)
         for block in cjk_blocks:
             b_len = len(block)
             if b_len == 1:

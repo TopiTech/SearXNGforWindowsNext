@@ -178,7 +178,7 @@
 
       function estimateTokens(text) {
         if (!text) return 0;
-        var cjk = (text.match(/[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef]/g) || []).length;
+        var cjk = (text.match(/[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f\uff00-\uffef]/g) || []).length;
         var other = text.length - cjk;
         return Math.round(cjk / 1.5 + other / 4.0);
       }

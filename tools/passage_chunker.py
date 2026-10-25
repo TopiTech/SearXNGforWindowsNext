@@ -267,6 +267,7 @@ class HeadingPassageChunker:
         """Strip markdown `#` or HTML `<hX>` tags from heading text."""
         h = raw_heading.strip()
         h = re.sub(r"^#{1,6}\s+", "", h)
+        h = re.sub(r"\s+#{1,6}$", "", h)
         h = re.sub(r"<[^>]+>", "", h)
         return h.strip() or self.config.default_heading
 

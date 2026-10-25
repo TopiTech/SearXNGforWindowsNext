@@ -33,6 +33,7 @@ from deduplication import (
 )
 from lexical_rerank import (
     BM25Reranker,
+    LexicalReranker,
     compute_field_lexical_score,
     tokenize_for_bm25,
 )
@@ -1182,6 +1183,96 @@ class TestQueryPipeline(unittest.TestCase):
         service = RetrievalService(search_func=mock_search)
         resp = service.execute_retrieval("test", mode="fast", count=0)
         self.assertEqual(len(resp.results), 0)
+
+    def test_extract_domain_bare_hostname(self) -> None:
+        """Verify extract_domain correctly extracts hostname from bare domains as well as full URLs."""
+        self.assertEqual(extract_domain("github.com"), "github.com")
+        self.assertEqual(extract_domain("sub.example.co.jp"), "sub.example.co.jp")
+        self.assertEqual(extract_domain("www.example.com"), "example.com")
+        self.assertEqual(extract_domain("https://docs.python.org/3/library/"), "docs.python.org")
+        self.assertEqual(extract_domain("//cdn.example.org/js/app.js"), "cdn.example.org")
+        self.assertEqual(extract_domain("invalid domain with spaces"), "")
+        self.assertEqual(extract_domain(""), "")
+
+    def test_escape_markdown_link_newlines(self) -> None:
+        """Verify escape_markdown_link strips carriage returns and newlines from title."""
+        title = "Title with\r\nnewlines and   spaces [bracket]"
+        url = "https://example.com/path(1)"
+        safe_title, safe_url = escape_markdown_link(title, url)
+        self.assertNotIn("\n", safe_title)
+        self.assertNotIn("\r", safe_title)
+        self.assertIn("Title with newlines and spaces", safe_title)
+        self.assertIn("\\[bracket\\]", safe_title)
+        self.assertEqual(safe_url, "https://example.com/path%281%29")
+
+    def test_korean_hangul_lexical_tokenization_and_scoring(self) -> None:
+        """Verify MultilingualTokenizer and LexicalReranker support Korean Hangul syllables and jamo."""
+        tokens = tokenize_for_bm25("파이썬 프로グラミング")
+        self.assertTrue(any("파이" in t or "이썬" in t for t in tokens))
+        reranker = LexicalReranker()
+        docs = [
+            {
+                "title": "파이썬 공식 튜토리얼",
+                "content": "파이썬 프로그래밍 언어 안내",
+                "url": "https://example.com/ko1",
+            },
+            {"title": "Java Programming", "content": "Learn Java syntax", "url": "https://example.com/en1"},
+        ]
+        scored = reranker.rerank("파이썬 프로그래밍", docs)
+        self.assertEqual(scored[0]["url"], "https://example.com/ko1")
+        self.assertGreater(scored[0].get("lexical_score", 0), 0)
+
+    def test_deduplicate_empty_engine_sanitization(self) -> None:
+        """Verify deduplication never emits [''] when source and engines are absent or empty."""
+        items = [{"url": "https://example.com/test", "title": "Test", "content": "Content", "source": ""}]
+        deduped = deduplicate_results(items)
+        self.assertEqual(len(deduped), 1)
+        self.assertEqual(deduped[0]["engines"], [])
+
+    def test_heading_chunker_trailing_hashes(self) -> None:
+        """Verify HeadingPassageSplitter strips trailing markdown hashes from heading lines."""
+        from passage_chunker import HeadingPassageChunker
+
+        chunker = HeadingPassageChunker()
+        self.assertEqual(chunker._clean_heading("## Architecture Overview ##"), "Architecture Overview")
+        self.assertEqual(chunker._clean_heading("### Section 1.2 ###"), "Section 1.2")
+
+    def test_query_pipeline_korean_and_filetype_quotes(self) -> None:
+        """Verify QueryProcessor detects Korean language and strips quotes from filetype operator."""
+        q = QueryProcessor.parse_and_normalize('filetype:"pdf" 리액트 vs 뷰')
+        self.assertEqual(q.filetype, "pdf")
+        self.assertEqual(q.language, "ko")
+        self.assertEqual(q.intent, "comparison")
+
+    def test_retrieval_service_relative_freshness_scoring(self) -> None:
+        """Verify RetrievalService scores recent articles high (1.0) and older ones low (0.3) for relative freshness."""
+        from datetime import UTC, datetime, timedelta
+
+        yesterday = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
+        three_years_ago = "2020-01-01"
+        mock_raw_results = [
+            {
+                "url": "https://example.com/recent-article",
+                "title": "Python news",
+                "content": "Fresh updates",
+                "published_date": yesterday,
+                "engine": "google",
+                "score": 1.0,
+            },
+            {
+                "url": "https://example.com/old-article",
+                "title": "Python news 2020",
+                "content": "Old updates",
+                "published_date": three_years_ago,
+                "engine": "google",
+                "score": 1.0,
+            },
+        ]
+        service = RetrievalService(search_func=lambda **kw: {"results": mock_raw_results})
+        resp = service.execute_retrieval("Python latest news", mode="fast")
+        by_url = {r.url: r for r in resp.results}
+        self.assertEqual(by_url["https://example.com/recent-article"].score_components.freshness, 1.0)
+        self.assertEqual(by_url["https://example.com/old-article"].score_components.freshness, 0.3)
 
 
 if __name__ == "__main__":
