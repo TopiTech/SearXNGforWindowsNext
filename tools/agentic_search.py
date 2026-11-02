@@ -522,8 +522,8 @@ class DomainScorer:
         exclude_domains: list[str] | None = None,
     ) -> list[SearchResultItem]:
         """Filter and score raw search results, returning ordered items."""
-        inc_set = {d.lower() for d in (include_domains or [])}
-        exc_set = {d.lower() for d in (exclude_domains or [])}
+        inc_set = {d.strip().lower() for d in (include_domains or []) if d and d.strip()}
+        exc_set = {d.strip().lower() for d in (exclude_domains or []) if d and d.strip()}
 
         items: list[SearchResultItem] = []
         total = len(raw_results)

@@ -192,12 +192,17 @@ class ReciprocalRankFusion:
 
                     # Merge duplicate URLs and content
                     curr_item = state["item"]
-                    existing_dups = curr_item.setdefault("duplicate_urls", [])
+                    existing_dups = curr_item.get("duplicate_urls")
+                    if not isinstance(existing_dups, list):
+                        existing_dups = []
+                        curr_item["duplicate_urls"] = existing_dups
                     if url not in existing_dups and url != curr_item.get("url"):
                         existing_dups.append(url)
-                    for dup in item.get("duplicate_urls", []):
-                        if dup not in existing_dups and dup != curr_item.get("url"):
-                            existing_dups.append(dup)
+                    raw_dups = item.get("duplicate_urls")
+                    if isinstance(raw_dups, list):
+                        for dup in raw_dups:
+                            if dup and dup not in existing_dups and dup != curr_item.get("url"):
+                                existing_dups.append(dup)
 
                     # Update content if new item has longer snippet
                     if len(str(item.get("content") or "")) > len(str(curr_item.get("content") or "")):

@@ -1274,6 +1274,99 @@ class TestQueryPipeline(unittest.TestCase):
         self.assertEqual(by_url["https://example.com/recent-article"].score_components.freshness, 1.0)
         self.assertEqual(by_url["https://example.com/old-article"].score_components.freshness, 0.3)
 
+    def test_deduplication_engine_and_matched_queries_uniqueness(self) -> None:
+        # Verify deduplication produces unique engines and unique matched_queries.
+        items = [
+            {
+                "url": "https://example.com/doc1",
+                "title": "Documentation Page 1",
+                "content": "Python documentation",
+                "engines": ["google", "google", "bing"],
+                "matched_queries": ["python docs", "python docs"],
+            },
+            {
+                "url": "https://example.com/doc1",
+                "title": "Documentation Page 1",
+                "content": "Python documentation duplicate",
+                "engines": ["google", "duckduckgo"],
+                "matched_queries": ["python docs", "python guide"],
+            },
+        ]
+        deduped = deduplicate_results(items, query="python docs")
+        self.assertEqual(len(deduped), 1)
+        self.assertEqual(deduped[0]["engines"], ["bing", "duckduckgo", "google"])
+        self.assertEqual(deduped[0]["matched_queries"], ["python docs", "python guide"])
+
+    def test_rank_fusion_none_duplicate_urls_resilience(self) -> None:
+        # Verify ReciprocalRankFusion handles None duplicate_urls without TypeError.
+        from rank_fusion import ReciprocalRankFusion
+
+        query_runs = [
+            {
+                "query": "test",
+                "results": [
+                    {
+                        "url": "https://example.com/item1",
+                        "title": "Item 1",
+                        "content": "First snippet",
+                        "engine": "google",
+                        "duplicate_urls": None,
+                    },
+                    {
+                        "url": "https://example.com/item1",
+                        "title": "Item 1 copy",
+                        "content": "Longer snippet content here",
+                        "engine": "bing",
+                        "duplicate_urls": None,
+                    },
+                ],
+            }
+        ]
+        fusion = ReciprocalRankFusion()
+        fused = fusion.fuse_query_runs(query_runs)
+        self.assertEqual(len(fused), 1)
+        self.assertIsInstance(fused[0]["duplicate_urls"], list)
+
+    def test_domain_filter_empty_string_resilience(self) -> None:
+        # Verify domain filters ignore empty strings and whitespace.
+        mock_raw = [
+            {"url": "https://python.org/doc", "title": "Doc", "content": "Python", "source": "ddg"},
+            {"url": "https://other.com/test", "title": "Test", "content": "Other", "source": "ddg"},
+        ]
+        service = RetrievalService(search_func=lambda **kw: {"results": mock_raw})
+        resp = service.search(
+            "test",
+            include_domains=["", "   ", "python.org"],
+            exclude_domains=["", "   "],
+            mode="fast",
+        )
+        self.assertEqual(len(resp.results), 1)
+        self.assertEqual(resp.results[0].domain, "python.org")
+
+    def test_freshness_exact_year_word_boundary(self) -> None:
+        # Verify exact year freshness matching requires word boundaries to avoid partial number matches.
+        mock_raw = [
+            {
+                "url": "https://example.com/p1",
+                "title": "Article with 2024 id",
+                "content": "Content 1",
+                "published_date": "article-id-20240",
+                "source": "google",
+            },
+            {
+                "url": "https://example.com/p2",
+                "title": "Article in 2024",
+                "content": "Content 2",
+                "published_date": "Published on 2024-05-01",
+                "source": "google",
+            },
+        ]
+        service = RetrievalService(search_func=lambda **kw: {"results": mock_raw})
+        resp = service.search("python 2024", mode="fast")
+        by_url = {r.url: r for r in resp.results}
+        self.assertEqual(by_url["https://example.com/p1"].score_components.freshness, 0.3)
+        self.assertEqual(by_url["https://example.com/p2"].score_components.freshness, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

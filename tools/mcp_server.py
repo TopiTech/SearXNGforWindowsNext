@@ -388,6 +388,14 @@ def _resolve_effective_mode(mode: str, search_depth: Any, query: str) -> str:
     return "fast" if search_depth == "fast" else "deep"
 
 
+def _clean_domain_list(raw: Any) -> list[str] | None:
+    """Normalize and clean domain filters, discarding empty or whitespace entries."""
+    if not isinstance(raw, list):
+        return None
+    cleaned = [str(d).strip() for d in raw if d and str(d).strip()]
+    return cleaned if cleaned else None
+
+
 def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
     """Handle tools/call request by executing the specified SearXNG tool."""
     tool_name = params.get("name")
@@ -411,10 +419,8 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         search_depth = arguments.get("search_depth")
         raw_hl = arguments.get("include_highlights")
         include_highlights = _parse_bool(raw_hl, default=True)
-        raw_inc = arguments.get("include_domains")
-        include_domains = [str(d) for d in raw_inc] if isinstance(raw_inc, list) else None
-        raw_exc = arguments.get("exclude_domains")
-        exclude_domains = [str(d) for d in raw_exc] if isinstance(raw_exc, list) else None
+        include_domains = _clean_domain_list(arguments.get("include_domains"))
+        exclude_domains = _clean_domain_list(arguments.get("exclude_domains"))
 
         try:
             page = max(1, int(arguments.get("page") or arguments.get("pageno") or 1))
@@ -505,10 +511,8 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         categories = str(arguments.get("categories") or "")
         engines = str(arguments.get("engines") or "")
         time_range = str(arguments.get("time_range") or "")
-        raw_inc = arguments.get("include_domains")
-        include_domains = [str(d) for d in raw_inc] if isinstance(raw_inc, list) else None
-        raw_exc = arguments.get("exclude_domains")
-        exclude_domains = [str(d) for d in raw_exc] if isinstance(raw_exc, list) else None
+        include_domains = _clean_domain_list(arguments.get("include_domains"))
+        exclude_domains = _clean_domain_list(arguments.get("exclude_domains"))
         out_format = str(arguments.get("format") or "markdown").strip().lower()
 
         try:
@@ -584,10 +588,8 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
             max_results = 5
         raw_hl = arguments.get("include_highlights")
         include_highlights = _parse_bool(raw_hl, default=True)
-        raw_inc = arguments.get("include_domains")
-        include_domains = [str(d) for d in raw_inc] if isinstance(raw_inc, list) else None
-        raw_exc = arguments.get("exclude_domains")
-        exclude_domains = [str(d) for d in raw_exc] if isinstance(raw_exc, list) else None
+        include_domains = _clean_domain_list(arguments.get("include_domains"))
+        exclude_domains = _clean_domain_list(arguments.get("exclude_domains"))
         try:
             max_tokens = max(500, min(int(arguments.get("max_tokens", 3000)), 16000))
         except (ValueError, TypeError):

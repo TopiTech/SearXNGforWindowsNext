@@ -362,8 +362,8 @@ def cmd_search(args: argparse.Namespace) -> int:
     """Handle 'search' subcommand (routes to unified_search when URL/deep/filter options are used)."""
     mode = getattr(args, "mode", "auto") or "auto"
     depth = getattr(args, "depth", None)
-    inc_domains = getattr(args, "include_domains", None) or []
-    exc_domains = getattr(args, "exclude_domains", None) or []
+    inc_domains = [d.strip() for d in (getattr(args, "include_domains", None) or []) if d and d.strip()]
+    exc_domains = [d.strip() for d in (getattr(args, "exclude_domains", None) or []) if d and d.strip()]
     use_unified = (
         mode in ("fast", "deep", "scrape")
         or depth is not None
@@ -471,13 +471,15 @@ def cmd_scrape(args: argparse.Namespace) -> int:
 
 def cmd_deep(args: argparse.Namespace) -> int:
     """Handle 'deep' subcommand."""
+    inc_domains = [d.strip() for d in (getattr(args, "include_domains", None) or []) if d and d.strip()]
+    exc_domains = [d.strip() for d in (getattr(args, "exclude_domains", None) or []) if d and d.strip()]
     res = searxng_client.search_deep(
         query=args.query,
         search_depth=args.depth,
         max_results=args.max_results,
         include_highlights=args.include_highlights,
-        include_domains=args.include_domains if args.include_domains else None,
-        exclude_domains=args.exclude_domains if args.exclude_domains else None,
+        include_domains=inc_domains or None,
+        exclude_domains=exc_domains or None,
         max_tokens=args.max_tokens,
         pageno=getattr(args, "page", 1),
         base_url=args.base_url,
@@ -493,6 +495,8 @@ def cmd_deep(args: argparse.Namespace) -> int:
 
 def cmd_retrieval(args: argparse.Namespace) -> int:
     """Handle 'retrieval' subcommand."""
+    inc_domains = [d.strip() for d in (getattr(args, "include_domains", None) or []) if d and d.strip()]
+    exc_domains = [d.strip() for d in (getattr(args, "exclude_domains", None) or []) if d and d.strip()]
     res = searxng_client.retrieval_search(
         query=args.query,
         mode=args.mode,
@@ -500,8 +504,8 @@ def cmd_retrieval(args: argparse.Namespace) -> int:
         categories=args.category,
         engines=args.engines,
         time_range=args.time_range,
-        include_domains=args.include_domains if args.include_domains else None,
-        exclude_domains=args.exclude_domains if args.exclude_domains else None,
+        include_domains=inc_domains or None,
+        exclude_domains=exc_domains or None,
         pageno=getattr(args, "page", 1),
         base_url=args.base_url,
         timeout=args.timeout,

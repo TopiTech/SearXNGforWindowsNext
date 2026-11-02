@@ -254,8 +254,12 @@ class RetrievalService:
             )
 
         # Merge domain filters
-        all_inc_domains = sorted(set(processed_q.include_domains + [d.lower() for d in (include_domains or []) if d]))
-        all_exc_domains = sorted(set(processed_q.exclude_domains + [d.lower() for d in (exclude_domains or []) if d]))
+        all_inc_domains = sorted(
+            set(processed_q.include_domains + [d.strip().lower() for d in (include_domains or []) if d and d.strip()])
+        )
+        all_exc_domains = sorted(
+            set(processed_q.exclude_domains + [d.strip().lower() for d in (exclude_domains or []) if d and d.strip()])
+        )
 
         # 2. Deterministic Query Expansion
         expanded_q_list = self.query_processor.expand_query(processed_q, mode=norm_mode)
@@ -381,7 +385,11 @@ class RetrievalService:
             if processed_q.freshness and pub_date:
                 pub_date_str = str(pub_date)
                 if processed_q.freshness.isdigit():
-                    fresh_score = 1.0 if processed_q.freshness in pub_date_str else 0.3
+                    fresh_score = (
+                        1.0
+                        if re.search(r"(?<!\d)" + re.escape(processed_q.freshness) + r"(?!\d)", pub_date_str)
+                        else 0.3
+                    )
                 else:
                     # Relative freshness window: "week", "month", or "year"
                     matched_relative = False
@@ -398,8 +406,8 @@ class RetrievalService:
                             ):
                                 matched_relative = True
                         except (ValueError, OverflowError):
-                            matched_relative = curr_year in pub_date_str
-                    elif curr_year in pub_date_str:
+                            matched_relative = bool(re.search(r"(?<!\d)" + curr_year + r"(?!\d)", pub_date_str))
+                    elif re.search(r"(?<!\d)" + curr_year + r"(?!\d)", pub_date_str):
                         matched_relative = True
                     fresh_score = 1.0 if matched_relative else 0.3
             comps.freshness = fresh_score

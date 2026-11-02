@@ -424,12 +424,12 @@ class ResultDeduplicator:
         for cluster in clusters:
             out_item = cluster.primary_item
             out_item["duplicate_urls"] = cluster.duplicate_urls
-            clean_engines = sorted(e for e in cluster.engines if e)
+            clean_engines = sorted({e for e in cluster.engines if e})
             if not clean_engines:
                 src = str(out_item.get("source") or "").strip()
                 clean_engines = [src] if src else []
             out_item["engines"] = clean_engines
-            out_item["matched_queries"] = sorted(cluster.matched_queries)
+            out_item["matched_queries"] = sorted(set(cluster.matched_queries))
             deduped_results.append(out_item)
 
         return deduped_results
