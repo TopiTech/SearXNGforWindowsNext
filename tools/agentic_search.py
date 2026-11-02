@@ -17,7 +17,6 @@ import math
 import re
 import threading
 import time
-import unicodedata
 import urllib.parse
 from collections.abc import Callable
 from concurrent.futures import Future
@@ -26,6 +25,7 @@ from typing import Any, ClassVar
 
 import retrieval_models
 import retrieval_service
+from lexical_rerank import MultilingualTokenizer
 from url_normalizer import is_safe_retrieval_url
 
 # High-authority primary domains (Documentation, Source Repositories, Standards)
@@ -464,15 +464,8 @@ class QueryOptimizer:
     @classmethod
     def extract_keywords(cls, query: str) -> list[str]:
         """Extract meaningful keywords removing common stopwords."""
-        raw_tokens = re.findall(
-            r"[A-Za-z0-9_+#.-]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]+",
-            query,
-        )
-        keywords: list[str] = []
-        for t in raw_tokens:
-            low = t.lower()
-            if low not in STOP_WORDS and len(low) > 1:
-                keywords.append(low)
+        tokens = MultilingualTokenizer.tokenize(query)
+        keywords: list[str] = [t for t in tokens if len(t) > 1]
         return keywords or [query.lower()]
 
 
@@ -607,31 +600,7 @@ class BM25PassageExtractor:
 
     def _tokenize(self, text: str) -> list[str]:
         """Tokenize text into lowercase words and CJK fragments with Unicode NFKC normalization."""
-        norm_text = unicodedata.normalize("NFKC", text.lower())
-        tokens: list[str] = []
-        for match in re.finditer(
-            r"[a-z0-9_+#.-]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]+",
-            norm_text,
-        ):
-            chunk = match.group(0)
-            if chunk.isascii():
-                w = chunk.strip(".-_")
-                if w and w not in STOP_WORDS:
-                    tokens.append(w)
-            else:
-                if len(chunk) == 1:
-                    if chunk not in STOP_WORDS:
-                        tokens.append(chunk)
-                else:
-                    for i in range(len(chunk)):
-                        ch = chunk[i]
-                        if ch not in STOP_WORDS:
-                            tokens.append(ch)
-                    for i in range(len(chunk) - 1):
-                        bg = chunk[i : i + 2]
-                        if bg not in STOP_WORDS:
-                            tokens.append(bg)
-        return tokens
+        return MultilingualTokenizer.tokenize(text)
 
     def split_passages(self, text: str, min_chars: int = 40, max_chars: int = 800) -> list[str]:
         """Split text into coherent paragraphs and code blocks."""

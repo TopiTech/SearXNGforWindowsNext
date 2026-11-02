@@ -379,9 +379,19 @@ class RetrievalService:
             # non-matching or unparseable date previously still earned 0.8,
             # ranking stale 2015 pages above undated fresh results.
             fresh_score = 0.0
-            pub_date = item.get("published_date") or item.get("published_at")
-            if isinstance(pub_date, bool):
-                pub_date = None
+            raw_pub_date = (
+                item.get("published_date")
+                or item.get("published_at")
+                or item.get("publishedDate")
+                or item.get("pubdate")
+            )
+            pub_date = None
+            if not isinstance(raw_pub_date, bool):
+                if hasattr(raw_pub_date, "isoformat"):
+                    pub_date = raw_pub_date.isoformat()
+                elif raw_pub_date is not None:
+                    pub_date = str(raw_pub_date).strip() or None
+
             if processed_q.freshness and pub_date:
                 pub_date_str = str(pub_date)
                 if processed_q.freshness.isdigit():
@@ -400,9 +410,9 @@ class RetrievalService:
                             dt = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=UTC)
                             delta_days = (datetime.now(UTC) - dt).total_seconds() / 86400.0
                             if (
-                                (processed_q.freshness == "week" and 0 <= delta_days <= 14)
-                                or (processed_q.freshness == "month" and 0 <= delta_days <= 45)
-                                or (processed_q.freshness == "year" and 0 <= delta_days <= 400)
+                                (processed_q.freshness == "week" and -1.0 <= delta_days <= 14)
+                                or (processed_q.freshness == "month" and -1.0 <= delta_days <= 45)
+                                or (processed_q.freshness == "year" and -1.0 <= delta_days <= 400)
                             ):
                                 matched_relative = True
                         except (ValueError, OverflowError):
@@ -482,8 +492,28 @@ class RetrievalService:
             canonical = (
                 normalize_url(raw_canonical) if raw_canonical and is_safe_retrieval_url(raw_canonical) else norm_url
             )
-            pub_at = meta.get("published_at") or item.get("published_date") or None
-            upd_at = meta.get("updated_at") or None
+            raw_pub_at = (
+                meta.get("published_at")
+                or item.get("published_date")
+                or item.get("publishedDate")
+                or item.get("pubdate")
+                or item.get("published_at")
+                or None
+            )
+            pub_at: str | None = None
+            if not isinstance(raw_pub_at, bool):
+                if hasattr(raw_pub_at, "isoformat"):
+                    pub_at = raw_pub_at.isoformat()
+                elif raw_pub_at is not None:
+                    pub_at = str(raw_pub_at).strip() or None
+
+            raw_upd_at = meta.get("updated_at") or item.get("updated_at") or None
+            upd_at: str | None = None
+            if not isinstance(raw_upd_at, bool):
+                if hasattr(raw_upd_at, "isoformat"):
+                    upd_at = raw_upd_at.isoformat()
+                elif raw_upd_at is not None:
+                    upd_at = str(raw_upd_at).strip() or None
             date_src = meta.get("date_source")
             date_conf = meta.get("date_confidence")
 

@@ -1367,6 +1367,123 @@ class TestQueryPipeline(unittest.TestCase):
         self.assertEqual(by_url["https://example.com/p1"].score_components.freshness, 0.3)
         self.assertEqual(by_url["https://example.com/p2"].score_components.freshness, 1.0)
 
+    def test_multilingual_accent_cyrillic_greek_tokenization_and_ranking(self) -> None:
+        """Verify MultilingualTokenizer and LexicalReranker support European accents, Cyrillic, and Greek."""
+        import agentic_search
+        from lexical_rerank import MultilingualTokenizer
+
+        # 1. Non-CJK words with European accents should not be broken into fragments
+        de_tokens = MultilingualTokenizer.tokenize("München Übergrößen")
+        self.assertIn("münchen", de_tokens)
+        self.assertIn("übergrößen", de_tokens)
+
+        fr_tokens = MultilingualTokenizer.tokenize("Café crème et résumé")
+        self.assertIn("café", fr_tokens)
+        self.assertIn("crème", fr_tokens)
+        self.assertIn("résumé", fr_tokens)
+
+        es_tokens = MultilingualTokenizer.tokenize("El niño en España este año")
+        self.assertIn("niño", es_tokens)
+        self.assertIn("españa", es_tokens)
+        self.assertIn("año", es_tokens)
+
+        # 2. Cyrillic and Greek words should not be dropped
+        ru_tokens = MultilingualTokenizer.tokenize("Асинхронный питон и быстрый поиск")
+        self.assertIn("питон", ru_tokens)
+        self.assertIn("асинхронный", ru_tokens)
+
+        el_tokens = MultilingualTokenizer.tokenize("Γλώσσα προγραμματισμού πύθων")
+        self.assertIn("πύθων", el_tokens)
+
+        # 3. BM25 scoring with Cyrillic and European accents
+        reranker = LexicalReranker()
+        docs = [
+            {
+                "title": "Руководство по языку питон",
+                "content": "Подробное описание асинхронности в питон",
+                "url": "https://example.com/ru1",
+            },
+            {"title": "Java Guide", "content": "Introduction to Java", "url": "https://example.com/en1"},
+        ]
+        scored = reranker.rerank("питон асинхронность", docs)
+        self.assertEqual(scored[0]["url"], "https://example.com/ru1")
+        self.assertGreater(scored[0].get("lexical_score", 0), 0)
+
+        # 4. Agentic BM25 Passage Extractor and QueryOptimizer
+        kw = agentic_search.QueryOptimizer.extract_keywords("питон münchen café")
+        self.assertIn("питон", kw)
+        self.assertIn("münchen", kw)
+        self.assertIn("café", kw)
+
+    def test_retrieval_service_datetime_object_json_serialization(self) -> None:
+        """Verify datetime.datetime objects in publishedDate/pubdate are converted and JSON serializable."""
+        import datetime
+        import json
+
+        dt_past = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=3)
+        mock_raw = [
+            {
+                "url": "https://example.com/engine-date",
+                "title": "Recent Python Update",
+                "content": "Engine returned native datetime object",
+                "publishedDate": dt_past,
+                "source": "bing",
+            }
+        ]
+        service = RetrievalService(search_func=lambda **kw: {"results": mock_raw})
+        resp = service.search("python update", mode="fast")
+        self.assertEqual(len(resp.results), 1)
+        item = resp.results[0]
+        # published_at must be an ISO 8601 string, not a raw datetime object
+        self.assertIsInstance(item.published_at, str)
+        self.assertIn("T", item.published_at)
+
+        # Response to_dict() must serialize to JSON without TypeError
+        payload = resp.to_dict()
+        serialized = json.dumps(payload)
+        self.assertIsInstance(serialized, str)
+        self.assertIn(item.published_at, serialized)
+
+    def test_retrieval_response_markdown_backticks_and_crlf_clean(self) -> None:
+        """Verify markdown generation escapes query backticks and strips CRLF carriage returns from evidence."""
+        resp = RetrievalResponse(
+            mode="fast",
+            results=[
+                RetrievalResultItem(
+                    id="src_01",
+                    title="Code Injection Guide",
+                    url="https://example.com/guide",
+                    evidence=[
+                        EvidencePassage(
+                            id="src_01_p01",
+                            heading="Syntax",
+                            text="First line of code\r\nSecond line of code\r\nThird line",
+                        )
+                    ],
+                )
+            ],
+        )
+        # Query with embedded backticks
+        resp.query.original = "test `code` injection"
+        resp.query.clean_text = "test `code` injection"
+        md = resp.to_markdown()
+
+        # Check inline backtick sanitization
+        self.assertNotIn("```code```", md)
+        self.assertIn("test 'code' injection", md)
+
+        # Check no trailing carriage returns before newlines
+        self.assertNotIn("\r\n", md)
+        self.assertNotIn("\r", md)
+        self.assertIn("> First line of code\n> Second line of code\n> Third line", md)
+
+    def test_normalize_title_fallback_when_stripped_empty(self) -> None:
+        """Verify normalize_title does not return an empty string when title has non-whitespace content."""
+        self.assertEqual(normalize_title("[Breaking]"), "[breaking]")
+        self.assertEqual(normalize_title("【速報】"), "【速報】")
+        self.assertEqual(normalize_title(" - "), "-")
+        self.assertEqual(normalize_title(""), "")
+
 
 if __name__ == "__main__":
     unittest.main()

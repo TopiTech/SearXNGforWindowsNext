@@ -383,7 +383,8 @@ class RetrievalResponse:
             or getattr(self.query, "normalized", "")
             or getattr(self.query, "original", "")
         )
-        lines: list[str] = [f"## Search Retrieval: `{q_text}` (Mode: `{self.mode}`, Intent: `{self.query.intent}`)\n"]
+        safe_q = q_text.replace("`", "'")
+        lines: list[str] = [f"## Search Retrieval: `{safe_q}` (Mode: `{self.mode}`, Intent: `{self.query.intent}`)\n"]
 
         if self.answers:
             for ans in self.answers:
@@ -404,7 +405,7 @@ class RetrievalResponse:
             if item.evidence:
                 for ev in item.evidence:
                     heading_str = f"**{ev.heading}**: " if ev.heading and ev.heading != "General" else ""
-                    quote_text = "\n".join(f"> {line}" for line in ev.text.split("\n"))
+                    quote_text = "\n".join(f"> {line}" for line in ev.text.splitlines())
                     lines.append(f"- **[{ev.id}]** {heading_str}\n{quote_text}\n")
             elif item.snippet:
                 lines.append(f"> {item.snippet}\n")

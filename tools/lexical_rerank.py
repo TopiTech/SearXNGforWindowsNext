@@ -123,20 +123,23 @@ class MultilingualTokenizer:
 
     CJK_RANGE_PAT = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]")
     CJK_BLOCK_PAT = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]+")
-    LATIN_WORD_PAT = re.compile(r"[a-z0-9_+#.-]+")
+    WORD_PAT = re.compile(r"[\w+#.-]+")
+    LATIN_WORD_PAT = WORD_PAT
 
     @classmethod
     def tokenize(cls, text: str) -> list[str]:
-        """Convert text into tokens using words for English and N-grams for CJK."""
+        """Convert text into tokens using words for Latin/alphanumeric/Cyrillic and N-grams for CJK."""
         if not text:
             return []
 
         norm = unicodedata.normalize("NFKC", text.lower())
         tokens: list[str] = []
 
-        # 1. Extract Latin/alphanumeric words
-        for w in cls.LATIN_WORD_PAT.findall(norm):
-            if w not in STOP_WORDS and len(w) > 0:
+        # 1. Extract non-CJK words (supporting Latin, accented characters, Cyrillic, Greek, etc.)
+        non_cjk = cls.CJK_RANGE_PAT.sub(" ", norm)
+        for raw_w in cls.WORD_PAT.findall(non_cjk):
+            w = raw_w.strip(".-_") or raw_w
+            if any(c.isalnum() for c in w) and w not in STOP_WORDS:
                 tokens.append(w)
 
         # 2. Extract CJK fragments and generate 2-grams & 3-grams

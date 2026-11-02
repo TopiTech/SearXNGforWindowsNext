@@ -81,13 +81,14 @@ def normalize_title(title: str) -> str:
     if not title:
         return ""
     norm = unicodedata.normalize("NFKC", title).strip().lower()
+    base = norm
     # Remove bracketed editorial prefixes like 【最新】, [更新], etc.
     norm = re.sub(r"^[\[【][^\]】]+[\]】]\s*", "", norm)
     # Remove common site name suffixes often appended by CMS: "Title - SiteName", "Title | SiteName"
     norm = re.sub(r"\s+[-–—|:]\s+[^-–—|:]+$", "", norm)
     # Remove excessive whitespace and punctuation
     norm = re.sub(r"[\s_]+", " ", norm).strip()
-    return norm
+    return norm or base
 
 
 def levenshtein_ratio(s1: str, s2: str) -> float:
