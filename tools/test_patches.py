@@ -4209,7 +4209,8 @@ class TestPatchHardeningM2(unittest.TestCase):
 
     def test_patch_autocomplete_timeout_and_idempotency(self):
         """Verify patch_autocomplete_timeout correctly updates update_kwargs, duckduckgo, and exception handling."""
-        raw_upstream = (
+        # Test 1: Upstream variant with **kwargs
+        raw_upstream_kwargs = (
             "def update_kwargs(**kwargs) -> None:  # type: ignore\n"
             "    if 'timeout' not in kwargs:\n"
             "        kwargs['timeout'] = settings['outgoing']['request_timeout']\n"
@@ -4235,7 +4236,7 @@ class TestPatchHardeningM2(unittest.TestCase):
             "    except (RequestException, SearxEngineResponseException):\n"
             "        return []\n"
         )
-        patched = apply_patches.patch_autocomplete_timeout(raw_upstream, "searx/autocomplete.py")
+        patched = apply_patches.patch_autocomplete_timeout(raw_upstream_kwargs, "searx/autocomplete.py")
         self.assertIn("def update_kwargs(kwargs: dict[str, t.Any]) -> None:", patched)
         self.assertIn('min(float(settings.get("outgoing", {}).get("request_timeout", 3.0) or 3.0), 3.0)', patched)
         self.assertIn("update_kwargs(kwargs)", patched)
@@ -4245,6 +4246,45 @@ class TestPatchHardeningM2(unittest.TestCase):
         # Idempotency check
         reapplied = apply_patches.patch_autocomplete_timeout(patched, "searx/autocomplete.py")
         self.assertEqual(reapplied, "ALREADY_APPLIED")
+
+        # Test 2: Modern upstream variant (kwargs without **, as in upstream commit 10db664)
+        raw_upstream_modern = (
+            "def update_kwargs(kwargs) -> None:  # type: ignore\n"
+            "    if 'timeout' not in kwargs:\n"
+            "        kwargs['timeout'] = settings['outgoing']['request_timeout']\n"
+            "    kwargs['raise_for_httperror'] = True\n\n\n"
+            'def get(*args, **kwargs) -> "SXNG_Response":  # type: ignore\n'
+            "    update_kwargs(kwargs)\n"
+            "    return http_get(*args, **kwargs)  # pyright: ignore[reportUnknownArgumentType]\n\n\n"
+            'def post(*args, **kwargs) -> "SXNG_Response":  # type: ignore\n'
+            "    update_kwargs(kwargs)\n"
+            "    return http_post(*args, **kwargs)  # pyright: ignore[reportUnknownArgumentType]\n\n"
+            "def duckduckgo(query: str, sxng_locale: str) -> list[str]:\n"
+            "    traits = engines['duckduckgo'].traits\n"
+            "    args: dict[str, str] = {\n"
+            "        'q': query,\n"
+            "        'kl': traits.get_region(sxng_locale, traits.all_locale),\n"
+            "    }\n\n"
+            "def search_autocomplete(backend_name: str, query: str, sxng_locale: str) -> list[str]:\n"
+            "    backend = backends.get(backend_name)\n"
+            "    if backend is None:\n"
+            "        return []\n"
+            "    try:\n"
+            "        return backend(query, sxng_locale)\n"
+            "    except (RequestException, SearxEngineResponseException):\n"
+            "        return []\n"
+        )
+        patched_modern = apply_patches.patch_autocomplete_timeout(raw_upstream_modern, "searx/autocomplete.py")
+        self.assertIn("def update_kwargs(kwargs: dict[str, t.Any]) -> None:", patched_modern)
+        self.assertIn(
+            'min(float(settings.get("outgoing", {}).get("request_timeout", 3.0) or 3.0), 3.0)', patched_modern
+        )
+        self.assertIn("update_kwargs(kwargs)", patched_modern)
+        self.assertIn("ddg_engine = engines.get('duckduckgo')", patched_modern)
+        self.assertIn("except (RequestException, SearxEngineResponseException, Exception):", patched_modern)
+
+        reapplied_modern = apply_patches.patch_autocomplete_timeout(patched_modern, "searx/autocomplete.py")
+        self.assertEqual(reapplied_modern, "ALREADY_APPLIED")
 
 
 if __name__ == "__main__":
