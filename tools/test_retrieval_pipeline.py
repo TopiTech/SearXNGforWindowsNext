@@ -366,6 +366,30 @@ class TestPassageChunkerAndSecurity(unittest.TestCase):
             self.assertLessEqual(len(p.text), config.max_chunk_chars)
             self.assertGreaterEqual(len(p.text), config.min_chunk_chars)
 
+    def test_evidence_passage_chunker_overlap_offset_accuracy(self) -> None:
+        """Verify character offsets remain strictly accurate when overlap is dropped."""
+        config = PassageChunkerConfig(
+            target_chunk_chars=100,
+            max_chunk_chars=120,
+            min_chunk_chars=20,
+            overlap_chars=30,
+        )
+        chunker = HeadingPassageSplitter(config)
+        p1 = "First paragraph containing enough text to trigger passage chunk boundary."
+        p2 = "Second paragraph with detailed technical explanations."
+        p3 = "Third paragraph which is intentionally long enough so that overlap plus this unit exceeds max chunk chars limit."
+        p4 = "Fourth paragraph with final summary notes and observations."
+        content = f"{p1}\n\n{p2}\n\n{p3}\n\n{p4}"
+
+        passages = chunker._chunk_section_body(
+            heading="Test Heading", body=content, source_id="src_offset_test", base_char_offset=0
+        )
+        self.assertGreaterEqual(len(passages), 2)
+        for i, passage in enumerate(passages):
+            self.assertGreaterEqual(passage.end_char, passage.start_char)
+            if i > 0:
+                self.assertGreater(passage.start_char, passages[i - 1].start_char)
+
     def test_passage_scoring_against_query(self) -> None:
         splitter = HeadingPassageSplitter()
         passages = [
@@ -527,6 +551,12 @@ class TestPassageChunkerAndSecurity(unittest.TestCase):
         self.assertFalse(is_safe_retrieval_url("http://localhost\\admin"))
         self.assertFalse(is_safe_retrieval_url("http://example.com\\path"))
 
+        # Bare intranet dotless hostnames must be rejected even with resolve_dns=False
+        self.assertFalse(is_safe_retrieval_url("http://payroll/"))
+        self.assertFalse(is_safe_retrieval_url("http://nas/shares"))
+        self.assertFalse(is_safe_retrieval_url("http://router/admin"))
+        self.assertFalse(is_safe_retrieval_url("http://internal-db:5432/"))
+
         # Legitimate public web URLs must be accepted
         self.assertTrue(is_safe_retrieval_url("https://docs.python.org/3/"))
         self.assertTrue(is_safe_retrieval_url("https://github.com/SearXNG/searxng"))
@@ -682,6 +712,28 @@ class TestRetrievalModelsAndBudget(unittest.TestCase):
         self.assertEqual(r0["evidence"][0]["id"], "src_01_p01")
         self.assertEqual(r0["score_components"]["source_quality"], 0.9)
 
+    def test_retrieval_response_handles_dictionary_query_and_search(self) -> None:
+        """Verify QueryInfo and SearchExecutionInfo from_dict factories handle dictionary payloads cleanly."""
+        dict_query = {"original": "fastapi tutorial", "clean_text": "fastapi tutorial", "intent": "howto"}
+        dict_search = {"mode": "deep", "partial": False}
+        query_info = QueryInfo.from_dict(dict_query)
+        search_info = SearchExecutionInfo.from_dict(dict_search)
+        resp = RetrievalResponse(
+            schema_version="1.0",
+            query=query_info,
+            search=search_info,
+            results=[],
+            warnings=[],
+        )
+        data = resp.to_dict()
+        self.assertEqual(data["schema_version"], "1.0")
+        self.assertEqual(data["query"]["original"], "fastapi tutorial")
+        self.assertEqual(data["search"]["mode"], "deep")
+
+        md = resp.to_markdown()
+        self.assertIn("fastapi tutorial", md)
+        self.assertIn("howto", md)
+
 
 class TestRetrievalServiceIntegration(unittest.TestCase):
     """Integration tests for RetrievalService orchestrating end-to-end retrieval."""
@@ -809,6 +861,28 @@ class TestRetrievalServiceIntegration(unittest.TestCase):
             self.assertEqual(len(resp.results), 1)
             self.assertEqual(resp.results[0].score_components.freshness, 1.0)
             self.assertGreater(resp.results[0].score, 0.5)
+
+    def test_retrieval_service_handles_faulty_isoformat_objects(self) -> None:
+        """Verify retrieval service handles non-callable or raising isoformat attributes gracefully."""
+
+        class FaultyDate:
+            @property
+            def isoformat(self):
+                raise ValueError("corrupt datetime")
+
+        mock_raw_results = [
+            {
+                "url": "https://example.com/item1",
+                "title": "Item 1",
+                "content": "Description of item 1.",
+                "published_at": FaultyDate(),
+                "engine": "google",
+                "score": 0.8,
+            }
+        ]
+        with patch.object(self.service, "_fetch_query_results", return_value=mock_raw_results):
+            resp = self.service.execute_retrieval(query="item test", mode="fast")
+            self.assertEqual(len(resp.results), 1)
 
     def test_escape_markdown_link_and_to_markdown(self) -> None:
         """Verify markdown link escaping prevents broken links from brackets and parentheses."""

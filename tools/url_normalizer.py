@@ -523,6 +523,11 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
 
         return False
 
+    if ":" not in host and "." not in host:
+        # Bare single-label intranet hostname (e.g., 'payroll', 'nas', 'router')
+        # All public web URLs require a dot-separated domain (RFC 3986 / ICANN prohibition of dotless domains).
+        return False
+
     if ":" not in host and "." in host:
         try:
             packed = socket.inet_aton(host)

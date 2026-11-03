@@ -387,9 +387,13 @@ class RetrievalService:
             )
             pub_date = None
             if not isinstance(raw_pub_date, bool):
-                if hasattr(raw_pub_date, "isoformat"):
-                    pub_date = raw_pub_date.isoformat()
-                elif raw_pub_date is not None:
+                try:
+                    iso_fn = getattr(raw_pub_date, "isoformat", None)
+                    if callable(iso_fn):
+                        pub_date = iso_fn()
+                    elif raw_pub_date is not None:
+                        pub_date = str(raw_pub_date).strip() or None
+                except (TypeError, ValueError, AttributeError, OSError):
                     pub_date = str(raw_pub_date).strip() or None
 
             if processed_q.freshness and pub_date:
@@ -502,17 +506,25 @@ class RetrievalService:
             )
             pub_at: str | None = None
             if not isinstance(raw_pub_at, bool):
-                if hasattr(raw_pub_at, "isoformat"):
-                    pub_at = raw_pub_at.isoformat()
-                elif raw_pub_at is not None:
+                try:
+                    iso_fn = getattr(raw_pub_at, "isoformat", None)
+                    if callable(iso_fn):
+                        pub_at = iso_fn()
+                    elif raw_pub_at is not None:
+                        pub_at = str(raw_pub_at).strip() or None
+                except (TypeError, ValueError, AttributeError, OSError):
                     pub_at = str(raw_pub_at).strip() or None
 
             raw_upd_at = meta.get("updated_at") or item.get("updated_at") or None
             upd_at: str | None = None
             if not isinstance(raw_upd_at, bool):
-                if hasattr(raw_upd_at, "isoformat"):
-                    upd_at = raw_upd_at.isoformat()
-                elif raw_upd_at is not None:
+                try:
+                    iso_fn = getattr(raw_upd_at, "isoformat", None)
+                    if callable(iso_fn):
+                        upd_at = iso_fn()
+                    elif raw_upd_at is not None:
+                        upd_at = str(raw_upd_at).strip() or None
+                except (TypeError, ValueError, AttributeError, OSError):
                     upd_at = str(raw_upd_at).strip() or None
             date_src = meta.get("date_source")
             date_conf = meta.get("date_confidence")

@@ -6090,13 +6090,6 @@ footer.ws-footer {
         var tok = document.getElementById('pref-default-tokens') ? document.getElementById('pref-default-tokens').value : '3000';
         var ac = document.getElementById('pref-autocomplete') ? document.getElementById('pref-autocomplete').value : 'duckduckgo';
 
-        safeSetStorage('sxng_pref_mode', mode);
-        safeSetStorage('sxng_pref_safesearch', ss);
-        safeSetStorage('sxng_pref_count', count);
-        safeSetStorage('sxng_pref_tokens', tok);
-        safeSetStorage('sxng_pref_autocomplete', ac);
-        applySearchPreferenceControls(count, tok);
-
         fetch('/api/settings/engines', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -6107,6 +6100,12 @@ footer.ws-footer {
             return r.json();
           })
           .then(function () {
+            safeSetStorage('sxng_pref_mode', mode);
+            safeSetStorage('sxng_pref_safesearch', ss);
+            safeSetStorage('sxng_pref_count', count);
+            safeSetStorage('sxng_pref_tokens', tok);
+            safeSetStorage('sxng_pref_autocomplete', ac);
+            applySearchPreferenceControls(count, tok);
             showToast('一般設定を保存しました');
           })
           .catch(function () {

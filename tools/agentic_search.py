@@ -746,8 +746,11 @@ class SpeculativeFetcher:
         base_url: str | None = None,
     ) -> list[SearchResultItem]:
         """Concurrently scrape top items and populate full_content without blocking on hung threads."""
+        if max_fetch <= 0 or not items:
+            return items
+
         # Cap speculative scraping to at most 10 pages to prevent socket/thread exhaustion
-        safe_max = max(1, min(max_fetch, 10))
+        safe_max = min(max_fetch, 10)
         to_fetch = items[:safe_max]
         if not to_fetch:
             return items

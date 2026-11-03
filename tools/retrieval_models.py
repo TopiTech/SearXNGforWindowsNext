@@ -262,6 +262,17 @@ class QueryInfo:
             "freshness": self.freshness,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> QueryInfo:
+        return cls(
+            original=str(data.get("original", "")),
+            normalized=str(data.get("normalized", "")),
+            clean_text=str(data.get("clean_text", "")),
+            intent=str(data.get("intent", "factual")),
+            language=str(data.get("language", "en")),
+            freshness=data.get("freshness"),
+        )
+
 
 @dataclass
 class SearchExecutionInfo:
@@ -281,6 +292,16 @@ class SearchExecutionInfo:
             "partial": self.partial,
             "elapsed_ms": round(self.elapsed_ms, 1),
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SearchExecutionInfo:
+        return cls(
+            mode=str(data.get("mode", "balanced")),
+            expanded_queries=list(data.get("expanded_queries", [])),
+            engines_used=list(data.get("engines_used", [])),
+            partial=bool(data.get("partial", False)),
+            elapsed_ms=float(data.get("elapsed_ms", 0.0)),
+        )
 
 
 @dataclass
@@ -366,7 +387,7 @@ class RetrievalResponse:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize according to the GenAI Structured Response schema."""
-        query_dict = self.query.to_dict() if hasattr(self.query, "to_dict") else vars(self.query)
+        query_dict = self.query.to_dict()
         search_dict = self.search.to_dict()
         return {
             "schema_version": self.schema_version,
@@ -378,11 +399,7 @@ class RetrievalResponse:
 
     def to_markdown(self) -> str:
         """Format the retrieval response into rich, citation-dense Markdown."""
-        q_text = (
-            getattr(self.query, "clean_text", "")
-            or getattr(self.query, "normalized", "")
-            or getattr(self.query, "original", "")
-        )
+        q_text = self.query.clean_text or self.query.normalized or self.query.original
         safe_q = q_text.replace("`", "'")
         lines: list[str] = [f"## Search Retrieval: `{safe_q}` (Mode: `{self.mode}`, Intent: `{self.query.intent}`)\n"]
 

@@ -380,9 +380,9 @@ class HeadingPassageChunker:
                         )
                     )
                     overlap = buffer[-self.config.overlap_chars :] if len(buffer) > self.config.overlap_chars else ""
-                    buf_start = buf_start + len(buffer) - len(overlap)
                     if overlap and (len(overlap) + 1 + len(unit_clean) > self.config.max_chunk_chars):
                         overlap = ""
+                    buf_start = buf_start + len(buffer) - len(overlap)
                     buffer = f"{overlap}\n{unit_clean}" if overlap else unit_clean
                 else:
                     if len(buffer) + len(unit_clean) + 1 > self.config.max_chunk_chars:

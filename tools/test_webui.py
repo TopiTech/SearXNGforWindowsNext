@@ -1763,6 +1763,20 @@ class TestSyncEnginesSettingsFile(unittest.TestCase):
         self.assertIn("t.setAttribute('aria-selected'", html)
         self.assertIn("if (e.altKey && !e.ctrlKey && !e.metaKey)", html)
 
+    def test_general_preferences_save_updates_storage_on_success_only(self) -> None:
+        """Verify general preferences POST updates localStorage only after server acknowledgment."""
+        html = webui_next.AI_WORKSPACE_HTML
+        start = html.find("addListener('btn-save-general-prefs'")
+        end = html.find("addListener('btn-reset-general-prefs'")
+        self.assertNotEqual(start, -1)
+        self.assertNotEqual(end, -1)
+        btn_handler = html[start:end]
+        self.assertIn("fetch('/api/settings/engines'", btn_handler)
+        self.assertIn(".then(function () {", btn_handler)
+        then_block = btn_handler[btn_handler.find(".then(function () {") :]
+        self.assertIn("safeSetStorage('sxng_pref_mode', mode);", then_block)
+        self.assertIn("safeSetStorage('sxng_pref_safesearch', ss);", then_block)
+
 
 if __name__ == "__main__":
     unittest.main()

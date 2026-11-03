@@ -261,6 +261,33 @@ class TestSpeculativeFetcher(unittest.TestCase):
         self.assertLessEqual(len(scraped_urls), 10)
         self.assertEqual(sum(1 for it in updated if it.is_scraped), 10)
 
+    def test_fetch_pages_zero_or_negative_max_fetch_skips_scraping(self) -> None:
+        """Verify that max_fetch <= 0 immediately returns items without scraping."""
+        scraped_urls: list[str] = []
+
+        def tracking_scrape(url: str, **kwargs):
+            scraped_urls.append(url)
+            return {"content": f"content of {url}"}
+
+        fetcher = agentic_search.SpeculativeFetcher(scrape_func=tracking_scrape, max_workers=2)
+        items = [
+            agentic_search.SearchResultItem(
+                title=f"Page {i}", url=f"https://example.com/{i}", domain="example.com", content=""
+            )
+            for i in range(5)
+        ]
+        # max_fetch = 0
+        updated_zero = fetcher.fetch_pages(items, max_fetch=0, timeout=5.0)
+        self.assertEqual(len(updated_zero), 5)
+        self.assertEqual(len(scraped_urls), 0)
+        self.assertEqual(sum(1 for it in updated_zero if it.is_scraped), 0)
+
+        # max_fetch = -1
+        updated_neg = fetcher.fetch_pages(items, max_fetch=-1, timeout=5.0)
+        self.assertEqual(len(updated_neg), 5)
+        self.assertEqual(len(scraped_urls), 0)
+        self.assertEqual(sum(1 for it in updated_neg if it.is_scraped), 0)
+
 
 class TestTokenBudgeter(unittest.TestCase):
     """Test token estimation and markdown packing."""
