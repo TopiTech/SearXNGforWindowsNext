@@ -1,6 +1,6 @@
-Metadata-Version: 2.4
+Metadata-Version: 2.5
 Name: pip
-Version: 26.2.2
+Version: 26.3
 Summary: The PyPA recommended tool for installing Python packages.
 Author-email: The pip developers <distutils-sig@python.org>
 Requires-Python: >=3.10
@@ -46,6 +46,7 @@ Project-URL: Changelog, https://pip.pypa.io/en/stable/news/
 Project-URL: Documentation, https://pip.pypa.io
 Project-URL: Homepage, https://pip.pypa.io/
 Project-URL: Source, https://github.com/pypa/pip
+Import-Name: pip
 
 pip - The Python Package Installer
 ==================================
