@@ -54,10 +54,12 @@ options:
 
 """
 
+import typing as t
 import urllib.parse
 
 import babel
 
+from searx import get_setting
 from searx import locales, utils
 from searx import network as _network
 from searx.enginelib.traits import EngineTraits
@@ -78,7 +80,7 @@ display_type = ["infobox"]
 one will add a hit to the result list.  The first one will show a hit in the
 info box.  Both values can be set, or one of the two can be set."""
 
-list_of_wikipedias = "https://meta.wikimedia.org/wiki/List_of_Wikipedias"
+list_of_wikipedias = "https://meta.wikimedia.org/wiki/List_of_Wikipedias/sortable"
 """`List of all wikipedias <https://meta.wikimedia.org/wiki/List_of_Wikipedias>`_
 """
 
@@ -133,6 +135,14 @@ wikipedia_script_variants = {
 }
 
 
+def _contact():
+    contact: str = get_setting("general.contact_url", "") or ""
+    contact = contact.removeprefix("mailto:").strip()
+    if not contact:
+        logger.error("wikipedia engine requires general.contact_url (SEARXNG_CONTACT_URL)")
+    return contact
+
+
 def get_wiki_params(sxng_locale, eng_traits):
     """Returns the Wikipedia language tag and the netloc that fits to the
     ``sxng_locale``.  To support LanguageConverter_ this function rates a locale
@@ -142,6 +152,10 @@ def get_wiki_params(sxng_locale, eng_traits):
     eng_tag = eng_traits.get_region(sxng_locale, eng_traits.get_language(sxng_locale, "en"))
     wiki_netloc = eng_traits.custom["wiki_netloc"].get(eng_tag, "en.wikipedia.org")
     return eng_tag, wiki_netloc
+
+
+def setup(_: dict[str, t.Any]) -> bool:
+    return bool(_contact())
 
 
 def request(query, params):
@@ -155,6 +169,9 @@ def request(query, params):
 
     params["raise_for_httperror"] = False
     params["soft_max_redirects"] = 2
+    params["headers"]["User-Agent"] = utils.searxng_useragent(_contact())
+    logger.debug(f"wikipedia.request User-Agent: {params['headers']['User-Agent']}")
+    params["impersonate"] = "none"
 
     return params
 
@@ -265,7 +282,6 @@ def fetch_wikimedia_traits(engine_traits: EngineTraits):
     # pylint: disable=import-outside-toplevel, too-many-branches
 
     from searx.network import get  # see https://github.com/searxng/searxng/issues/762
-    from searx.utils import searxng_useragent
 
     engine_traits.custom["wiki_netloc"] = {}
     engine_traits.custom["WIKIPEDIA_LANGUAGES"] = []
@@ -279,8 +295,9 @@ def fetch_wikimedia_traits(engine_traits: EngineTraits):
         for sxng_tag in sxng_tag_list:
             engine_traits.regions[sxng_tag] = eng_tag
 
-    headers = {"Accept": "*/*", "User-Agent": searxng_useragent()}
-    resp = get(list_of_wikipedias, timeout=5, headers=headers)
+    headers = {"Accept": "*/*", "User-Agent": utils.searxng_useragent()}
+    print(f"wikipedia.fetch_traits headers: {headers}")
+    resp = get(list_of_wikipedias, timeout=5, headers=headers, impersonate="none")
     if not resp.ok:
         raise RuntimeError("Response from Wikipedia is not OK.")
 
@@ -291,6 +308,10 @@ def fetch_wikimedia_traits(engine_traits: EngineTraits):
             continue
         cols = [c.text_content().strip() for c in cols]
 
+        if len(cols) != 12:
+            # This row is not coming from the main table in:
+            # https://meta.wikimedia.org/wiki/List_of_Wikipedias/sortable
+            continue
         depth = float(cols[11].replace("-", "0").replace(",", ""))
         articles = int(cols[4].replace(",", "").replace(",", ""))
 
