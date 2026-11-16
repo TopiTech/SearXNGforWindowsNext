@@ -26,8 +26,9 @@ general:
   # use true to use your own donation page written in searx/info/en/donate.md
   # use false to disable the donation link
   donation_url: false
-  # mailto:contact@example.com
-  contact_url: false
+  # A contact address or URL is required by Wikipedia, Wikidata, and OpenStreetMap engines.
+  # Can be a website URL or mailto: link (e.g. mailto:contact@example.com).
+  contact_url: "https://github.com/TopiTech/SearXNGforWindowsNext"
   # record stats
   enable_metrics: true
   # expose stats in open metrics format at /metrics
