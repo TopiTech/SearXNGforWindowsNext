@@ -830,6 +830,27 @@ class TestWebUIRouteParameterForwarding(unittest.TestCase):
             self.assertEqual(recorded_args.get("base_url"), "http://127.0.0.1:7777")
             self.assertEqual(recorded_args.get("timeout"), 8.0)
 
+    def test_retrieval_api_forwards_pageno(self) -> None:
+        recorded_args: dict[str, Any] = {}
+
+        def mock_ret(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            recorded_args.update(kwargs)
+            return {
+                "query": kwargs.get("query"),
+                "schema_version": "1.0",
+                "page": kwargs.get("pageno", 1),
+                "results": [],
+            }
+
+        with patch.object(webui_next, "execute_server_retrieval_search", side_effect=mock_ret):
+            resp = self.client.get("/api/retrieval?q=rag+test&page=4")
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(recorded_args.get("pageno"), 4)
+
+            resp = self.client.post("/api/retrieval", json={"q": "rag test", "pageno": 3})
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(recorded_args.get("pageno"), 3)
+
     def test_scrape_analyze_forwards_timeout(self) -> None:
         recorded_args: dict[str, Any] = {}
 
@@ -952,6 +973,19 @@ class TestWebUIRateLimiting(unittest.TestCase):
     def test_rate_limit_applies_to_trailing_slash_path(self) -> None:
         """Trailing slash on rate limited routes must NOT bypass token bucket limits."""
         self._exhaust_then_verify_429(f"{self.LIMITED_DUMMY}/", 25)
+
+    def test_rate_limit_normalizes_remote_addr_with_port(self) -> None:
+        """Remote address with ephemeral port or IPv6 brackets must share the same rate bucket."""
+        seen_429 = False
+        for port in range(50000, 50030):
+            resp = self.client.get(
+                self.LIMITED_DUMMY,
+                environ_base={"REMOTE_ADDR": f"127.0.0.1:{port}"},
+            )
+            if resp.status_code == 429:
+                seen_429 = True
+                break
+        self.assertTrue(seen_429, "Ephemeral ports on same IP must share rate bucket and trigger 429")
 
 
 class TestWebUIImageGrid(unittest.TestCase):

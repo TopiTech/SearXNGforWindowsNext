@@ -655,11 +655,13 @@ def execute_server_retrieval_search(
     time_range: str = "",
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
+    pageno: int = 1,
     base_url: str | None = None,
     timeout: float | None = None,
 ) -> dict[str, Any]:
     """Execute high-quality retrieval pipeline in-process, returning GenAI Structured Schema dict."""
     count_int = _parse_int(count, default=5, minimum=1, maximum=50)
+    page_num = _parse_int(pageno, default=1, minimum=1, maximum=100)
     safe_base_url = _sanitize_local_base_url(base_url)
 
     def _s_func(
@@ -668,9 +670,12 @@ def execute_server_retrieval_search(
         categories: str = "",
         engines: str = "",
         time_range: str = "",
+        pageno: int = 1,
         base_url: str | None = None,
         timeout: float | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
+        eff_page = pageno if pageno > 1 else page_num
         return _search_in_process(
             webapp_mod=webapp_mod,
             query=query,
@@ -678,6 +683,7 @@ def execute_server_retrieval_search(
             categories=categories,
             engines=engines,
             time_range=time_range,
+            pageno=eff_page,
             base_url=base_url,
             timeout=timeout,
         )
@@ -687,6 +693,7 @@ def execute_server_retrieval_search(
         max_length: int = 12000,
         base_url: str | None = None,
         timeout: float = 6.0,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         _ = base_url
         return _scrape_url_direct(
@@ -706,11 +713,13 @@ def execute_server_retrieval_search(
         time_range=time_range,
         include_domains=include_domains,
         exclude_domains=exclude_domains,
+        pageno=page_num,
         base_url=safe_base_url,
         timeout=timeout,
     )
     data = resp.to_dict()
     data["markdown"] = resp.to_markdown()
+    data["page"] = page_num
     return data
 
 
@@ -6593,6 +6602,22 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         )
 
     # --- Tier 0: Per-client rate limiting for expensive API routes ---
+    def _clean_ip_address(addr: str) -> str:
+        s = addr.strip()
+        if not s:
+            return "unknown"
+        if s.startswith("[") and "]" in s:
+            end = s.index("]")
+            s = s[1:end]
+        elif s.count(":") == 1:
+            host, _ = s.split(":", 1)
+            with contextlib.suppress(ValueError):
+                ipaddress.IPv4Address(host)
+                s = host
+        if "%" in s:
+            s = s.split("%", 1)[0]
+        return s
+
     def _rate_limit_client_id() -> str:
         """Best-effort client identity: REMOTE_ADDR only.
 
@@ -6603,8 +6628,9 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         the proxy itself should enforce per-client limits (see DEVELOPMENT.md
         nginx ``limit_req_zone`` guidance).
         """
-        addr = request.remote_addr or "unknown"
-        return ipaddress.ip_address(addr).compressed if _is_valid_ip(addr) else addr
+        raw_addr = request.remote_addr or "unknown"
+        clean_addr = _clean_ip_address(raw_addr)
+        return ipaddress.ip_address(clean_addr).compressed if _is_valid_ip(clean_addr) else clean_addr
 
     def _is_valid_ip(addr: str) -> bool:
         with contextlib.suppress(ValueError):
@@ -6948,6 +6974,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                 time_range=str(time_range),
                 include_domains=inc_domains or None,
                 exclude_domains=exc_domains or None,
+                pageno=pageno,
                 base_url=base_url,
                 timeout=timeout,
             )
@@ -6993,6 +7020,10 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         mode = request.values.get("mode") or payload.get("mode") or "balanced"
         raw_count = request.values.get("count") or request.values.get("n") or payload.get("count")
         count = _parse_int(raw_count, 5, 1, 50)
+        raw_page = (
+            request.values.get("page") or request.values.get("pageno") or payload.get("page") or payload.get("pageno")
+        )
+        pageno = _parse_int(raw_page, 1, 1, 100)
         categories = request.values.get("categories") or payload.get("categories") or ""
         engines = request.values.get("engines") or payload.get("engines") or ""
         time_range = request.values.get("time_range") or payload.get("time_range") or ""
@@ -7024,6 +7055,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             time_range=str(time_range),
             include_domains=inc_domains or None,
             exclude_domains=exc_domains or None,
+            pageno=pageno,
             base_url=base_url,
             timeout=timeout,
         )

@@ -256,6 +256,13 @@ class TestTier1RetrievalEndpoint(unittest.TestCase):
         resp = self.client.get("/api/retrieval", params={"q": ""})
         self.assertEqual(resp.status_code, 400)
 
+    def test_retrieval_page_parameter_forwarding(self) -> None:
+        """Verify /api/retrieval accepts page/pageno and returns page in response."""
+        resp = self.client.get("/api/retrieval", params={"q": "SearXNG", "mode": "fast", "page": "2"})
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload.get("page"), 2)
+
 
 class TestTier1JsonFormats(unittest.TestCase):
     """Tier 1: Feature coverage for JSON format specifications and contracts."""
