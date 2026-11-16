@@ -683,6 +683,17 @@ class TestWebUIAutocompleter(unittest.TestCase):
         self.assertIn("function setActiveSuggestAria()", html)
         self.assertGreaterEqual(html.count("setActiveSuggestAria()"), 3)
 
+    def test_extract_suggestions_supports_object_structures(self) -> None:
+        """Verify extractSuggestions handles object arrays with phrase/query/suggestion keys."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("item.phrase || item.query || item.suggestion", html)
+
+    def test_keyboard_shortcuts_include_s_drawer_toggle(self) -> None:
+        """Verify 's' shortcut toggles scrape drawer on selected card."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("e.key === 's'", html)
+        self.assertIn('data-action="toggle-scrape"', html)
+
     def test_autocomplete_general_settings_markup(self) -> None:
         html = webui_next.AI_WORKSPACE_HTML
         self.assertIn('id="pref-autocomplete"', html)
@@ -1278,6 +1289,29 @@ class TestWebUIRefinedBehaviors(unittest.TestCase):
         with patch.dict(os.environ, {"SEARXNG_RATE_CAPACITY": "42.0", "SEARXNG_RATE_REFILL": "2.5"}):
             self.assertEqual(webui_next._get_rate_capacity(), 42.0)
             self.assertEqual(webui_next._get_rate_refill(), 2.5)
+
+    def test_rate_limiter_lru_eviction_under_capacity(self) -> None:
+        """When bucket table reaches _RATE_MAX_BUCKETS, oldest buckets are evicted so new clients are served."""
+        orig_max = webui_next._RATE_MAX_BUCKETS
+        orig_buckets = webui_next._RATE_BUCKETS.copy()
+        try:
+            webui_next._RATE_MAX_BUCKETS = 3
+            webui_next._RATE_BUCKETS.clear()
+
+            # Fill to max capacity
+            self.assertTrue(webui_next._rate_limit_check("client-1"))
+            self.assertTrue(webui_next._rate_limit_check("client-2"))
+            self.assertTrue(webui_next._rate_limit_check("client-3"))
+            self.assertEqual(len(webui_next._RATE_BUCKETS), 3)
+
+            # Fourth client should succeed via LRU eviction, and table size remains bounded
+            self.assertTrue(webui_next._rate_limit_check("client-4"))
+            self.assertLessEqual(len(webui_next._RATE_BUCKETS), 3)
+            self.assertIn("client-4", webui_next._RATE_BUCKETS)
+            self.assertNotIn("client-1", webui_next._RATE_BUCKETS)
+        finally:
+            webui_next._RATE_MAX_BUCKETS = orig_max
+            webui_next._RATE_BUCKETS = orig_buckets
 
     def test_settings_engines_post_calls_save_once(self) -> None:
         """POST /api/settings/engines should call save_engines_settings_data once and apply cookies."""

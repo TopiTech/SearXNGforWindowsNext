@@ -101,6 +101,7 @@ def start_test_server() -> str:
         if not os.environ.get("SEARXNG_SETTINGS_PATH") and os.path.exists(SETTINGS_PATH):
             os.environ["SEARXNG_SETTINGS_PATH"] = SETTINGS_PATH
         os.environ["SEARXNG_LIMITER"] = "false"
+        os.environ["SEARXNG_RATE_LIMIT"] = "false"
 
         # Suppress noisy logging during tests
         logging.getLogger("werkzeug").setLevel(logging.ERROR)

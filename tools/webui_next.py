@@ -4294,8 +4294,14 @@ footer.ws-footer {
         var seen = Object.create(null);
         for (var i = 0; i < raw.length; i++) {
           var item = raw[i];
+          var str = '';
           if (typeof item === 'string') {
-            var trimmed = item.trim();
+            str = item;
+          } else if (item && typeof item === 'object') {
+            str = item.phrase || item.query || item.suggestion || item.text || item.value || '';
+          }
+          if (typeof str === 'string') {
+            var trimmed = str.trim();
             if (trimmed && trimmed !== '[object Object]' && !seen[trimmed]) {
               seen[trimmed] = true;
               results.push(trimmed);
@@ -4882,6 +4888,7 @@ footer.ws-footer {
           var scrapeBtn = document.createElement('button');
           scrapeBtn.type = 'button';
           scrapeBtn.className = 'btn btn-sm';
+          scrapeBtn.setAttribute('data-action', 'toggle-scrape');
           scrapeBtn.innerHTML = icon('fileText') + '<span>本文抽出</span>';
           scrapeBtn.setAttribute('aria-expanded', 'false');
           scrapeBtn.setAttribute('aria-controls', drawerId);
@@ -5387,6 +5394,7 @@ footer.ws-footer {
           var scrapeBtn = document.createElement('button');
           scrapeBtn.type = 'button';
           scrapeBtn.className = 'btn btn-sm';
+          scrapeBtn.setAttribute('data-action', 'toggle-scrape');
           scrapeBtn.innerHTML = icon('fileText') + '<span>本文抽出</span>';
           var drawerId = 'classic-scrape-drawer-' + idx;
           scrapeBtn.setAttribute('aria-expanded', 'false');
@@ -6314,6 +6322,10 @@ footer.ws-footer {
             e.preventDefault();
             var copyBtn = cards[state.selectedCardIndex].querySelector('button[data-action="copy-citation"], button[aria-label*="コピー"]');
             if (copyBtn) copyBtn.click();
+          } else if (e.key === 's' && state.selectedCardIndex >= 0 && state.selectedCardIndex < cards.length) {
+            e.preventDefault();
+            var scrapeBtn = cards[state.selectedCardIndex].querySelector('button[data-action="toggle-scrape"], button[aria-controls*="scrape-drawer"]');
+            if (scrapeBtn) scrapeBtn.click();
           } else if (e.key === 'Enter' && state.selectedCardIndex >= 0 && state.selectedCardIndex < cards.length && active === cards[state.selectedCardIndex]) {
             var link = cards[state.selectedCardIndex].querySelector('a');
             if (link) window.open(link.href, '_blank', 'noopener,noreferrer');
@@ -6403,9 +6415,9 @@ footer.ws-footer {
 AI_WORKSPACE_HTML = _load_ai_workspace_html()
 
 # --- Tier 0: Per-client rate limiting state (module level for testability) ---
-_RATE_CAPACITY = 15.0  # burst size
-_RATE_REFILL_PER_SEC = 0.5  # sustained: 30 requests / minute
-_RATE_MAX_BUCKETS = 1024  # bound memory against IP spoof floods
+_RATE_CAPACITY: float = 15.0  # burst size
+_RATE_REFILL_PER_SEC: float = 0.5  # sustained: 30 requests / minute
+_RATE_MAX_BUCKETS: int = 1024  # bound memory against IP spoof floods
 _RATELOCK = threading.Lock()
 _RATE_BUCKETS: dict[str, _TokenBucket] = {}
 _RATE_LIMITED_PATHS = frozenset(
@@ -6453,9 +6465,12 @@ def _get_rate_refill() -> float:
 
 
 def _is_rate_limiting_enabled() -> bool:
-    """Return False if SEARXNG_RATE_LIMIT is set to off/false/0/disabled."""
+    """Return False if SEARXNG_RATE_LIMIT or SEARXNG_LIMITER is set to off/false/0/disabled."""
     val = os.environ.get("SEARXNG_RATE_LIMIT", "").strip().lower()
-    return val not in ("0", "false", "off", "no", "disable", "disabled")
+    if val in ("0", "false", "off", "no", "disable", "disabled"):
+        return False
+    limiter_val = os.environ.get("SEARXNG_LIMITER", "").strip().lower()
+    return limiter_val not in ("0", "false", "off", "no", "disable", "disabled")
 
 
 def _rate_limit_check(client_id: str) -> bool:
@@ -6474,8 +6489,13 @@ def _rate_limit_check(client_id: str) -> bool:
                 stale_cutoff = now - (capacity / refill) if refill > 0 else now - 60.0
                 for stale_key in [k for k, v in _RATE_BUCKETS.items() if v.updated < stale_cutoff]:
                     del _RATE_BUCKETS[stale_key]
-                if len(_RATE_BUCKETS) >= _RATE_MAX_BUCKETS and client_id not in _RATE_BUCKETS:
-                    return False  # under flood: reject unknown clients
+                if len(_RATE_BUCKETS) >= _RATE_MAX_BUCKETS:
+                    # Deterministic LRU eviction: remove the oldest entries
+                    # so new clients are not starved when buckets are flooded.
+                    num_to_evict = max(1, len(_RATE_BUCKETS) - _RATE_MAX_BUCKETS + 1)
+                    oldest_keys = sorted(_RATE_BUCKETS.keys(), key=lambda k: _RATE_BUCKETS[k].updated)[:num_to_evict]
+                    for ok in oldest_keys:
+                        del _RATE_BUCKETS[ok]
             bucket = _TokenBucket(capacity, now)
             _RATE_BUCKETS[client_id] = bucket
         elapsed = now - bucket.updated

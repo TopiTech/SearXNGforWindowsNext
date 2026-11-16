@@ -47,10 +47,10 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                 },
                 "count": {
                     "type": "integer",
-                    "description": "Number of top results to return (default 5, min 1, max 20).",
+                    "description": "Number of top results to return (default 5, min 1, max 50).",
                     "default": 5,
                     "minimum": 1,
-                    "maximum": 20,
+                    "maximum": 50,
                 },
                 "mode": {
                     "type": "string",
@@ -163,10 +163,10 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                 },
                 "max_results": {
                     "type": "integer",
-                    "description": "Number of top results to return (default 5, min 1, max 20).",
+                    "description": "Number of top results to return (default 5, min 1, max 50).",
                     "default": 5,
                     "minimum": 1,
-                    "maximum": 20,
+                    "maximum": 50,
                 },
                 "include_highlights": {
                     "type": "boolean",
@@ -236,10 +236,10 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                 },
                 "count": {
                     "type": "integer",
-                    "description": "Number of top results to return (default 5, min 1, max 20).",
+                    "description": "Number of top results to return (default 5, min 1, max 50).",
                     "default": 5,
                     "minimum": 1,
-                    "maximum": 20,
+                    "maximum": 50,
                 },
                 "categories": {
                     "type": "string",

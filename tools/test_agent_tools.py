@@ -319,12 +319,14 @@ class TestMCPServer(unittest.TestCase):
         self.assertIn("query", search_tool["inputSchema"]["required"])
         self.assertIn("include_highlights", search_tool["inputSchema"]["properties"])
         self.assertEqual(search_tool["inputSchema"]["properties"]["include_highlights"]["type"], "boolean")
+        self.assertEqual(search_tool["inputSchema"]["properties"]["count"]["maximum"], 50)
 
         # Check deep search tool schema
         self.assertIn("searxng_deep_search", tool_names)
         deep_tool = next(t for t in tools if t["name"] == "searxng_deep_search")
         self.assertIn("query", deep_tool["inputSchema"]["required"])
         self.assertIn("search_depth", deep_tool["inputSchema"]["properties"])
+        self.assertEqual(deep_tool["inputSchema"]["properties"]["max_results"]["maximum"], 50)
 
     @patch("searxng_client.search_deep")
     def test_tools_call_deep_search(self, mock_deep: MagicMock) -> None:

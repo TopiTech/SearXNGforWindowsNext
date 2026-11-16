@@ -470,8 +470,14 @@
         var seen = Object.create(null);
         for (var i = 0; i < raw.length; i++) {
           var item = raw[i];
+          var str = '';
           if (typeof item === 'string') {
-            var trimmed = item.trim();
+            str = item;
+          } else if (item && typeof item === 'object') {
+            str = item.phrase || item.query || item.suggestion || item.text || item.value || '';
+          }
+          if (typeof str === 'string') {
+            var trimmed = str.trim();
             if (trimmed && trimmed !== '[object Object]' && !seen[trimmed]) {
               seen[trimmed] = true;
               results.push(trimmed);
@@ -1058,6 +1064,7 @@
           var scrapeBtn = document.createElement('button');
           scrapeBtn.type = 'button';
           scrapeBtn.className = 'btn btn-sm';
+          scrapeBtn.setAttribute('data-action', 'toggle-scrape');
           scrapeBtn.innerHTML = icon('fileText') + '<span>本文抽出</span>';
           scrapeBtn.setAttribute('aria-expanded', 'false');
           scrapeBtn.setAttribute('aria-controls', drawerId);
@@ -1563,6 +1570,7 @@
           var scrapeBtn = document.createElement('button');
           scrapeBtn.type = 'button';
           scrapeBtn.className = 'btn btn-sm';
+          scrapeBtn.setAttribute('data-action', 'toggle-scrape');
           scrapeBtn.innerHTML = icon('fileText') + '<span>本文抽出</span>';
           var drawerId = 'classic-scrape-drawer-' + idx;
           scrapeBtn.setAttribute('aria-expanded', 'false');
@@ -2490,6 +2498,10 @@
             e.preventDefault();
             var copyBtn = cards[state.selectedCardIndex].querySelector('button[data-action="copy-citation"], button[aria-label*="コピー"]');
             if (copyBtn) copyBtn.click();
+          } else if (e.key === 's' && state.selectedCardIndex >= 0 && state.selectedCardIndex < cards.length) {
+            e.preventDefault();
+            var scrapeBtn = cards[state.selectedCardIndex].querySelector('button[data-action="toggle-scrape"], button[aria-controls*="scrape-drawer"]');
+            if (scrapeBtn) scrapeBtn.click();
           } else if (e.key === 'Enter' && state.selectedCardIndex >= 0 && state.selectedCardIndex < cards.length && active === cards[state.selectedCardIndex]) {
             var link = cards[state.selectedCardIndex].querySelector('a');
             if (link) window.open(link.href, '_blank', 'noopener,noreferrer');
