@@ -25,6 +25,7 @@ from typing import Any, ClassVar
 
 import retrieval_models
 import retrieval_service
+from callable_compat import call_with_supported_kwargs
 from lexical_rerank import MultilingualTokenizer
 from url_normalizer import is_safe_retrieval_url
 
@@ -730,6 +731,45 @@ class BM25PassageExtractor:
         return chosen or passages[:top_k]
 
 
+def _coerce_scrape_result(raw: Any) -> dict[str, Any]:
+    """Normalize an untrusted scraper return value into typed fields.
+
+    ``scrape_func`` is a pluggable boundary: it may be the built-in client, the
+    in-process webapp scraper, or a caller-supplied callable. Validating once
+    here keeps every downstream consumer (highlight extraction, token
+    estimation, Markdown packing) working on ``str``/``int`` values instead of
+    crashing on ``None`` or non-string fields.
+    """
+    if not isinstance(raw, dict):
+        return {
+            "error": "スクレイパーが不正なレスポンスを返しました。",
+            "content": "",
+            "is_truncated": False,
+            "original_length": 0,
+        }
+    raw_error = raw.get("error")
+    if raw_error:
+        return {"error": str(raw_error), "content": "", "is_truncated": False, "original_length": 0}
+    raw_content = raw.get("content")
+    if raw_content is None:
+        content = ""
+    elif isinstance(raw_content, str):
+        content = raw_content
+    else:
+        content = str(raw_content)
+    raw_length = raw.get("original_length")
+    try:
+        original_length = int(raw_length) if raw_length is not None else len(content)
+    except (TypeError, ValueError, OverflowError):
+        original_length = len(content)
+    return {
+        "error": "",
+        "content": content,
+        "is_truncated": bool(raw.get("is_truncated", False)),
+        "original_length": max(original_length, 0),
+    }
+
+
 class SpeculativeFetcher:
     """Performs parallel speculative fetching of top search result URLs."""
 
@@ -759,27 +799,20 @@ class SpeculativeFetcher:
         sem = threading.Semaphore(self.max_workers)
 
         def _do_scrape(target_url: str) -> dict[str, Any]:
+            scrape_kwargs: dict[str, Any] = {"max_length": scrape_length, "timeout": eff_timeout}
+            if base_url is not None:
+                scrape_kwargs["base_url"] = base_url
             try:
-                if base_url is not None:
-                    try:
-                        res = self.scrape_func(
-                            target_url,
-                            max_length=scrape_length,
-                            timeout=eff_timeout,
-                            base_url=base_url,
-                        )
-                    except TypeError:
-                        res = self.scrape_func(target_url, max_length=scrape_length, timeout=eff_timeout)
-                else:
-                    res = self.scrape_func(target_url, max_length=scrape_length, timeout=eff_timeout)
-                err = res.get("error") if isinstance(res, dict) else "Invalid scrape response"
-                content = (res.get("content") or "").strip() if isinstance(res, dict) else ""
-                if err:
-                    return {"is_scraped": False, "full_content": "", "scrape_error": str(err)}
+                payload = _coerce_scrape_result(
+                    call_with_supported_kwargs(self.scrape_func, target_url, **scrape_kwargs)
+                )
+                if payload["error"]:
+                    return {"is_scraped": False, "full_content": "", "scrape_error": payload["error"]}
+                content = payload["content"].strip()
                 if content:
                     return {"is_scraped": True, "full_content": content, "scrape_error": ""}
                 return {"is_scraped": False, "full_content": "", "scrape_error": "本文が見つかりませんでした"}
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 - one failed page must not abort the batch
                 return {"is_scraped": False, "full_content": "", "scrape_error": str(e)}
 
         # Daemon threads are essential here: futures that exceed the wall-clock
@@ -1047,24 +1080,19 @@ def execute_scrape_pipeline(
     scrape_kwargs: dict[str, Any] = {"max_length": max_len}
     if timeout is not None:
         scrape_kwargs["timeout"] = timeout
+    if base_url is not None:
+        scrape_kwargs["base_url"] = base_url
     try:
-        if base_url is not None:
-            try:
-                scrape_res = scrape_func(clean_url, base_url=base_url, **scrape_kwargs)
-            except TypeError:
-                scrape_res = scrape_func(clean_url, **scrape_kwargs)
-        else:
-            scrape_res = scrape_func(clean_url, **scrape_kwargs)
-    except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError) as exc:
+        scrape_res = call_with_supported_kwargs(scrape_func, clean_url, **scrape_kwargs)
+    except Exception as exc:  # noqa: BLE001 - a scraper backend failure must not crash the pipeline
         scrape_res = {"error": str(exc)}
-    except BaseException as exc:  # noqa: BLE001 - never let a scraper crash the HTTP pipeline
-        scrape_res = {"error": f"scrape backend failed: {exc}"}
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
     dom = extract_domain(clean_url)
+    payload = _coerce_scrape_result(scrape_res)
 
-    if scrape_res.get("error"):
-        err_msg = str(scrape_res["error"])
+    if payload["error"]:
+        err_msg = payload["error"]
         return {
             "mode": "scrape",
             "url": clean_url,
@@ -1083,9 +1111,9 @@ def execute_scrape_pipeline(
             "rag_prompt": "",
         }
 
-    content = scrape_res.get("content", "")
-    is_truncated = bool(scrape_res.get("is_truncated", False))
-    orig_len = int(scrape_res.get("original_length", len(content)))
+    content = payload["content"]
+    is_truncated = payload["is_truncated"]
+    orig_len = payload["original_length"]
 
     highlights: list[str] = []
     if clean_q and content:
@@ -1297,22 +1325,13 @@ def execute_unified_search(
         search_kwargs["pageno"] = pageno
 
     try:
-        search_res = search_func(**search_kwargs)
-    except TypeError:
-        search_kwargs.pop("time_range", None)
-        search_kwargs.pop("pageno", None)
-        try:
-            search_res = search_func(**search_kwargs)
-        except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError) as exc:
-            search_res = {"error": str(exc)}
-        except BaseException as exc:  # noqa: BLE001 - never let a search backend crash the HTTP pipeline
-            search_res = {"error": f"search backend failed: {exc}"}
-    except (OSError, ValueError, RuntimeError, KeyError, AttributeError) as exc:
+        search_res = call_with_supported_kwargs(search_func, **search_kwargs)
+    except Exception as exc:  # noqa: BLE001 - a search backend failure must not crash the pipeline
         search_res = {"error": str(exc)}
-    except BaseException as exc:  # noqa: BLE001 - never let a search backend crash the HTTP pipeline
-        search_res = {"error": f"search backend failed: {exc}"}
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+    if not isinstance(search_res, dict):
+        search_res = {"error": "検索バックエンドが不正なレスポンスを返しました。"}
 
     if search_res.get("error"):
         err_text = str(search_res["error"])

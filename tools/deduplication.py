@@ -402,8 +402,12 @@ class ResultDeduplicator:
                 # Prefer canonical URL or longer content if the new item is better quality
                 if not p_item.get("canonical_url") and norm_canonical:
                     p_item["canonical_url"] = norm_canonical
+                # Compare like with like: norm_snip is NFKC-folded and lowercased,
+                # so its length cannot be compared to the stored raw snippet.
+                # A folded 4-char snippet could previously overwrite a longer
+                # 6-char one whenever full-width characters collapsed.
                 p_snip_len = len(str(p_item.get("content") or p_item.get("snippet") or ""))
-                if len(norm_snip) > p_snip_len:
+                if len(raw_snippet) > p_snip_len:
                     p_item["content"] = raw_snippet
             else:
                 # Create a new cluster

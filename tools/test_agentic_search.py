@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import unittest
+from typing import Any
 from unittest.mock import MagicMock
 
 # Ensure tools directory is in sys.path
@@ -989,6 +990,59 @@ class TestRegressionHardening(unittest.TestCase):
         highlights = extractor.extract_highlights(content, "파이썬 비동기", top_k=1)
         self.assertEqual(len(highlights), 1)
         self.assertIn("두 번째 문단", highlights[0])
+
+    def test_execute_scrape_pipeline_coerces_untrusted_fields(self) -> None:
+        """Verify null/non-string scrape payload fields are normalized before use."""
+        url = "https://93.184.216.34/page"
+
+        res = agentic_search.execute_scrape_pipeline(
+            url, scrape_func=lambda url, **kwargs: {"content": None, "original_length": None}
+        )
+        self.assertEqual(res.get("error", ""), "")
+        self.assertEqual(res["content"], "")
+        self.assertEqual(res["original_length"], 0)
+        self.assertFalse(res["is_truncated"])
+
+        res_int = agentic_search.execute_scrape_pipeline(
+            url, scrape_func=lambda url, **kwargs: {"content": 1234, "original_length": "12"}
+        )
+        self.assertEqual(res_int["content"], "1234")
+        self.assertEqual(res_int["original_length"], 12)
+
+    def test_execute_scrape_pipeline_rejects_non_dict_payload(self) -> None:
+        """Verify a non-dict scraper return value becomes an explicit error, not a crash."""
+
+        def non_dict_scrape(url: str, **kwargs: Any) -> Any:
+            return ["not", "a", "dict"]
+
+        res = agentic_search.execute_scrape_pipeline("https://93.184.216.34/page", scrape_func=non_dict_scrape)
+        self.assertIn("error", res)
+        self.assertEqual(res["content"], "")
+
+    def test_execute_unified_search_propagates_keyboard_interrupt(self) -> None:
+        """Verify KeyboardInterrupt is not swallowed by the pipeline."""
+
+        def interrupted(**kwargs: Any) -> dict[str, Any]:
+            raise KeyboardInterrupt
+
+        with self.assertRaises(KeyboardInterrupt):
+            agentic_search.execute_unified_search(
+                query="python", search_func=interrupted, scrape_func=lambda url, **kwargs: {"content": ""}, mode="fast"
+            )
+
+    def test_execute_unified_search_does_not_retry_backend_type_error(self) -> None:
+        """Verify an internal TypeError is surfaced once instead of triggering a retry."""
+        calls: list[str] = []
+
+        def broken(**kwargs: Any) -> dict[str, Any]:
+            calls.append(str(kwargs.get("query")))
+            raise TypeError("internal boom")
+
+        res = agentic_search.execute_unified_search(
+            query="python", search_func=broken, scrape_func=lambda url, **kwargs: {"content": ""}, mode="fast"
+        )
+        self.assertEqual(len(calls), len(set(calls)))
+        self.assertIn("internal boom", str(res.get("error", "")))
 
 
 if __name__ == "__main__":

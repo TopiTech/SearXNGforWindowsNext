@@ -371,7 +371,9 @@
       var HISTORY_STORAGE_KEY = 'sxng_query_history';
       function getQueryHistory() {
         try {
-          return JSON.parse(safeGetStorage(HISTORY_STORAGE_KEY, '[]') || '[]');
+          var parsed = JSON.parse(safeGetStorage(HISTORY_STORAGE_KEY, '[]') || '[]');
+          if (!Array.isArray(parsed)) return [];
+          return parsed.filter(function (item) { return typeof item === 'string' && item; });
         } catch (e) {
           return [];
         }

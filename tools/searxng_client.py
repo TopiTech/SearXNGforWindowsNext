@@ -265,18 +265,26 @@ def scrape(
             if sys_path not in sys.path:
                 sys.path.insert(0, sys_path)
             from url_normalizer import is_safe_retrieval_url
+    except ImportError:
+        return {
+            "url": clean_url,
+            "content": "",
+            "error": "スクレイピング拒否 (400): SSRF 検証モジュールを読み込めないため、安全のため実行を中止しました。",
+        }
 
-        if not is_safe_retrieval_url(clean_url, resolve_dns=True):
-            return {
-                "url": clean_url,
-                "content": "",
-                "error": (
-                    f"スクレイピング拒否 (400): 対象 URL ({clean_url}) はプライベートネットワーク、"
-                    "ループバック、または許可されていないスキームのため安全機構 (SSRF対策) によりブロックされました。"
-                ),
-            }
-    except Exception:  # noqa: BLE001, S110
-        pass
+    try:
+        url_is_safe = is_safe_retrieval_url(clean_url, resolve_dns=True)
+    except Exception:  # noqa: BLE001 - fail closed: a broken validator must never allow a request
+        url_is_safe = False
+    if not url_is_safe:
+        return {
+            "url": clean_url,
+            "content": "",
+            "error": (
+                f"スクレイピング拒否 (400): 対象 URL ({clean_url}) はプライベートネットワーク、"
+                "ループバック、または許可されていないスキームのため安全機構 (SSRF対策) によりブロックされました。"
+            ),
+        }
 
     target_base = (base_url or get_base_url()).rstrip("/")
     t = timeout or get_timeout()
@@ -367,21 +375,38 @@ def _escape_markdown_link(title: str, url: str) -> tuple[str, str]:
     return safe_title, safe_url
 
 
+def _as_text(value: Any) -> str:
+    """Coerce an untrusted JSON field to text without assuming its type."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
 def format_search_markdown(search_data: dict[str, Any]) -> str:
-    """Format search results into clean, AI-friendly Markdown."""
+    """Format search results into clean, AI-friendly Markdown.
+
+    Search payloads come from SearXNG's JSON API and are not schema-validated
+    upstream: ``title`` may be null and ``results`` may be a non-list. Coerce
+    at this boundary so one malformed hit cannot crash the CLI or MCP server.
+    """
     error = search_data.get("error")
     if error:
-        return f"### 検索エラー\n\n{error}"
+        return f"### 検索エラー\n\n{_as_text(error)}"
 
-    query = search_data.get("query", "")
-    results = search_data.get("results", [])
-    answers = search_data.get("answers", [])
+    query = _as_text(search_data.get("query"))
+    raw_results = search_data.get("results")
+    results = [item for item in raw_results if isinstance(item, dict)] if isinstance(raw_results, list) else []
+    raw_answers = search_data.get("answers")
+    answers = raw_answers if isinstance(raw_answers, list) else []
 
     lines: list[str] = [f"## Web 検索結果: `{query}`\n"]
 
-    if answers:
-        for ans in answers:
-            lines.append(f"> 💡 **直接回答**: {ans}\n")
+    for ans in answers:
+        answer_text = _as_text(ans).strip()
+        if answer_text:
+            lines.append(f"> 💡 **直接回答**: {answer_text}\n")
 
     if not results:
         lines.append("該当する検索結果が見つかりませんでした。別のキーワードをお試しください。")
@@ -390,10 +415,10 @@ def format_search_markdown(search_data: dict[str, Any]) -> str:
     lines.append(f"**取得件数:** {len(results)} 件\n")
 
     for i, item in enumerate(results, 1):
-        title = item.get("title", "無題").strip()
-        url = item.get("url", "").strip()
-        content = item.get("content", "").strip()
-        source = item.get("source", "").strip()
+        title = _as_text(item.get("title")).strip() or "無題"
+        url = _as_text(item.get("url")).strip()
+        content = _as_text(item.get("content")).strip()
+        source = _as_text(item.get("source")).strip()
 
         safe_title, safe_url = _escape_markdown_link(title, url)
         source_tag = f" `[{source}]`" if source else ""
@@ -412,10 +437,14 @@ def format_scrape_markdown(scrape_data: dict[str, Any]) -> str:
     if error:
         return f"### 本文抽出エラー\n\n{error}"
 
-    url = scrape_data.get("url", "")
-    content = scrape_data.get("content", "").strip()
-    is_truncated = scrape_data.get("is_truncated", False)
-    orig_len = scrape_data.get("original_length", len(content))
+    url = _as_text(scrape_data.get("url"))
+    content = _as_text(scrape_data.get("content")).strip()
+    is_truncated = bool(scrape_data.get("is_truncated", False))
+    raw_orig_len = scrape_data.get("original_length")
+    try:
+        orig_len = int(raw_orig_len) if raw_orig_len is not None else len(content)
+    except (TypeError, ValueError, OverflowError):
+        orig_len = len(content)
 
     lines: list[str] = [f"## 抽出本文: {url}\n"]
 
@@ -623,7 +652,7 @@ def format_deep_search_markdown(deep_data: dict[str, Any]) -> str:
     # Return packed markdown if already computed by agentic_search
     md = deep_data.get("markdown")
     if md:
-        return md
+        return _as_text(md)
 
     # Fallback to standard search markdown
     return format_search_markdown(deep_data)

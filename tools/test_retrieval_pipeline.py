@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import socket
 import sys
+import threading
 import time
 import unittest
 from typing import Any
@@ -208,6 +209,16 @@ class TestDeduplication(unittest.TestCase):
         self.assertNotIn("qiita", norm)
         self.assertIn("python 3.12", norm)
 
+    def test_dedup_keeps_longer_raw_snippet_when_nfkc_expands(self) -> None:
+        """Verify a short NFKC-expanding snippet cannot overwrite a longer raw snippet."""
+        items = [
+            {"url": "https://example.com/a", "title": "Same Title", "content": "abc", "engine": "google"},
+            {"url": "https://example.com/a", "title": "Same Title", "content": "㍿", "engine": "bing"},
+        ]
+        deduped = deduplicate_results(items, query="same title")
+        self.assertEqual(len(deduped), 1)
+        self.assertEqual(deduped[0]["content"], "abc")
+
 
 class TestRankFusionAndLexical(unittest.TestCase):
     """Test Reciprocal Rank Fusion (RRF) and Multilingual Lexical BM25 ranking."""
@@ -312,6 +323,45 @@ class TestRankFusionAndLexical(unittest.TestCase):
             content="Details about Linux operating system",
         )
         self.assertGreater(score_high, score_low)
+
+    def test_fusion_owns_duplicate_urls_lists(self) -> None:
+        """Verify fusion copies duplicate_urls instead of appending to the caller's list."""
+        from rank_fusion import ReciprocalRankFusion
+
+        query_runs: list[dict[str, Any]] = [
+            {
+                "query": "q1",
+                "results": [
+                    {
+                        "url": "https://example.com/x",
+                        "title": "X",
+                        "content": "alpha",
+                        "engine": "google",
+                        "duplicate_urls": ["https://example.com/y"],
+                    }
+                ],
+            },
+            {
+                "query": "q2",
+                "results": [
+                    {
+                        "url": "https://example.com/x",
+                        "title": "X",
+                        "content": "beta",
+                        "engine": "bing",
+                        "duplicate_urls": ["https://example.com/z"],
+                    }
+                ],
+            },
+        ]
+        original = query_runs[0]["results"][0]["duplicate_urls"]
+        with patch("rank_fusion.deduplicate_results", side_effect=lambda results, query="": [dict(r) for r in results]):
+            fused = ReciprocalRankFusion().fuse_query_runs(query_runs)
+
+        self.assertEqual(len(fused), 1)
+        self.assertEqual(original, ["https://example.com/y"])
+        self.assertEqual(fused[0]["duplicate_urls"], ["https://example.com/y", "https://example.com/z"])
+        self.assertIsNot(fused[0]["duplicate_urls"], original)
 
 
 class TestPassageChunkerAndSecurity(unittest.TestCase):
@@ -945,6 +995,41 @@ class TestRetrievalServiceIntegration(unittest.TestCase):
         # Safe item must be called
         mock_scrape.assert_called_once()
         self.assertTrue(items[3]["is_scraped"])
+
+    def test_search_backend_type_error_is_not_retried(self) -> None:
+        """Verify a genuine TypeError inside the backend is reported once, not retried."""
+        calls: list[str] = []
+
+        def broken_search(**kwargs: Any) -> dict[str, Any]:
+            calls.append(str(kwargs.get("query")))
+            raise TypeError("backend bug")
+
+        service = RetrievalService(search_func=broken_search)
+        resp = service.search("python", mode="fast")
+        self.assertGreaterEqual(len(calls), 1)
+        self.assertEqual(len(calls), len(set(calls)))
+        self.assertTrue(resp.partial)
+        self.assertTrue(any("backend bug" in warning for warning in resp.warnings))
+
+    def test_fetch_pages_respects_budget_max_concurrency(self) -> None:
+        """Verify _fetch_pages_concurrent caps active scrapes at max_concurrency."""
+        lock = threading.Lock()
+        state = {"active": 0, "peak": 0}
+
+        def scrape(url: str, **kwargs: Any) -> dict[str, Any]:
+            with lock:
+                state["active"] += 1
+                state["peak"] = max(state["peak"], state["active"])
+            time.sleep(0.05)
+            with lock:
+                state["active"] -= 1
+            return {"content": "body"}
+
+        service = RetrievalService(scrape_func=scrape)
+        items = [{"url": f"https://93.184.216.34/{index}"} for index in range(6)]
+        service._fetch_pages_concurrent(items, max_pages=6, scrape_length=1000, timeout=5.0, max_concurrency=2)
+        self.assertLessEqual(state["peak"], 2)
+        self.assertTrue(all(item.get("is_scraped") for item in items))
 
 
 class TestQueryPipeline(unittest.TestCase):

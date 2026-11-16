@@ -628,6 +628,12 @@ class TestWebUISVGAccessibility(unittest.TestCase):
 class TestWebUIBrowserHistorySync(unittest.TestCase):
     """Test browser URL and history state synchronization."""
 
+    def test_query_history_storage_shape_validation_in_js(self) -> None:
+        """Verify a corrupted/legacy localStorage value cannot break history rendering."""
+        html = webui_next.AI_WORKSPACE_HTML
+        self.assertIn("if (!Array.isArray(parsed)) return [];", html)
+        self.assertIn("typeof item === 'string'", html)
+
     def test_url_sync_and_popstate_bindings_in_js(self) -> None:
         html = webui_next.AI_WORKSPACE_HTML
         self.assertIn("function updateUrlState(", html)

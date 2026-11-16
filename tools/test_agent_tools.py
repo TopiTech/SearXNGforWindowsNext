@@ -848,6 +848,39 @@ class TestSearXNGCLI(unittest.TestCase):
         self.assertFalse(res["is_truncated"])
         self.assertEqual(res["original_length"], 0)
 
+    def test_format_search_markdown_tolerates_null_and_non_list_fields(self) -> None:
+        """Verify the formatter coerces null fields and non-list results instead of raising."""
+        md = searxng_client.format_search_markdown(
+            {"query": None, "results": [{"title": None, "url": None, "content": None}], "answers": None}
+        )
+        self.assertIn("無題", md)
+        self.assertNotIn("None", md)
+
+        md_bad_results = searxng_client.format_search_markdown({"results": "not-a-list", "answers": {}})
+        self.assertIn("見つかりませんでした", md_bad_results)
+
+    def test_format_scrape_markdown_tolerates_null_fields(self) -> None:
+        """Verify the scrape formatter handles null url/content/original_length."""
+        md = searxng_client.format_scrape_markdown({"url": None, "content": None, "original_length": None})
+        self.assertIn("抽出可能な本文が見つかりませんでした", md)
+
+        md_truncated = searxng_client.format_scrape_markdown(
+            {"url": "https://example.com", "content": "abc", "is_truncated": True, "original_length": None}
+        )
+        self.assertIn("全 3 文字", md_truncated)
+
+    @patch("urllib.request.urlopen")
+    @patch("url_normalizer.is_safe_retrieval_url", side_effect=RuntimeError("validator exploded"))
+    def test_scrape_ssrf_guard_fails_closed_on_validator_error(
+        self, mock_validator: MagicMock, mock_urlopen: MagicMock
+    ) -> None:
+        """Verify a broken SSRF validator blocks the request instead of allowing it."""
+        res = searxng_client.scrape("https://example.com/page")
+        self.assertIn("error", res)
+        self.assertEqual(res["content"], "")
+        mock_validator.assert_called_once()
+        mock_urlopen.assert_not_called()
+
     def test_mcp_parse_bool_and_is_url_query(self) -> None:
         """Verify MCP boolean parser and URL query detection."""
         self.assertTrue(mcp_server._parse_bool("true"))

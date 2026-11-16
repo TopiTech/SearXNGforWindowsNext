@@ -20,6 +20,7 @@ from concurrent.futures import Future
 from datetime import UTC, datetime
 from typing import Any
 
+from callable_compat import call_with_supported_kwargs
 from cross_encoder_rerank import CrossEncoderReranker
 from deduplication import ResultDeduplicator
 from lexical_rerank import LexicalReranker
@@ -92,16 +93,8 @@ class RetrievalService:
     def _fetch_query_results(self, **kwargs: Any) -> dict[str, Any]:
         """Fetch raw results using self.search_func, preserving error/partial metadata."""
         try:
-            res = self.search_func(**kwargs)
-        except TypeError:
-            kwargs.pop("time_range", None)
-            kwargs.pop("pageno", None)
-            try:
-                res = self.search_func(**kwargs)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Search query failed: %s", exc)
-                return {"error": str(exc), "results": []}
-        except Exception as exc:  # noqa: BLE001
+            res = call_with_supported_kwargs(self.search_func, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - surface backend failures as partial results
             logger.warning("Search query failed: %s", exc)
             return {"error": str(exc), "results": []}
 
@@ -116,7 +109,7 @@ class RetrievalService:
         if not self.scrape_func:
             return {"error": "no scraper configured"}
         try:
-            return self.scrape_func(url, **kwargs)
+            return call_with_supported_kwargs(self.scrape_func, url, **kwargs)
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 
@@ -136,8 +129,13 @@ class RetrievalService:
         scrape_length: int,
         timeout: float,
         base_url: str | None = None,
+        max_concurrency: int = 5,
     ) -> None:
-        """Concurrently scrape top URLs with daemon threads and timeout protection."""
+        """Concurrently scrape top URLs with daemon threads and timeout protection.
+
+        ``max_concurrency`` comes from the active retrieval budget so a mode can
+        bound outbound requests instead of every mode hammering with a fixed 5.
+        """
         if max_pages <= 0:
             return
 
@@ -145,7 +143,8 @@ class RetrievalService:
         if not to_scrape:
             return
 
-        sem = threading.Semaphore(min(len(to_scrape), 5))
+        concurrency_limit = max(1, min(int(max_concurrency), 10))
+        sem = threading.Semaphore(min(len(to_scrape), concurrency_limit))
 
         def _worker(fut: Future, url: str) -> None:
             with sem:
@@ -154,18 +153,14 @@ class RetrievalService:
                 try:
                     kwargs: dict[str, Any] = {"max_length": scrape_length, "timeout": timeout}
                     if base_url is not None:
-                        try:
-                            res = self._scrape_page(url, base_url=base_url, **kwargs)
-                        except TypeError:
-                            res = self._scrape_page(url, **kwargs)
-                    else:
-                        res = self._scrape_page(url, **kwargs)
+                        kwargs["base_url"] = base_url
+                    res = self._scrape_page(url, **kwargs)
                     if not fut.cancelled():
                         try:
                             fut.set_result(res)
                         except (concurrent.futures.InvalidStateError, RuntimeError):
                             pass
-                except BaseException as exc:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001 - keep other workers alive
                     if not fut.cancelled():
                         try:
                             fut.set_exception(exc)
@@ -472,6 +467,7 @@ class RetrievalService:
                 scrape_length=budget.max_total_chars,
                 timeout=float(budget.scrape_timeout_ms / 1000.0),
                 base_url=base_url,
+                max_concurrency=budget.max_concurrency,
             )
 
         # Build RetrievalResultItems

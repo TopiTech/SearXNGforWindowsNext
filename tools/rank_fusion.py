@@ -192,10 +192,12 @@ class ReciprocalRankFusion:
 
                     # Merge duplicate URLs and content
                     curr_item = state["item"]
-                    existing_dups = curr_item.get("duplicate_urls")
-                    if not isinstance(existing_dups, list):
-                        existing_dups = []
-                        curr_item["duplicate_urls"] = existing_dups
+                    raw_existing = curr_item.get("duplicate_urls")
+                    # Always own the list. Adopting the source item's list would
+                    # append to input the caller still holds, and sharing one
+                    # list between fused items leaks duplicates across results.
+                    existing_dups = list(raw_existing) if isinstance(raw_existing, list) else []
+                    curr_item["duplicate_urls"] = existing_dups
                     if url not in existing_dups and url != curr_item.get("url"):
                         existing_dups.append(url)
                     raw_dups = item.get("duplicate_urls")
