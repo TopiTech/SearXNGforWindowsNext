@@ -63,6 +63,36 @@ class TestSearXNGClient(unittest.TestCase):
         with patch.dict(os.environ, {"SEARXNG_TIMEOUT": "25.5"}):
             self.assertEqual(searxng_client.get_timeout(), 25.5)
 
+    def test_get_base_url_ipv6_loopback_is_bracketed(self) -> None:
+        with patch.dict(os.environ, {"SEARXNG_PORT": "9000", "SEARXNG_BIND_ADDRESS": "::1"}, clear=True):
+            self.assertEqual(searxng_client.get_base_url(), "http://[::1]:9000")
+
+    def test_get_base_url_already_bracketed_ipv6(self) -> None:
+        with patch.dict(os.environ, {"SEARXNG_PORT": "9000", "SEARXNG_BIND_ADDRESS": "[::1]"}, clear=True):
+            self.assertEqual(searxng_client.get_base_url(), "http://[::1]:9000")
+
+    def test_get_base_url_ipv6_wildcard_maps_to_loopback(self) -> None:
+        with patch.dict(os.environ, {"SEARXNG_PORT": "9000", "SEARXNG_BIND_ADDRESS": "::"}, clear=True):
+            self.assertEqual(searxng_client.get_base_url(), "http://127.0.0.1:9000")
+
+    def test_get_timeout_rejects_invalid_values(self) -> None:
+        for bad in ("0", "-5", "nan", "inf", "-inf", "not-a-number", ""):
+            with patch.dict(os.environ, {"SEARXNG_TIMEOUT": bad}, clear=True):
+                self.assertEqual(
+                    searxng_client.get_timeout(),
+                    searxng_client.DEFAULT_TIMEOUT,
+                    f"SEARXNG_TIMEOUT={bad!r} must fall back to the default",
+                )
+
+    def test_resolve_timeout_rejects_explicit_invalid_values(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(searxng_client._resolve_timeout(0), searxng_client.DEFAULT_TIMEOUT)
+            self.assertEqual(searxng_client._resolve_timeout(-3.0), searxng_client.DEFAULT_TIMEOUT)
+            self.assertEqual(searxng_client._resolve_timeout(float("nan")), searxng_client.DEFAULT_TIMEOUT)
+        with patch.dict(os.environ, {"SEARXNG_TIMEOUT": "9.0"}, clear=True):
+            self.assertEqual(searxng_client._resolve_timeout(0), 9.0)
+            self.assertEqual(searxng_client._resolve_timeout(4.0), 4.0)
+
     def test_search_empty_query(self) -> None:
         res = searxng_client.search("")
         self.assertIn("error", res)

@@ -851,6 +851,49 @@ class TestWebUIRouteParameterForwarding(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(recorded_args.get("pageno"), 3)
 
+    def test_deep_search_accepts_json_list_filters(self) -> None:
+        """JSON arrays for engines/categories must be joined, not str()-ed.
+
+        Regression: str(["google", "bing"]) produced "['google', 'bing']",
+        which SearXNG silently treats as an unknown engine (zero results).
+        """
+        recorded_args: dict[str, Any] = {}
+
+        def mock_deep(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            recorded_args.update(kwargs)
+            return {"query": kwargs.get("query"), "results": []}
+
+        with patch.object(webui_next, "execute_server_deep_search", side_effect=mock_deep):
+            resp = self.client.post(
+                "/deep_search",
+                json={
+                    "q": "list filters",
+                    "engines": ["google", "bing"],
+                    "categories": ["general", "it"],
+                    "time_range": "week",
+                },
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(recorded_args.get("engines"), "google,bing")
+            self.assertEqual(recorded_args.get("categories"), "general,it")
+            self.assertEqual(recorded_args.get("time_range"), "week")
+
+    def test_retrieval_api_accepts_json_list_engines(self) -> None:
+        recorded_args: dict[str, Any] = {}
+
+        def mock_ret(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            recorded_args.update(kwargs)
+            return {"query": kwargs.get("query"), "schema_version": "1.0", "results": []}
+
+        with patch.object(webui_next, "execute_server_retrieval_search", side_effect=mock_ret):
+            resp = self.client.post(
+                "/api/retrieval",
+                json={"q": "list engines", "engines": ["duckduckgo", "brave"], "categories": ["general"]},
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(recorded_args.get("engines"), "duckduckgo,brave")
+            self.assertEqual(recorded_args.get("categories"), "general")
+
     def test_scrape_analyze_forwards_timeout(self) -> None:
         recorded_args: dict[str, Any] = {}
 

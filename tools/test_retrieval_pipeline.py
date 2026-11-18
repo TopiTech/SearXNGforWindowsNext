@@ -784,6 +784,42 @@ class TestRetrievalModelsAndBudget(unittest.TestCase):
         self.assertIn("fastapi tutorial", md)
         self.assertIn("howto", md)
 
+    def test_retrieval_response_preserves_nested_search_telemetry(self) -> None:
+        """Telemetry supplied only through ``search`` must not be dropped.
+
+        Regression: __post_init__ used to treat ``search`` as authoritative
+        only when expanded_queries was non-empty or the mode was non-default,
+        so elapsed_ms/partial/engines_used were reset to their defaults.
+        """
+        resp = RetrievalResponse(
+            search=SearchExecutionInfo(
+                mode="balanced",
+                engines_used=["duckduckgo"],
+                partial=True,
+                elapsed_ms=12.5,
+            )
+        )
+        self.assertEqual(resp.mode, "balanced")
+        self.assertEqual(resp.engines_used, ["duckduckgo"])
+        self.assertTrue(resp.partial)
+        self.assertEqual(resp.elapsed_ms, 12.5)
+        data = resp.to_dict()
+        self.assertEqual(data["search"]["elapsed_ms"], 12.5)
+        self.assertTrue(data["search"]["partial"])
+        self.assertEqual(data["search"]["engines_used"], ["duckduckgo"])
+
+    def test_retrieval_response_flat_fields_take_precedence(self) -> None:
+        """Explicit flat fields win over a default nested search view."""
+        resp = RetrievalResponse(
+            mode="fast",
+            expanded_queries=["original query"],
+            elapsed_ms=7.0,
+            search=SearchExecutionInfo(),
+        )
+        self.assertEqual(resp.search.mode, "fast")
+        self.assertEqual(resp.search.expanded_queries, ["original query"])
+        self.assertEqual(resp.search.elapsed_ms, 7.0)
+
 
 class TestRetrievalServiceIntegration(unittest.TestCase):
     """Integration tests for RetrievalService orchestrating end-to-end retrieval."""

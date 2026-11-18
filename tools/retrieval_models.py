@@ -370,20 +370,36 @@ class RetrievalResponse:
     search: SearchExecutionInfo = field(default_factory=SearchExecutionInfo)
 
     def __post_init__(self) -> None:
-        if self.search.expanded_queries or self.search.mode != "balanced":
-            self.mode = self.search.mode
-            self.expanded_queries = self.search.expanded_queries
-            self.engines_used = self.search.engines_used
-            self.partial = self.search.partial
-            self.elapsed_ms = self.search.elapsed_ms
-        else:
-            self.search = SearchExecutionInfo(
-                mode=self.mode,
-                expanded_queries=self.expanded_queries,
-                engines_used=self.engines_used,
-                partial=self.partial,
-                elapsed_ms=self.elapsed_ms,
-            )
+        """Reconcile the flat schema fields with the nested ``search`` view.
+
+        Callers populate either the top-level fields (the flat GenAI schema)
+        or the nested ``search`` object. The previous logic treated ``search``
+        as authoritative only when ``expanded_queries`` was non-empty or the
+        mode was non-default, so ``elapsed_ms``/``partial``/``engines_used``
+        supplied through ``search`` alone were silently reset to defaults.
+        Merge in both directions instead: nested values fill fields the
+        caller left at their defaults, then the nested view is rebuilt from
+        the reconciled flat fields so the two can never disagree.
+        """
+        nested = self.search
+        if nested != SearchExecutionInfo():
+            if self.mode == "balanced":
+                self.mode = nested.mode
+            if not self.expanded_queries:
+                self.expanded_queries = list(nested.expanded_queries)
+            if not self.engines_used:
+                self.engines_used = list(nested.engines_used)
+            if not self.partial:
+                self.partial = nested.partial
+            if not self.elapsed_ms:
+                self.elapsed_ms = nested.elapsed_ms
+        self.search = SearchExecutionInfo(
+            mode=self.mode,
+            expanded_queries=list(self.expanded_queries),
+            engines_used=list(self.engines_used),
+            partial=self.partial,
+            elapsed_ms=self.elapsed_ms,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize according to the GenAI Structured Response schema."""

@@ -9,6 +9,7 @@ It requires only the Python standard library so it runs without additional depen
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.parse
@@ -24,6 +25,25 @@ DEFAULT_HEADERS = {
 }
 
 
+def _normalize_bind_host(bind: str) -> str:
+    """Normalize a bind address for use as the host part of a URL.
+
+    IPv6 literals must be bracketed (RFC 3986); otherwise ``http://::1:8888``
+    is unparseable and every client request fails. Wildcard binds
+    (``0.0.0.0``/``::``) are not connectable addresses, so they map to
+    loopback exactly like the existing IPv4 wildcard handling.
+    """
+    host = (bind or "").strip()
+    while len(host) >= 2 and host.startswith("[") and host.endswith("]"):
+        host = host[1:-1].strip()
+    if not host or host in ("0.0.0.0", "::"):
+        return "127.0.0.1"
+    if ":" in host:
+        # RFC 6874: a zone identifier is percent-encoded inside the brackets.
+        return "[" + host.replace("%", "%25") + "]"
+    return host
+
+
 def get_base_url() -> str:
     """Return the configured SearXNG base URL, stripped of trailing slashes."""
     custom_url = os.environ.get("SEARXNG_BASE_URL", "").strip()
@@ -35,8 +55,7 @@ def get_base_url() -> str:
         try:
             port_num = int(port_raw)
             if 1 <= port_num <= 65535:
-                bind = os.environ.get("SEARXNG_BIND_ADDRESS", "").strip()
-                host = bind if bind and bind != "0.0.0.0" else "127.0.0.1"
+                host = _normalize_bind_host(os.environ.get("SEARXNG_BIND_ADDRESS", ""))
                 return f"http://{host}:{port_num}"
         except ValueError:
             pass
@@ -44,15 +63,34 @@ def get_base_url() -> str:
     return DEFAULT_BASE_URL.rstrip("/")
 
 
+def _coerce_timeout(raw: Any) -> float | None:
+    """Return a usable positive finite timeout, or None when invalid."""
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value
+
+
+def _resolve_timeout(timeout: float | None) -> float:
+    """Resolve an explicit timeout, then SEARXNG_TIMEOUT, then the default.
+
+    Zero, negative, NaN and infinite values are rejected here because
+    ``urlopen`` treats them as non-blocking or raises, which would turn every
+    request into a failure instead of using a sane timeout.
+    """
+    explicit = _coerce_timeout(timeout)
+    if explicit is not None:
+        return explicit
+    configured = _coerce_timeout(os.environ.get("SEARXNG_TIMEOUT", "").strip())
+    return configured if configured is not None else DEFAULT_TIMEOUT
+
+
 def get_timeout() -> float:
-    """Return the configured request timeout in seconds."""
-    raw = os.environ.get("SEARXNG_TIMEOUT", "").strip()
-    if raw:
-        try:
-            return float(raw)
-        except ValueError:
-            pass
-    return DEFAULT_TIMEOUT
+    """Return the configured request timeout in seconds (invalid values ignored)."""
+    return _resolve_timeout(None)
 
 
 def _make_offline_error_message(base_url: str, error_detail: str = "") -> str:
@@ -75,7 +113,7 @@ def check_health(base_url: str | None = None, timeout: float | None = None) -> t
         tuple[bool, str]: (is_healthy, status_message)
     """
     target_base = (base_url or get_base_url()).rstrip("/")
-    t = timeout or get_timeout()
+    t = _resolve_timeout(timeout)
     health_url = f"{target_base}/healthz"
 
     try:
@@ -142,7 +180,7 @@ def search(
         }
 
     target_base = (base_url or get_base_url()).rstrip("/")
-    t = timeout or get_timeout()
+    t = _resolve_timeout(timeout)
 
     # Cap count within safe boundaries (1 to 50)
     try:
@@ -287,7 +325,7 @@ def scrape(
         }
 
     target_base = (base_url or get_base_url()).rstrip("/")
-    t = timeout or get_timeout()
+    t = _resolve_timeout(timeout)
     try:
         max_length = int(max_length)
     except (ValueError, TypeError):

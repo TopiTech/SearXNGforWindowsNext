@@ -160,6 +160,26 @@ def _parse_domain_list(val: Any) -> list[str]:
     return agentic_search.parse_domain_list(val)
 
 
+def _parse_csv_param(val: Any) -> str:
+    """Normalize a query/JSON value into a comma-separated search parameter.
+
+    Query strings and form bodies deliver ``categories``/``engines`` as text,
+    while JSON clients naturally send arrays. Coercing an array with ``str()``
+    produced Python-repr values such as ``"['google', 'bing']"``, which SearXNG
+    silently treats as unknown engine names (zero results, no error). Accept
+    both shapes and ignore non-string entries.
+    """
+    if isinstance(val, str):
+        return val.strip()
+    if isinstance(val, (list, tuple)):
+        return ",".join(part for part in (x.strip() for x in val if isinstance(x, str)) if part)
+    if isinstance(val, bool) or val is None:
+        return ""
+    if isinstance(val, (int, float)):
+        return str(val)
+    return ""
+
+
 def build_rag_prompt(query: str, markdown_context: str) -> str:
     """Wrap packed search markdown into a ready-to-paste LLM RAG prompt."""
     return agentic_search.build_rag_prompt(query, markdown_context)
@@ -6931,15 +6951,14 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             or payload.get("max_length")
         )
         max_scrape_length = _parse_int(raw_scrape_len, 8000, 500, 50000)
-        categories = (
+        categories = _parse_csv_param(
             request.values.get("categories")
             or request.values.get("category")
             or payload.get("categories")
             or payload.get("category")
-            or ""
         )
-        engines = request.values.get("engines") or payload.get("engines") or ""
-        time_range = request.values.get("time_range") or payload.get("time_range") or ""
+        engines = _parse_csv_param(request.values.get("engines") or payload.get("engines"))
+        time_range = _parse_csv_param(request.values.get("time_range") or payload.get("time_range"))
         raw_timeout = request.values.get("timeout") or payload.get("timeout")
         timeout = _parse_float(raw_timeout, 15.0, 1.0, 60.0) if raw_timeout is not None else None
         raw_base_url = request.values.get("base_url") or payload.get("base_url")
@@ -6969,9 +6988,9 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                 webapp_mod=webapp_mod,
                 mode=ret_mode,
                 count=max_results,
-                categories=str(categories),
-                engines=str(engines),
-                time_range=str(time_range),
+                categories=categories,
+                engines=engines,
+                time_range=time_range,
                 include_domains=inc_domains or None,
                 exclude_domains=exc_domains or None,
                 pageno=pageno,
@@ -6990,9 +7009,9 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             include_highlights=inc_hl,
             include_domains=inc_domains or None,
             exclude_domains=exc_domains or None,
-            categories=str(categories),
-            engines=str(engines),
-            time_range=str(time_range),
+            categories=categories,
+            engines=engines,
+            time_range=time_range,
             max_tokens=max_tokens,
             mode=str(mode),
             focus_query=str(focus_query),
@@ -7024,9 +7043,9 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             request.values.get("page") or request.values.get("pageno") or payload.get("page") or payload.get("pageno")
         )
         pageno = _parse_int(raw_page, 1, 1, 100)
-        categories = request.values.get("categories") or payload.get("categories") or ""
-        engines = request.values.get("engines") or payload.get("engines") or ""
-        time_range = request.values.get("time_range") or payload.get("time_range") or ""
+        categories = _parse_csv_param(request.values.get("categories") or payload.get("categories"))
+        engines = _parse_csv_param(request.values.get("engines") or payload.get("engines"))
+        time_range = _parse_csv_param(request.values.get("time_range") or payload.get("time_range"))
         raw_timeout = request.values.get("timeout") or payload.get("timeout")
         timeout = _parse_float(raw_timeout, 15.0, 1.0, 60.0) if raw_timeout is not None else None
         raw_base_url = request.values.get("base_url") or payload.get("base_url")
@@ -7050,9 +7069,9 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             webapp_mod=webapp_mod,
             mode=str(mode),
             count=count,
-            categories=str(categories),
-            engines=str(engines),
-            time_range=str(time_range),
+            categories=categories,
+            engines=engines,
+            time_range=time_range,
             include_domains=inc_domains or None,
             exclude_domains=exc_domains or None,
             pageno=pageno,
