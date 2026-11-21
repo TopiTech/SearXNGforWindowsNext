@@ -480,12 +480,7 @@ def _scrape_url_direct(
     except too_large_exc_cls:
         return {"url": clean_url, "content": "", "error": "レスポンスサイズが上限を超えています。"}
     except blocked_exc_cls as exc:
-        return {
-            "url": clean_url,
-            "content": "",
-            "error": f"スクレイピング拒否: {str(exc)[:120]}",
-            "error_code": "blocked",
-        }
+        return {"url": clean_url, "content": "", "error": f"スクレイピング拒否: {str(exc)[:120]}", "error_code": "blocked"}
     except Exception as exc:  # noqa: BLE001
         return {"url": clean_url, "content": "", "error": f"取得失敗: {str(exc)[:120]}"}
 

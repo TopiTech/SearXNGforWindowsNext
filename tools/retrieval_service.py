@@ -311,9 +311,7 @@ class RetrievalService:
                 is_partial = True
                 break
             executed_queries.append(q_exec)
-            dispatch_query = (
-                f"{q_exec}{filetype_suffix}" if filetype_suffix and "filetype:" not in q_exec.lower() else q_exec
-            )
+            dispatch_query = f"{q_exec}{filetype_suffix}" if filetype_suffix and "filetype:" not in q_exec.lower() else q_exec
             search_args: dict[str, Any] = {
                 "query": dispatch_query,
                 "count": budget.max_results_per_query,

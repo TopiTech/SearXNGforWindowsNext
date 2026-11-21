@@ -177,9 +177,7 @@ class ReciprocalRankFusion:
 
                 raw_rank = item.get("rank")
                 try:
-                    rank_idx = (
-                        max(1, int(raw_rank)) if raw_rank is not None and not isinstance(raw_rank, bool) else pos_idx
-                    )
+                    rank_idx = max(1, int(raw_rank)) if raw_rank is not None and not isinstance(raw_rank, bool) else pos_idx
                 except (ValueError, TypeError, OverflowError):
                     rank_idx = pos_idx
 
