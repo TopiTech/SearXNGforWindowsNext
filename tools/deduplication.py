@@ -321,8 +321,9 @@ class ResultDeduplicator:
                 match_reason = "canonical_url"
 
             if matched_cluster is None:
-                is_cross_domain_title_eligible = (len(norm_tit) >= 28 and len(norm_tit.split()) >= 4) or (
-                    _is_cjk_spaceless(norm_tit) and len(norm_tit) >= 14
+                is_cross_domain_title_eligible = (
+                    (len(norm_tit) >= 28 and len(norm_tit.split()) >= 4)
+                    or (_is_cjk_spaceless(norm_tit) and len(norm_tit) >= 14)
                 )
                 for cluster in clusters:
                     c_norm_tit = cluster.norm_title

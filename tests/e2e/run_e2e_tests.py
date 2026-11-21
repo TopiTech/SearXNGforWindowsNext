@@ -186,9 +186,7 @@ def run_e2e_tests(
             print(" E2E Test Suite Summary")
             print("=" * 80)
             for tr in tier_results:
-                tier_ok = (
-                    tr["tests_run"] > 0 and tr["failed"] == 0 and tr["errors"] == 0 and tr["unexpected_successes"] == 0
-                )
+                tier_ok = tr["tests_run"] > 0 and tr["failed"] == 0 and tr["errors"] == 0 and tr["unexpected_successes"] == 0
                 mark = "OK" if tier_ok else "FAIL"
                 print(
                     f" * [{mark}] {tr['name']:<40} : {tr['passed']}/{tr['tests_run']} passed ({tr['duration_seconds']}s)"
