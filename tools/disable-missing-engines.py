@@ -211,7 +211,9 @@ def disable_engine_in_text(yaml_content, engine_name):
     # entries became one giant block and the first ``disabled`` field could be
     # changed instead of the missing engine's field.
     lines = yaml_content.splitlines(keepends=True)
-    item_pattern = re.compile(r"^(?P<indent>[ \t]*)-[ \t]*(?:name:\s*(?P<name>[^\r\n]*)|(?P<other>[^\r\n]*))(?:\r?\n)?$")
+    item_pattern = re.compile(
+        r"^(?P<indent>[ \t]*)-[ \t]*(?:name:\s*(?P<name>[^\r\n]*)|(?P<other>[^\r\n]*))(?:\r?\n)?$"
+    )
     root_item_indent: int | None = None
 
     for start, line in enumerate(lines):
