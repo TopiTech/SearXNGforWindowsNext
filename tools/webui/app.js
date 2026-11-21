@@ -2232,7 +2232,14 @@
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.json();
           })
-          .then(function () {
+          .then(function (res) {
+            if (res && res.synced_settings_yml === false) {
+              // The in-memory engine list changed but config/settings.yml could
+              // not be written (permissions, read-only path, ...). Do not claim
+              // a durable save and keep the beforeunload guard armed.
+              showToast('ブラウザには保存しましたが、設定ファイルに書き込めませんでした', true);
+              return;
+            }
             showToast('検索エンジン構成を保存しました');
             // Clear the dirty flag only after a confirmed save so the
             // beforeunload guard stays active if the POST failed.

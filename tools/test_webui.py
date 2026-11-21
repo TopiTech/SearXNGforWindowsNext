@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import sys
+import types
 import unittest
 import urllib.parse
 from html.parser import HTMLParser
@@ -37,6 +38,12 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 import webui_next
+
+
+class FakeSearxEnginesModule(types.ModuleType):
+    """Minimal `searx.engines` stand-in exposing the engine registry dict."""
+
+    engines: dict[str, object]
 
 
 class _HTMLTagCollector(HTMLParser):
@@ -907,6 +914,29 @@ class TestWebUIRouteParameterForwarding(unittest.TestCase):
             self.assertEqual(recorded_args.get("timeout"), 14.0)
 
 
+class TestScrapeUrlValidation(unittest.TestCase):
+    """The scraping transport must reject the same characters as the SSRF validator."""
+
+    def test_scrape_path_rejects_whitespace_control_and_backslash(self) -> None:
+        fake_webapp = types.SimpleNamespace(
+            _is_blocked_scrape_host=lambda host: False,
+            pinned_dns=object(),
+        )
+        for url in (
+            "https://exa mple.com/",
+            "https://example.com/a\tb",
+            "https://example.com/\x7f",
+            "https://example.com/a\\b",
+        ):
+            with self.subTest(url=url):
+                result = webui_next._scrape_url_direct(fake_webapp, url)
+                self.assertTrue(result.get("error"), result)
+        self.assertIn(
+            "control characters or whitespace",
+            webui_next._scrape_url_direct(fake_webapp, "https://exa mple.com/")["error"],
+        )
+
+
 class TestWebUIRateLimiting(unittest.TestCase):
     """Test per-client token-bucket rate limiting on expensive API routes (F3.12)."""
 
@@ -1516,10 +1546,10 @@ class TestWebUIRefinedBehaviors(unittest.TestCase):
             "disabled_engines": ["  ", "a" * 200],
         }
         with (
-            patch("webui_next.sync_engines_to_settings_file") as mock_sync,
+            patch("webui_next.sync_engines_to_settings_file_result") as mock_sync,
             patch("webui_next.apply_settings_cookies") as mock_apply,
         ):
-            mock_sync.return_value = False
+            mock_sync.return_value = webui_next.EngineSyncResult(changed=False, settings_path="settings.yml")
             resp = client.post("/api/settings/engines", json=payload)
             self.assertEqual(resp.status_code, 200)
             saved_call = mock_sync.call_args
@@ -1843,6 +1873,149 @@ class TestSyncEnginesSettingsFile(unittest.TestCase):
             with open(cfg_path, "r", encoding="utf-8") as f:
                 self.assertIn("disabled: true", f.read())
 
+    def test_sync_engines_appends_enabled_engine_without_guessing_module(self) -> None:
+        """A newly enabled default engine gets a name-only override, never a guessed module."""
+        import tempfile
+
+        initial_yaml = "engines:\n  - name: google\n    engine: google\n    disabled: false\n"
+        fake_engines = FakeSearxEnginesModule("searx.engines")
+        fake_engines.engines = {"google": object(), "arch linux wiki": object()}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cfg_path = os.path.join(tmp_dir, "settings.yml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(initial_yaml)
+
+            with patch.dict(sys.modules, {"searx.engines": fake_engines}):
+                changed = webui_next.sync_engines_to_settings_file(
+                    enabled_engines=["google", "arch linux wiki"],
+                    settings_path=cfg_path,
+                )
+            self.assertTrue(changed)
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertEqual(content.count("- name: arch linux wiki"), 1)
+            self.assertIn("disabled: false", content)
+            # A display name is not an engine module path.
+            self.assertNotIn("engine: arch linux wiki", content)
+            self.assertEqual(content.count("- name: google"), 1)
+
+    def test_sync_engines_persists_disabled_default_engine_as_name_only_override(self) -> None:
+        """A disabled default engine missing from the user config needs a name-only override."""
+        import tempfile
+
+        initial_yaml = "engines:\n  - name: google\n    engine: google\n    disabled: false\n"
+        fake_engines = FakeSearxEnginesModule("searx.engines")
+        fake_engines.engines = {"google": object(), "arch linux wiki": object()}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cfg_path = os.path.join(tmp_dir, "settings.yml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(initial_yaml)
+
+            with patch.dict(sys.modules, {"searx.engines": fake_engines}):
+                changed = webui_next.sync_engines_to_settings_file(
+                    disabled_engines=["arch linux wiki"],
+                    settings_path=cfg_path,
+                )
+            self.assertTrue(changed)
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertEqual(content.count("- name: arch linux wiki"), 1)
+            self.assertIn("disabled: true", content)
+            # A display name is not an engine module path.
+            self.assertNotIn("engine: arch linux wiki", content)
+            self.assertEqual(content.count("- name: google"), 1)
+
+    def test_sync_engines_matches_headers_with_inline_comments(self) -> None:
+        """An inline YAML comment must not hide an engine from matching."""
+        import tempfile
+
+        initial_yaml = "engines:\n  - name: google  # main engine\n    engine: google\n    disabled: false\n"
+        fake_engines = FakeSearxEnginesModule("searx.engines")
+        fake_engines.engines = {"google": object()}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cfg_path = os.path.join(tmp_dir, "settings.yml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(initial_yaml)
+
+            with patch.dict(sys.modules, {"searx.engines": fake_engines}):
+                changed = webui_next.sync_engines_to_settings_file(
+                    disabled_engines=["google"],
+                    settings_path=cfg_path,
+                )
+            self.assertTrue(changed)
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertEqual(content.count("- name: google"), 1)
+            self.assertIn("- name: google  # main engine", content)
+            self.assertIn("disabled: true", content)
+
+    def test_sync_engines_creates_engines_section_for_merged_config(self) -> None:
+        """`use_default_settings` configs without an engines key still persist overrides."""
+        import tempfile
+
+        import yaml
+
+        initial_yaml = "use_default_settings: true\ngeneral:\n  instance_name: test\n"
+        fake_engines = FakeSearxEnginesModule("searx.engines")
+        fake_engines.engines = {"arch linux wiki": object(), "bing images": object()}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cfg_path = os.path.join(tmp_dir, "settings.yml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(initial_yaml)
+
+            with patch.dict(sys.modules, {"searx.engines": fake_engines}):
+                changed = webui_next.sync_engines_to_settings_file(
+                    disabled_engines=["arch linux wiki", "bing images"],
+                    settings_path=cfg_path,
+                )
+                self.assertTrue(changed)
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                data = yaml.safe_load(content)
+                self.assertTrue(data["use_default_settings"])
+                self.assertEqual(
+                    data["engines"],
+                    [
+                        {"name": "arch linux wiki", "disabled": True},
+                        {"name": "bing images", "disabled": True},
+                    ],
+                )
+                # Entries are separated by a single newline, not a blank line.
+                self.assertNotIn("\n\n  - name:", content)
+
+                # A second save must be a no-op (no duplicated entries).
+                self.assertFalse(
+                    webui_next.sync_engines_to_settings_file(
+                        disabled_engines=["arch linux wiki", "bing images"], settings_path=cfg_path
+                    )
+                )
+
+    def test_sync_engines_replaces_inline_empty_engines_list(self) -> None:
+        """`engines: []` must be expanded in place, not shadowed by a duplicate key."""
+        import tempfile
+
+        import yaml
+
+        initial_yaml = "use_default_settings: true\nengines: []\n"
+        fake_engines = FakeSearxEnginesModule("searx.engines")
+        fake_engines.engines = {"arch linux wiki": object()}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cfg_path = os.path.join(tmp_dir, "settings.yml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(initial_yaml)
+
+            with patch.dict(sys.modules, {"searx.engines": fake_engines}):
+                changed = webui_next.sync_engines_to_settings_file(
+                    enabled_engines=["arch linux wiki"],
+                    settings_path=cfg_path,
+                )
+            self.assertTrue(changed)
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertEqual(content.count("engines:"), 1)
+            data = yaml.safe_load(content)
+            self.assertEqual(data["engines"], [{"name": "arch linux wiki", "disabled": False}])
+
     def test_sanitize_local_base_url_blocks_remote_hosts(self) -> None:
         """Verify _sanitize_local_base_url allows loopback SearXNG URLs and rejects remote SSRF targets."""
         self.assertEqual(webui_next._sanitize_local_base_url("http://127.0.0.1:8888/"), "http://127.0.0.1:8888")
@@ -1871,6 +2044,47 @@ class TestSyncEnginesSettingsFile(unittest.TestCase):
                 content = f.read()
             self.assertNotIn("pwned", content)
             self.assertNotIn("bad:", content)
+
+    def test_save_engines_noop_is_reported_as_synced(self) -> None:
+        """An already-matching settings.yml is a success, not a write failure."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cfg_path = os.path.join(tmp_dir, "settings.yml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write("engines:\n  - name: google\n    engine: google\n    disabled: false\n")
+            payload = {"enabled_engines": ["google"], "disabled_engines": []}
+            with patch.dict(os.environ, {"SEARXNG_SETTINGS_PATH": cfg_path}):
+                first = webui_next.save_engines_settings_data(None, payload)
+                second = webui_next.save_engines_settings_data(None, payload)
+            self.assertTrue(first["synced_settings_yml"])
+            self.assertTrue(second["synced_settings_yml"])
+
+    def test_save_engines_reports_missing_settings_file(self) -> None:
+        """A missing settings.yml must be reported as an unsynced write."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            missing = os.path.join(tmp_dir, "missing.yml")
+            with patch.dict(os.environ, {"SEARXNG_SETTINGS_PATH": missing}):
+                result = webui_next.save_engines_settings_data(None, {"enabled_engines": ["google"]})
+            self.assertFalse(result["synced_settings_yml"])
+
+    def test_engine_save_ui_reports_settings_sync_failure(self) -> None:
+        """A false synced_settings_yml must show a warning and keep the unsaved flag."""
+        html = webui_next.AI_WORKSPACE_HTML
+        start = html.find("addListener('btn-save-settings-engines'")
+        end = html.find("function applySearchPreferenceControls", start)
+        self.assertNotEqual(start, -1)
+        self.assertNotEqual(end, -1)
+        handler = html[start:end]
+        self.assertIn("res.synced_settings_yml === false", handler)
+        self.assertLess(
+            handler.find("res.synced_settings_yml === false"),
+            handler.find("検索エンジン構成を保存しました"),
+        )
+        self.assertIn("設定ファイルに書き込めませんでした", handler)
+        self.assertIn("setUnsavedChanges(false)", handler)
 
     def test_frontend_xss_and_accessibility_bundle_invariants(self) -> None:
         """Verify bundled WebUI includes image URL sanitization, ARIA tab/live-region attributes, and modifier guards."""

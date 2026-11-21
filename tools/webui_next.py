@@ -231,10 +231,13 @@ def _scrape_url_direct(
         return host_norm
 
     def _parse_url(value: str) -> urllib.parse.ParseResult:
-        if any(ord(c) <= 0x20 or ord(c) == 0x7F for c in value):
+        # Same rule set as url_normalizer.is_safe_retrieval_url: raw whitespace
+        # and control characters are never valid in a URL.
+        clean_value = value.strip()
+        if url_normalizer.contains_forbidden_url_chars(clean_value):
             raise blocked_exc_cls("Invalid URL: contains control characters or whitespace")
         try:
-            parsed_u = urllib.parse.urlparse(value)
+            parsed_u = urllib.parse.urlparse(clean_value)
             p = parsed_u.port
             if p is not None and (p == 0 or p > 65535):
                 raise blocked_exc_cls("Invalid port: 0")
@@ -242,7 +245,7 @@ def _scrape_url_direct(
             raise
         except ValueError as exc:
             raise blocked_exc_cls("Invalid URL") from exc
-        if parsed_u.username or parsed_u.password or "@" in (parsed_u.netloc or "") or "\\" in value:
+        if parsed_u.username or parsed_u.password or "@" in (parsed_u.netloc or "") or "\\" in clean_value:
             raise blocked_exc_cls("URLs with embedded credentials or backslashes are not allowed")
         return parsed_u
 
@@ -1027,20 +1030,49 @@ def _clean_engine_names(raw: Any) -> list[str]:
     return names
 
 
-def sync_engines_to_settings_file(
+class EngineSyncResult:
+    """Outcome of a settings.yml engine sync.
+
+    ``changed`` reports whether the file content was rewritten. ``error`` is set
+    only when the requested state could not be persisted (missing path,
+    unreadable/unwritable file, or no valid engine names). A no-op (the file
+    already matches the requested state) is a successful sync with
+    ``changed=False`` and ``error=None``.
+    """
+
+    __slots__ = ("changed", "error", "settings_path")
+
+    def __init__(
+        self,
+        changed: bool,
+        settings_path: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        self.changed = changed
+        self.settings_path = settings_path
+        self.error = error
+
+    @property
+    def persisted(self) -> bool:
+        """True when settings.yml already matched or was successfully updated."""
+        return self.error is None and self.settings_path is not None
+
+
+def sync_engines_to_settings_file_result(
     enabled_engines: list[str] | None = None,
     disabled_engines: list[str] | None = None,
     settings_path: str | None = None,
-) -> bool:
-    """Safely update disabled: true/false for specified engines in config/settings.yml."""
+) -> EngineSyncResult:
+    """Update disabled: true/false for specified engines in config/settings.yml."""
     enabled_engines = _clean_engine_names(list(enabled_engines or []))
     disabled_engines = _clean_engine_names(list(disabled_engines or []))
     if not enabled_engines and not disabled_engines:
-        return False
+        return EngineSyncResult(changed=False, error="no engine names provided")
 
     # Second line of defense: only names that actually exist in the loaded
     # engine registry may be persisted. Prevents YAML pollution with unknown
     # keys even if the charset validation above is loosened later.
+    registry_map: dict[str, Any] = {}
     try:
         _sx_engines = sys.modules.get("searx.engines")
         if _sx_engines is None:
@@ -1048,7 +1080,8 @@ def sync_engines_to_settings_file(
 
             _sx_engines = _sx_engines_mod
 
-        registry = set(getattr(_sx_engines, "engines", {}).keys())
+        registry_map = getattr(_sx_engines, "engines", {}) or {}
+        registry = set(registry_map.keys())
         if registry:
             enabled_engines = [e for e in enabled_engines if e in registry]
             disabled_engines = [e for e in disabled_engines if e in registry]
@@ -1056,11 +1089,14 @@ def sync_engines_to_settings_file(
         logger.debug("engine registry unavailable for name validation: %s", exc)
 
     if not enabled_engines and not disabled_engines:
-        return False
+        return EngineSyncResult(changed=False, settings_path=settings_path, error="no registered engine names")
 
     if not settings_path:
         env_path = os.environ.get("SEARXNG_SETTINGS_PATH", "").strip().strip("\"'")
-        if env_path and os.path.isfile(env_path):
+        if env_path:
+            # An explicitly configured path is authoritative even when it does
+            # not exist: falling back to config/settings.yml would silently
+            # write a different file than the caller/deployment selected.
             settings_path = env_path
         else:
             default_path = os.path.join(
@@ -1070,7 +1106,7 @@ def sync_engines_to_settings_file(
                 settings_path = default_path
 
     if not settings_path or not os.path.isfile(settings_path):
-        return False
+        return EngineSyncResult(changed=False, settings_path=settings_path, error="settings.yml not found")
 
     # Serialize read-modify-write cycles: os.replace is atomic but the
     # read-check-write sequence is not, so two concurrent POSTs could lose
@@ -1081,7 +1117,8 @@ def sync_engines_to_settings_file(
                 content = f.read()
 
             engine_pat = re.compile(
-                r"(?m)(^[ \t]*-[ \t]*name:[ \t]*['\"]?([^'\"\r\n]+)['\"]?[ \t]*\r?\n)([\s\S]*?)(?=(?:^[ \t]*-[ \t]*name:)|(?:^[a-zA-Z0-9_]+:)|\Z)"
+                r"(?m)(^[ \t]*-[ \t]*name:[ \t]*['\"]?([^'\"#\r\n]+?)['\"]?[ \t]*(?:#[^\r\n]*)?\r?\n)"
+                r"([\s\S]*?)(?=(?:^[ \t]*-[ \t]*name:)|(?:^[a-zA-Z0-9_]+:)|\Z)"
             )
 
             found_engines: set[str] = set()
@@ -1119,18 +1156,64 @@ def sync_engines_to_settings_file(
 
             new_content = engine_pat.sub(replace_engine_block, content)
 
-            # For any enabled engines not already in config/settings.yml, append to engines: section
-            missing_to_add = [e for e in enabled_engines if e not in found_engines]
-            if missing_to_add:
-                top_level_pat = re.compile(r"(?m)(^engines:[ \t]*\r?\n[\s\S]*?)(?=^[a-zA-Z0-9_]+:|\Z)")
+            # Engines absent from the user config are supplied by SearXNG's default
+            # settings and merged by name. Appending them with a guessed
+            # `engine: <name>` was wrong: engine names are display labels
+            # (e.g. "arch linux wiki"), not module paths. A name-only entry is
+            # merged into the default definition by the settings loader, so it
+            # persists the choice without duplicating or corrupting the module.
+            missing_overrides: dict[str, bool] = {}
+            for e in enabled_engines:
+                missing_overrides.setdefault(e, False)
+            for e in disabled_engines:
+                missing_overrides.setdefault(e, True)
+            missing_overrides = {e: disabled for e, disabled in missing_overrides.items() if e not in found_engines}
+            if missing_overrides:
+                line_ending = "\r\n" if "\r\n" in new_content else "\n"
+                to_insert = ""
+                for e, is_disabled in missing_overrides.items():
+                    flag = "true" if is_disabled else "false"
+                    # Prefer the module id from the loaded registry; a name that
+                    # looks like a module id is a safe fallback. Otherwise emit a
+                    # name-only override that the settings loader merges by name.
+                    module = str(getattr(registry_map.get(e), "engine", "") or "").strip()
+                    if not module and re.fullmatch(r"[a-z0-9_.]+", e):
+                        module = e
+                    if module and re.fullmatch(r"[a-z0-9_.]+", module):
+                        to_insert += (
+                            f"  - name: {e}{line_ending}    engine: {module}"
+                            f"{line_ending}    disabled: {flag}{line_ending}"
+                        )
+                    else:
+                        to_insert += f"  - name: {e}{line_ending}    disabled: {flag}{line_ending}"
+
+                # 1) Existing `engines:` block (an optional inline comment is kept).
+                top_level_pat = re.compile(r"(?m)(^engines:[ \t]*(?:#[^\r\n]*)?\r?\n[\s\S]*?)(?=^[a-zA-Z0-9_]+:|\Z)")
                 m = top_level_pat.search(new_content)
                 if m:
                     sec_end = m.end(1)
-                    line_ending = "\r\n" if "\r\n" in new_content else "\n"
-                    to_insert = ""
-                    for e in missing_to_add:
-                        to_insert += f"{line_ending}  - name: {e}{line_ending}    engine: {e}{line_ending}    disabled: false{line_ending}"
-                    new_content = new_content[:sec_end] + to_insert + new_content[sec_end:]
+                    # The section normally ends with a newline; add one only if
+                    # the file ends immediately after its last entry.
+                    prefix_newline = "" if new_content[:sec_end].endswith(("\n", "\r")) else line_ending
+                    new_content = new_content[:sec_end] + prefix_newline + to_insert + new_content[sec_end:]
+                else:
+                    # 2) Inline empty list: replace it instead of adding a
+                    # duplicate `engines:` key that would shadow existing data.
+                    inline_empty_pat = re.compile(r"(?m)^engines:[ \t]*\[[ \t]*\][ \t]*(?:#[^\r\n]*)?\r?\n?")
+                    if inline_empty_pat.search(new_content):
+                        new_content = inline_empty_pat.sub("engines:" + line_ending + to_insert, new_content, count=1)
+                    elif not re.search(r"(?m)^engines:", new_content):
+                        # 3) Minimal `use_default_settings` config without an
+                        # engines key: create a new top-level section so the
+                        # override is actually persisted.
+                        prefix = new_content
+                        if prefix and not prefix.endswith(("\n", "\r")):
+                            prefix += line_ending
+                        if prefix:
+                            prefix += line_ending
+                        new_content = prefix + "engines:" + line_ending + to_insert
+                    # A non-empty inline flow sequence (`engines: [..]`) is left
+                    # untouched: rewriting it blindly could drop existing engines.
 
             if new_content != content:
                 dir_name = os.path.dirname(settings_path)
@@ -1175,11 +1258,28 @@ def sync_engines_to_settings_file(
                         with contextlib.suppress(Exception):
                             os.unlink(temp_path)
                     raise
-                return True
-            return False
+                return EngineSyncResult(changed=True, settings_path=settings_path)
+            return EngineSyncResult(changed=False, settings_path=settings_path)
         except Exception as exc:  # noqa: BLE001 - safely handle file I/O or parsing failures without crashing
             logger.warning("Failed to sync engines to settings.yml: %s", exc)
-            return False
+            return EngineSyncResult(changed=False, settings_path=settings_path, error=str(exc))
+
+
+def sync_engines_to_settings_file(
+    enabled_engines: list[str] | None = None,
+    disabled_engines: list[str] | None = None,
+    settings_path: str | None = None,
+) -> bool:
+    """Persist engine flags and report whether the file content changed.
+
+    Kept as a boolean compatibility wrapper; callers that must distinguish a
+    no-op from a failed write use :func:`sync_engines_to_settings_file_result`.
+    """
+    return sync_engines_to_settings_file_result(
+        enabled_engines=enabled_engines,
+        disabled_engines=disabled_engines,
+        settings_path=settings_path,
+    ).changed
 
 
 def apply_settings_cookies(response: Any, payload: dict[str, Any]) -> None:
@@ -1228,8 +1328,11 @@ def save_engines_settings_data(
     dis_str = ",".join(clean_dis)
     en_str = ",".join(clean_en)
 
-    # 1. Persist engine enablement directly into config/settings.yml
-    synced_yml = sync_engines_to_settings_file(clean_en, clean_dis)
+    # 1. Persist engine enablement directly into config/settings.yml.
+    # `persisted` is True for a successful no-op too; only an actual failure
+    # (missing/unwritable settings.yml) must make the UI warn.
+    sync_result = sync_engines_to_settings_file_result(clean_en, clean_dis)
+    synced_yml = sync_result.persisted
 
     # 2. Live in-memory update for the running process
     se = None
@@ -6085,7 +6188,14 @@ footer.ws-footer {
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.json();
           })
-          .then(function () {
+          .then(function (res) {
+            if (res && res.synced_settings_yml === false) {
+              // The in-memory engine list changed but config/settings.yml could
+              // not be written (permissions, read-only path, ...). Do not claim
+              // a durable save and keep the beforeunload guard armed.
+              showToast('ブラウザには保存しましたが、設定ファイルに書き込めませんでした', true);
+              return;
+            }
             showToast('検索エンジン構成を保存しました');
             // Clear the dirty flag only after a confirmed save so the
             // beforeunload guard stays active if the POST failed.

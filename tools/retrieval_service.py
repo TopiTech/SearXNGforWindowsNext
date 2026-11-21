@@ -34,7 +34,7 @@ from retrieval_models import (
     classify_source_type,
     compute_source_quality,
 )
-from url_normalizer import extract_domain, is_safe_retrieval_url, normalize_url
+from url_normalizer import extract_domain, is_safe_retrieval_url, normalize_domain_list, normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -224,20 +224,28 @@ class RetrievalService:
         categories: str = "",
         engines: str = "",
         time_range: str = "",
-        include_domains: list[str] | None = None,
-        exclude_domains: list[str] | None = None,
+        include_domains: list[str] | str | None = None,
+        exclude_domains: list[str] | str | None = None,
         pageno: int = 1,
         base_url: str | None = None,
         timeout: float | None = None,
         **kwargs: Any,
     ) -> RetrievalResponse:
-        """Execute the end-to-end structured retrieval pipeline."""
+        """Execute the end-to-end structured retrieval pipeline.
+
+        ``include_domains`` / ``exclude_domains`` accept a list of domains or a
+        single comma-separated string; entries are normalized to bare hosts.
+        Query expansion is capped by ``budget.max_queries`` and both the search
+        loop and page scraping stop at ``budget.request_deadline_ms``; a
+        deadline-truncated response is marked ``partial`` with a warning.
+        """
         t0 = time.perf_counter()
 
         norm_mode = (mode or "balanced").strip().lower()
         if norm_mode not in BUDGETS:
             norm_mode = "balanced"
         budget = BUDGETS[norm_mode]
+        deadline_at = t0 + (budget.request_deadline_ms / 1000.0)
 
         # 1. Query Normalization & Intent Classification
         processed_q = self.query_processor.parse_and_normalize(query)
@@ -248,17 +256,18 @@ class RetrievalService:
                 warnings=["検索クエリが空です。"],
             )
 
-        # Merge domain filters
-        all_inc_domains = sorted(
-            set(processed_q.include_domains + [d.strip().lower() for d in (include_domains or []) if d and d.strip()])
-        )
-        all_exc_domains = sorted(
-            set(processed_q.exclude_domains + [d.strip().lower() for d in (exclude_domains or []) if d and d.strip()])
-        )
+        # Merge domain filters. A single comma-separated string is accepted at
+        # this boundary: iterating it directly used to filter on one-character
+        # "domains" and silently return zero results.
+        all_inc_domains = sorted(set(processed_q.include_domains + normalize_domain_list(include_domains)))
+        all_exc_domains = sorted(set(processed_q.exclude_domains + normalize_domain_list(exclude_domains)))
 
-        # 2. Deterministic Query Expansion
+        # 2. Deterministic Query Expansion (budget-limited)
         expanded_q_list = self.query_processor.expand_query(processed_q, mode=norm_mode)
-        all_search_queries = [processed_q.clean_text] + expanded_q_list
+        # max_queries includes the original query. Truncating here keeps the
+        # reported expanded_queries identical to what was actually searched.
+        all_search_queries = ([processed_q.clean_text] + expanded_q_list)[: max(1, budget.max_queries)]
+        expanded_q_list = all_search_queries[1:]
 
         # 3. Multi-Query Search Execution
         query_runs: list[dict[str, Any]] = []
@@ -271,13 +280,18 @@ class RetrievalService:
         eff_timeout = float(timeout) if timeout is not None and timeout > 0 else (budget.per_engine_timeout_ms / 1000.0)
 
         for q_exec in all_search_queries:
+            remaining_s = deadline_at - time.perf_counter()
+            if remaining_s <= 0:
+                warnings_list.append("Request deadline reached before all query variants were executed.")
+                is_partial = True
+                break
             search_args: dict[str, Any] = {
                 "query": q_exec,
                 "count": budget.max_results_per_query,
                 "categories": categories,
                 "engines": engines,
                 "base_url": base_url,
-                "timeout": eff_timeout,
+                "timeout": max(0.05, min(eff_timeout, remaining_s)),
             }
             if time_range:
                 search_args["time_range"] = time_range
@@ -461,14 +475,19 @@ class RetrievalService:
 
         # 8. Speculative Scraping & Heading-Aware Passage Extraction
         if budget.max_pages > 0:
-            self._fetch_pages_concurrent(
-                selected_candidates,
-                max_pages=budget.max_pages,
-                scrape_length=budget.max_total_chars,
-                timeout=float(budget.scrape_timeout_ms / 1000.0),
-                base_url=base_url,
-                max_concurrency=budget.max_concurrency,
-            )
+            remaining_s = deadline_at - time.perf_counter()
+            if remaining_s > 0:
+                self._fetch_pages_concurrent(
+                    selected_candidates,
+                    max_pages=budget.max_pages,
+                    scrape_length=budget.max_total_chars,
+                    timeout=max(0.05, min(float(budget.scrape_timeout_ms / 1000.0), remaining_s)),
+                    base_url=base_url,
+                    max_concurrency=budget.max_concurrency,
+                )
+            else:
+                warnings_list.append("Request deadline reached before page scraping.")
+                is_partial = True
 
         # Build RetrievalResultItems
         final_result_items: list[RetrievalResultItem] = []

@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import unittest
+from dataclasses import replace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -57,7 +58,11 @@ from rank_fusion import (
     reciprocal_rank_fusion,
 )
 from retrieval_models import (
+    ADVISORY_BUDGET_FIELDS,
+    BUDGETS,
+    ENFORCED_BUDGET_FIELDS,
     EvidencePassage,
+    ModeBudget,
     QueryInfo,
     RetrievalResponse,
     RetrievalResultItem,
@@ -73,9 +78,12 @@ from retrieval_service import (
     get_retrieval_service,
 )
 from url_normalizer import (
+    URLNormalizer,
+    contains_forbidden_url_chars,
     extract_domain,
     get_dedup_key,
     is_safe_retrieval_url,
+    normalize_domain_list,
     normalize_url,
 )
 
@@ -131,6 +139,58 @@ class TestURLNormalizer(unittest.TestCase):
         azure_url = "https://storage.blob.core.windows.net/cont/file.txt?sig=my_secret_sig&se=2026-10-01&sp=r"
         normalized_azure = normalize_url(azure_url)
         self.assertIn("sig=my_secret_sig", normalized_azure)
+
+    def test_signed_urls_are_preserved_verbatim(self) -> None:
+        """Signed URLs must round-trip byte-for-byte; re-encoding breaks their signature."""
+        cases = [
+            "https://s3.amazonaws.com/bucket/prefix/?X-Amz-Signature=ab%20cd&X-Amz-Credential=a%2Fb&acl",
+            "https://storage.blob.core.windows.net/c/f?sig=AbC%2Fd%3D&se=2026-10-01T00%3A00%3A00Z&sp=r",
+            "https://Blob.Core.Windows.Net/c/f?X-Goog-Signature=x%2By&X-Goog-Credential=a%2Fb",
+        ]
+        for url in cases:
+            with self.subTest(url=url):
+                self.assertEqual(normalize_url(url), url)
+        # The dedup key must not rewrite the signature payload either.
+        self.assertIn("X-Amz-Signature=ab%20cd", get_dedup_key(cases[0]))
+
+    def test_signed_url_preserves_scheme_and_query_byte_for_byte(self) -> None:
+        """Even scheme casing and mixed %20/+/empty parameters are part of the signed payload."""
+        url = "HTTPS://Bucket.S3.AmazonAWS.com/p?X-Amz-Signature=a%2Fb+cd&X-Amz-Credential=x%2Fy&acl#frag"
+        self.assertEqual(URLNormalizer.normalize_url(url, remove_fragment=False), url)
+        self.assertEqual(URLNormalizer.normalize_url(url, remove_fragment=True), url.split("#", 1)[0])
+        self.assertEqual(normalize_url(url), url.split("#", 1)[0])
+
+    def test_forbidden_url_chars_shared_between_ssrf_and_scraper(self) -> None:
+        """Whitespace, control characters and backslashes are rejected by both layers."""
+        for bad in (
+            "https://exa mple.com/",
+            "https://example.com/a\tb",
+            "https://example.com/\x7f",
+            "https://example.com/a\\b",
+        ):
+            with self.subTest(url=bad):
+                self.assertFalse(is_safe_retrieval_url(bad))
+        self.assertFalse(contains_forbidden_url_chars("https://example.com/a%20b"))
+        self.assertTrue(is_safe_retrieval_url("https://example.com/a%20b"))
+
+    def test_normalize_domain_list_accepts_str_and_iterables(self) -> None:
+        """The shared boundary accepts one comma-separated string or a collection."""
+        self.assertEqual(
+            normalize_domain_list("https://docs.python.org/3/, example.com"),
+            ["docs.python.org", "example.com"],
+        )
+        self.assertEqual(
+            normalize_domain_list(["www.Docs.Python.org", "example.com"]),
+            ["docs.python.org", "example.com"],
+        )
+        self.assertEqual(
+            normalize_domain_list(("example.com", "docs.python.org")),
+            ["example.com", "docs.python.org"],
+        )
+        self.assertEqual(normalize_domain_list("docs.python.org, docs.python.org"), ["docs.python.org"])
+        self.assertEqual(normalize_domain_list(None), [])
+        self.assertEqual(normalize_domain_list(""), [])
+        self.assertEqual(normalize_domain_list(["", "   "]), [])
 
     def test_ipv4_and_ipv6_urls(self) -> None:
         self.assertEqual(normalize_url("http://93.184.216.34:80/"), "http://93.184.216.34/")
@@ -702,6 +762,16 @@ class TestRetrievalModelsAndBudget(unittest.TestCase):
         deep_budget = get_mode_budget("deep")
         self.assertGreaterEqual(deep_budget.max_pages, 5)
         self.assertGreaterEqual(deep_budget.max_queries, 3)
+
+    def test_budget_fields_are_explicitly_classified(self) -> None:
+        """Every declared budget must be enforced or explicitly marked advisory."""
+        fields = set(ModeBudget.__dataclass_fields__) - {"mode"}
+        self.assertEqual(ENFORCED_BUDGET_FIELDS | ADVISORY_BUDGET_FIELDS, fields)
+        self.assertEqual(ENFORCED_BUDGET_FIELDS & ADVISORY_BUDGET_FIELDS, set())
+        self.assertEqual(ADVISORY_BUDGET_FIELDS, {"max_response_bytes", "max_search_rounds"})
+        for budget in BUDGETS.values():
+            self.assertGreaterEqual(budget.max_queries, 1)
+            self.assertGreater(budget.request_deadline_ms, 0)
 
     def test_source_classification_and_quality(self) -> None:
         self.assertEqual(classify_source_type("https://docs.python.org/3/"), "documentation")
@@ -1369,6 +1439,67 @@ class TestQueryPipeline(unittest.TestCase):
         self.assertGreaterEqual(len(chunks), 1)
         combined = "\n".join(c.text for c in chunks)
         self.assertIn("def hello():", combined)
+
+    def test_retrieval_service_preserves_signed_download_urls(self) -> None:
+        """The structured API must return presigned URLs usable by the caller."""
+        signed = "https://s3.amazonaws.com/bucket/prefix/?X-Amz-Signature=ab%20cd&X-Amz-Credential=AKIA%2F20231121&acl"
+        service = RetrievalService(search_func=lambda **kwargs: {"results": [{"url": signed, "title": "Firmware"}]})
+        resp = service.execute_retrieval("firmware", mode="fast", count=1)
+        self.assertEqual(len(resp.results), 1)
+        self.assertEqual(resp.results[0].url, signed)
+        self.assertEqual(resp.to_dict()["results"][0]["url"], signed)
+
+    def test_domain_filters_accept_single_string_and_list(self) -> None:
+        """A string filter must be treated as one domain, never iterated per character."""
+        raw_results = [
+            {"url": "https://docs.python.org/3/library/asyncio.html", "title": "Asyncio", "content": "Async IO"},
+            {"url": "https://example.com/post", "title": "Post", "content": "Other"},
+        ]
+        service = RetrievalService(search_func=MagicMock(return_value={"results": raw_results}))
+        for include in ("docs.python.org", ["docs.python.org"]):
+            with self.subTest(include=include):
+                resp = service.execute_retrieval("asyncio", mode="fast", include_domains=include, count=5)
+                self.assertEqual([r.domain for r in resp.results], ["docs.python.org"])
+
+        resp = service.execute_retrieval("asyncio", mode="fast", exclude_domains="docs.python.org", count=5)
+        self.assertEqual([r.domain for r in resp.results], ["example.com"])
+
+        resp = service.execute_retrieval("asyncio", mode="fast", include_domains="docs.python.org,example.com", count=5)
+        self.assertEqual(len(resp.results), 2)
+
+    def test_max_queries_budget_truncates_expansion(self) -> None:
+        """Balanced mode searches the original plus only one expansion."""
+        calls: list[str] = []
+
+        def mock_search(**kwargs: Any) -> dict[str, Any]:
+            calls.append(str(kwargs.get("query")))
+            return {"results": [{"url": "https://example.com/a", "title": "A", "content": "A"}]}
+
+        service = RetrievalService(search_func=mock_search)
+        with patch.object(service.query_processor, "expand_query", return_value=["q2", "q3", "q4"]):
+            resp = service.execute_retrieval("original", mode="balanced", count=5)
+        self.assertEqual(calls, ["original", "q2"])
+        self.assertEqual(resp.expanded_queries, ["q2"])
+
+    def test_request_deadline_marks_response_partial(self) -> None:
+        """A search that outlives the deadline stops further variants and is marked partial."""
+        calls: list[str] = []
+
+        def slow_search(**kwargs: Any) -> dict[str, Any]:
+            calls.append(str(kwargs.get("query")))
+            time.sleep(0.04)
+            return {"results": [{"url": "https://example.com/a", "title": "A", "content": "A"}]}
+
+        service = RetrievalService(search_func=slow_search)
+        tight_budget = replace(BUDGETS["balanced"], request_deadline_ms=30, max_queries=2)
+        with (
+            patch("retrieval_service.BUDGETS", {**BUDGETS, "balanced": tight_budget}),
+            patch.object(service.query_processor, "expand_query", return_value=["q2", "q3"]),
+        ):
+            resp = service.execute_retrieval("original", mode="balanced", count=5)
+        self.assertEqual(calls, ["original"])
+        self.assertTrue(resp.partial)
+        self.assertTrue(any("deadline" in warning.lower() for warning in resp.warnings))
 
     def test_retrieval_service_count_zero_returns_empty(self) -> None:
         """Verify count=0 returns 0 results rather than falling back to default budget count."""

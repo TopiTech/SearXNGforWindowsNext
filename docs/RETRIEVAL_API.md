@@ -36,7 +36,7 @@ graph TD
 
 ## 2. Search Modes & Computational Budgets
 
-Every request operates under an explicit computational and concurrency budget. No background loops or unbounded agent crawls are permitted.
+Every request operates under an explicit computational and concurrency budget. No background loops or unbounded agent crawls are permitted. The table below is the single source of truth for which limits are enforced and which are advisory.
 
 | Budget Dimension | `fast` Mode | `balanced` Mode (Default) | `deep` Mode |
 |---|:---:|:---:|:---:|
@@ -51,6 +51,11 @@ Every request operates under an explicit computational and concurrency budget. N
 | **Request Deadline** | 5,000 ms | 10,000 ms | 18,000 ms |
 | **Scrape Timeout** | N/A | 5,000 ms | 7,000 ms |
 | **Max Search Rounds** | 1 | 1 | 2 |
+
+**Enforcement policy**
+
+- **Enforced:** query variants (`max_queries`, including the original), results/candidate/page/passage/character limits, concurrency, per-engine and scrape timeouts, and the request deadline. The deadline is checked between query variants and before scraping; the remaining time is passed as the call timeout, and a truncated response sets `partial: true` with a warning.
+- **Advisory (declared, not enforced):** `max_response_bytes` (the serialized response is not size-capped) and `max_search_rounds` (deep mode performs a single search round; its extra query variants provide the multi-angle coverage).
 
 ---
 

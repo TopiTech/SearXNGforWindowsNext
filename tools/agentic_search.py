@@ -27,7 +27,7 @@ import retrieval_models
 import retrieval_service
 from callable_compat import call_with_supported_kwargs
 from lexical_rerank import MultilingualTokenizer
-from url_normalizer import is_safe_retrieval_url
+from url_normalizer import is_safe_retrieval_url, normalize_domain_list
 
 # High-authority primary domains (Documentation, Source Repositories, Standards)
 DEFAULT_BOOST_DOMAINS: dict[str, float] = {
@@ -287,32 +287,12 @@ def is_url_input(text: str) -> bool:
 
 
 def parse_domain_list(val: Any) -> list[str]:
-    """Normalize a comma-separated string or iterable of domain names/URLs."""
-    if not val:
-        return []
-    raw_items: list[str] = []
-    if isinstance(val, (list, tuple, set)):
-        for item in val:
-            if item:
-                raw_items.extend(str(item).split(","))
-    elif isinstance(val, str):
-        raw_items.extend(val.split(","))
-    cleaned: list[str] = []
-    for d in raw_items:
-        dom = (
-            d.strip()
-            .strip("\"'")
-            .lower()
-            .removeprefix("https://")
-            .removeprefix("http://")
-            .split("/")[0]
-            .split(":")[0]
-            .removeprefix("www.")
-            .strip(".")
-        )
-        if dom and dom not in cleaned:
-            cleaned.append(dom)
-    return cleaned
+    """Normalize a comma-separated string or iterable of domain names/URLs.
+
+    Delegates to the shared URL-layer implementation so the HTTP boundary and
+    the retrieval service cannot diverge in how domain filters are parsed.
+    """
+    return normalize_domain_list(val)
 
 
 class QueryOptimizer:

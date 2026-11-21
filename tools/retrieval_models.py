@@ -21,7 +21,17 @@ from url_normalizer import extract_domain
 
 @dataclass(frozen=True)
 class ModeBudget:
-    """Explicit computational, concurrency, and time budgets for a search mode."""
+    """Explicit computational, concurrency, and time budgets for a search mode.
+
+    Enforced by :class:`retrieval_service.RetrievalService`: query expansion is
+    truncated to ``max_queries``, every search/scrape call is clamped to the
+    remaining ``request_deadline_ms``, and the result/page/passage/char/
+    concurrency/timeout limits are applied directly.
+
+    ``max_response_bytes`` and ``max_search_rounds`` are declared advisory
+    targets: the pipeline does not cap the serialized response size and deep
+    mode performs a single search round. See ``ADVISORY_BUDGET_FIELDS``.
+    """
 
     mode: str
     max_queries: int
@@ -37,6 +47,27 @@ class ModeBudget:
     scrape_timeout_ms: int
     max_concurrency: int
     max_search_rounds: int
+
+
+# Every field above must be classified as enforced or advisory so an advisory
+# value cannot be mistaken for a hard limit. The test suite asserts that these
+# two sets exactly partition the dataclass fields (excluding ``mode``).
+ENFORCED_BUDGET_FIELDS: frozenset[str] = frozenset(
+    {
+        "max_queries",
+        "max_results_per_query",
+        "max_candidate_results",
+        "max_pages",
+        "max_passages_per_page",
+        "max_total_passages",
+        "max_total_chars",
+        "request_deadline_ms",
+        "per_engine_timeout_ms",
+        "scrape_timeout_ms",
+        "max_concurrency",
+    }
+)
+ADVISORY_BUDGET_FIELDS: frozenset[str] = frozenset({"max_response_bytes", "max_search_rounds"})
 
 
 BUDGETS: dict[str, ModeBudget] = {

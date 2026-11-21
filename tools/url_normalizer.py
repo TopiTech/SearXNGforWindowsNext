@@ -180,7 +180,9 @@ class URLNormalizer:
             sort_params: Whether to sort query parameters alphabetically.
 
         Returns:
-            Normalized URL string.
+            Normalized URL string. URLs carrying a recognised signature are
+            returned verbatim (only control characters and, when requested,
+            the fragment are removed) because re-encoding invalidates them.
         """
         raw = (url or "").strip()
         if not raw:
@@ -199,6 +201,18 @@ class URLNormalizer:
         if not parsed.scheme and not parsed.netloc:
             return raw
 
+        parsed_params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True) if parsed.query else {}
+
+        # Signed URLs (S3/GCS/Azure SAS, ...) are opaque: the signature covers the
+        # exact path and query encoding, so any canonicalisation (trailing-slash
+        # removal, percent-encoding changes, parameter sorting, scheme casing)
+        # invalidates it. Preserve the original string and only honour the
+        # fragment preference.
+        if parsed_params and cls.is_signed_url(parsed_params):
+            if remove_fragment:
+                return raw.split("#", 1)[0]
+            return raw
+
         scheme = (parsed.scheme or "http").lower()
         netloc = cls.normalize_host(parsed.netloc, scheme)
 
@@ -212,28 +226,19 @@ class URLNormalizer:
         if len(path) > 1 and path.endswith("/"):
             path = path.rstrip("/")
 
-        # Parse query params
-        query_str = parsed.query or ""
-        if query_str:
-            parsed_params = urllib.parse.parse_qs(query_str, keep_blank_values=True)
-            is_signed = cls.is_signed_url(parsed_params)
+        cleaned_params: list[tuple[str, str]] = []
+        for k, val_list in parsed_params.items():
+            k_clean = k.strip()
+            if strip_tracking and k_clean.lower() in cls.TRACKING_PARAMS:
+                continue
+            for v in val_list:
+                cleaned_params.append((k_clean, v))
 
-            cleaned_params: list[tuple[str, str]] = []
-            for k, val_list in parsed_params.items():
-                k_clean = k.strip()
-                k_lower = k_clean.lower()
-                if strip_tracking and not is_signed and k_lower in cls.TRACKING_PARAMS:
-                    continue
-                for v in val_list:
-                    cleaned_params.append((k_clean, v))
+        if sort_params:
+            cleaned_params.sort(key=lambda x: (x[0], x[1]))
 
-            if sort_params and not is_signed:
-                cleaned_params.sort(key=lambda x: (x[0], x[1]))
-
-            new_query = urllib.parse.urlencode(cleaned_params, doseq=True)
-            new_query = cls.normalize_percent_encoding(new_query)
-        else:
-            new_query = ""
+        new_query = urllib.parse.urlencode(cleaned_params, doseq=True)
+        new_query = cls.normalize_percent_encoding(new_query)
 
         fragment = "" if remove_fragment else (parsed.fragment or "")
 
@@ -288,7 +293,57 @@ def extract_domain(url: str) -> str:
     return URLNormalizer.extract_domain(url)
 
 
+def normalize_domain_list(
+    value: str | list[str] | tuple[str, ...] | set[str] | None,
+) -> list[str]:
+    """Normalize a domain filter from a single string or an iterable.
+
+    Accepts a comma-separated string, a list/tuple/set of strings, or ``None``.
+    Entries may be full URLs; scheme, path, port, ``www.`` and surrounding
+    dots/quotes are removed. Order is preserved and duplicates are dropped.
+    """
+    if not value:
+        return []
+    if isinstance(value, str):
+        raw_items: list[str] = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = []
+        for item in value:
+            if item:
+                raw_items.extend(str(item).split(","))
+    else:
+        return []
+
+    cleaned: list[str] = []
+    for item in raw_items:
+        dom = (
+            str(item)
+            .strip()
+            .strip("\"'")
+            .lower()
+            .removeprefix("https://")
+            .removeprefix("http://")
+            .split("/")[0]
+            .split(":")[0]
+            .removeprefix("www.")
+            .strip(".")
+        )
+        if dom and dom not in cleaned:
+            cleaned.append(dom)
+    return cleaned
+
+
 _CONTROL_CHARS_PATTERN: re.Pattern[str] = re.compile(r"[\x00-\x1f\x7f]")
+
+# URLs must percent-encode whitespace. Both the SSRF validator and the scraping
+# transport use this single rule so a URL cannot be "safe" for one and invalid
+# for the other.
+FORBIDDEN_URL_CHARS_PATTERN: re.Pattern[str] = re.compile(r"[\x00-\x20\x7f]")
+
+
+def contains_forbidden_url_chars(value: str) -> bool:
+    """Return True when a URL contains raw whitespace or ASCII control characters."""
+    return bool(FORBIDDEN_URL_CHARS_PATTERN.search(value or ""))
 
 
 RESERVED_TLDS: tuple[str, ...] = (
@@ -413,8 +468,8 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
     - Only 'http' and 'https' schemes
     - Valid port (1-65535, rejects port 0)
     - No credentials (user:pass@host)
-    - Rejects ASCII control characters (0x00-0x1F, 0x7F)
-    - Rejects backslash characters in authority/netloc (SSRF parser differential mitigation)
+    - Rejects raw whitespace and ASCII control characters (0x00-0x20, 0x7F)
+    - Rejects backslash characters anywhere in the URL (SSRF parser differential mitigation)
     - Rejects localhost, loopback, private, link-local, multicast, transition IPv4 and IPv6
     - Rejects hex/octal/decimal obfuscated IP formats
     - Rejects reserved TLDs and bare intranet hostnames
@@ -424,7 +479,7 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
         return False
 
     clean_url = url.strip()
-    if _CONTROL_CHARS_PATTERN.search(clean_url):
+    if contains_forbidden_url_chars(clean_url) or "\\" in clean_url:
         return False
 
     try:
@@ -446,7 +501,8 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
     if parsed.username or parsed.password or "@" in (parsed.netloc or ""):
         return False
 
-    # Block backslashes in netloc (mitigates WHATWG vs RFC-3986 parser differentials)
+    # Backslashes were rejected for the whole URL above; keep this guard as a
+    # second line of defence for callers that construct a ParseResult directly.
     if "\\" in (parsed.netloc or ""):
         return False
 

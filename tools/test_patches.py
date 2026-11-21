@@ -3238,14 +3238,18 @@ class TestAiWebuiPatches(unittest.TestCase):
         self.assertIn("categories", get_data)
         self.assertIn("total_engines", get_data)
 
-        # POST request sets persistence cookies for enabled/disabled engines
-        post_resp = client.post(
-            "/api/settings/engines",
-            json={
-                "disabled_engines": ["duckduckgo", "google"],
-                "enabled_engines": ["brave"],
-            },
-        )
+        # POST request sets persistence cookies for enabled/disabled engines.
+        # Stub the settings-file sync: this is an API/cookie test and must not
+        # mutate the developer's real config/settings.yml.
+        with mock.patch("webui_next.sync_engines_to_settings_file_result") as mock_sync:
+            mock_sync.return_value = webui_next.EngineSyncResult(changed=False, settings_path="test-settings.yml")
+            post_resp = client.post(
+                "/api/settings/engines",
+                json={
+                    "disabled_engines": ["duckduckgo", "google"],
+                    "enabled_engines": ["brave"],
+                },
+            )
         self.assertEqual(post_resp.status_code, 200)
         post_data = post_resp.get_json()
         self.assertTrue(post_data.get("success"))

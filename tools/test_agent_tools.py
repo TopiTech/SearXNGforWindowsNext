@@ -8,6 +8,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 import time
 import unittest
 from typing import Any
@@ -1037,7 +1038,9 @@ class TestWebUINextRegression(unittest.TestCase):
 
         resp = MockResponse()
         payload = {"disabled_engines": ["duckduckgo", "brave"], "enabled_engines": ["google"]}
-        result = webui_next.save_engines_settings_data(None, payload, response=resp)
+        with patch("webui_next.sync_engines_to_settings_file_result") as mock_sync:
+            mock_sync.return_value = webui_next.EngineSyncResult(changed=False, settings_path="test-settings.yml")
+            result = webui_next.save_engines_settings_data(None, payload, response=resp)
 
         self.assertTrue(result["success"])
         self.assertEqual(resp.cookies.get("disabled_engines"), "duckduckgo,brave")
@@ -1128,11 +1131,29 @@ class TestWebUINextRegression(unittest.TestCase):
         )
 
         payload = {"enabled_engines": ["duckduckgo"], "disabled_engines": ["bing"]}
-        res = webui_next.save_engines_settings_data(mock_webapp, payload)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cfg_path = os.path.join(tmp_dir, "settings.yml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(
+                    "engines:\n"
+                    "  - name: duckduckgo\n"
+                    "    engine: duckduckgo\n"
+                    "    disabled: true\n"
+                    "  - name: bing\n"
+                    "    engine: bing\n"
+                    "    disabled: false\n"
+                )
+            with patch.dict(os.environ, {"SEARXNG_SETTINGS_PATH": cfg_path}):
+                res = webui_next.save_engines_settings_data(mock_webapp, payload)
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                updated = f.read()
 
         self.assertTrue(res["success"])
+        self.assertTrue(res["synced_settings_yml"])
         self.assertFalse(ddg_engine.disabled, "duckduckgo should be live updated to disabled=False")
         self.assertTrue(bing_engine.disabled, "bing should be live updated to disabled=True")
+        self.assertIn("- name: duckduckgo\n    engine: duckduckgo\n    disabled: false", updated)
+        self.assertIn("- name: bing\n    engine: bing\n    disabled: true", updated)
 
     def test_preferences_parse_cookie_and_dict_handle_bare_engine_names(self) -> None:
         """Verify Preferences and BooleanChoices parse bare engine names to enable all categories."""
