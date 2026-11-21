@@ -222,20 +222,29 @@ class LexicalReranker:
             denominator = w_tf + self.config.k1 * (1.0 - self.config.b + self.config.b * (doc_len / norm_avgdl))
             score += idf * (numerator / max(denominator, 0.001))
 
-        q_clean = query.strip().lower()
+        q_clean = unicodedata.normalize("NFKC", query).strip().lower()
         if q_clean and len(q_clean) >= 3:
-            if q_clean in title.lower():
+            if q_clean in unicodedata.normalize("NFKC", title).lower():
                 score += self.config.exact_title_bonus
-            if q_clean in content.lower():
+            if q_clean in unicodedata.normalize("NFKC", content).lower():
                 score += self.config.exact_content_bonus
 
         return max(score, 0.0)
+
+    @staticmethod
+    def _join_headings(headings: Any) -> str:
+        """Normalize heading inputs (list, tuple, set, str, or None) to a single string."""
+        if isinstance(headings, str):
+            return headings
+        if isinstance(headings, (list, tuple, set)):
+            return " ".join(str(h) for h in headings if h is not None)
+        return ""
 
     def score_document(
         self,
         query: str,
         title: str,
-        headings: list[str] | None,
+        headings: list[str] | str | None,
         content: str,
         avgdl: float,
         df_map: dict[str, int],
@@ -247,7 +256,7 @@ class LexicalReranker:
             return 0.0
 
         title_tokens = self.tokenizer.tokenize(title)
-        headings_tokens = self.tokenizer.tokenize(" ".join(headings or []))
+        headings_tokens = self.tokenizer.tokenize(self._join_headings(headings))
         content_tokens = self.tokenizer.tokenize(content)
 
         doc_len = (
@@ -288,7 +297,7 @@ class LexicalReranker:
         total_doc_len = 0.0
         for item in items:
             t_toks = self.tokenizer.tokenize(str(item.get("title") or ""))
-            h_toks = self.tokenizer.tokenize(" ".join(item.get("headings") or []))
+            h_toks = self.tokenizer.tokenize(self._join_headings(item.get("headings")))
             c_toks = self.tokenizer.tokenize(str(item.get("content") or item.get("snippet") or ""))
 
             w_len = (

@@ -77,6 +77,31 @@ def _unquote(s):
     return s
 
 
+def _strip_yaml_comment(value_str: str) -> str:
+    """Strip an unquoted trailing YAML `# comment` while keeping `#` inside quotes."""
+    in_quote: str | None = None
+    i = 0
+    n = len(value_str)
+    while i < n:
+        ch = value_str[i]
+        if in_quote is None:
+            if ch in ("'", '"'):
+                in_quote = ch
+            elif ch == "#" and (i == 0 or value_str[i - 1].isspace()):
+                return value_str[:i].strip()
+        else:
+            if in_quote == '"' and ch == "\\":
+                i += 2
+                continue
+            if ch == in_quote:
+                if in_quote == "'" and i + 1 < n and value_str[i + 1] == "'":
+                    i += 2
+                    continue
+                in_quote = None
+        i += 1
+    return value_str.strip()
+
+
 def parse_engines_fallback(yaml_content):
     """Parse engine entries using only the standard library.
 
@@ -87,6 +112,7 @@ def parse_engines_fallback(yaml_content):
     in_engines = False
     engines_indent = None
     item_indent = None
+    prop_indent = None
     engines = []
     current_item = None
 
@@ -108,26 +134,22 @@ def parse_engines_fallback(yaml_content):
         if engines_indent is not None and indent <= engines_indent and not line.lstrip().startswith("-"):
             break
 
-        # Check for start of a new list item at engines list level
-        item_m = re.match(r"^([ \t]*)-\s*(.*)$", line)
-        if item_m and (
-            item_indent is None
-            or len(item_m.group(1)) == item_indent
-            or (engines_indent is not None and len(item_m.group(1)) > engines_indent)
-        ):
+        # Check for start of a new list item at the engines list level only (ignore nested lists)
+        item_m = re.match(r"^([ \t]*)-[ \t]*(.*)$", line)
+        if item_m and (item_indent is None or len(item_m.group(1)) == item_indent):
             if current_item is not None and "name" in current_item:
                 if "engine" not in current_item:
                     current_item["engine"] = current_item["name"]
                 engines.append(current_item)
             current_item = {}
             item_indent = len(item_m.group(1))
+            prop_indent = None
             rest = item_m.group(2).strip()
             if rest:
                 kv_m = re.match(r"^([a-zA-Z0-9_-]+)\s*:\s*(.*)$", rest)
                 if kv_m:
                     k = kv_m.group(1)
-                    v = re.split(r"\s+#", kv_m.group(2), maxsplit=1)[0].strip()
-                    v = _unquote(v)
+                    v = _unquote(_strip_yaml_comment(kv_m.group(2)))
                     if k == "inactive":
                         current_item[k] = v.lower() in ("true", "yes", "on", "1")
                     else:
@@ -135,11 +157,18 @@ def parse_engines_fallback(yaml_content):
             continue
 
         if current_item is not None and item_indent is not None and indent > item_indent:
+            # Ignore nested list items inside engine properties (e.g. categories: - web)
+            if line.lstrip().startswith("-"):
+                continue
+            if prop_indent is None:
+                prop_indent = indent
+            elif indent > prop_indent:
+                # Ignore nested sub-mapping keys so they cannot overwrite top-level name/inactive
+                continue
             kv_m = re.match(r"^[ \t]*([a-zA-Z0-9_-]+)\s*:\s*(.*)$", line)
             if kv_m:
                 k = kv_m.group(1)
-                v = re.split(r"\s+#", kv_m.group(2), maxsplit=1)[0].strip()
-                v = _unquote(v)
+                v = _unquote(_strip_yaml_comment(kv_m.group(2)))
                 if k == "inactive":
                     current_item[k] = v.lower() in ("true", "yes", "on", "1")
                 else:
@@ -182,7 +211,10 @@ def disable_engine_in_text(yaml_content, engine_name):
     # entries became one giant block and the first ``disabled`` field could be
     # changed instead of the missing engine's field.
     lines = yaml_content.splitlines(keepends=True)
-    item_pattern = re.compile(r"^(?P<indent>[ \t]*)-\s+(?:name:\s*(?P<name>[^\r\n]*)|(?P<other>[^\r\n]*))(?:\r?\n)?$")
+    item_pattern = re.compile(
+        r"^(?P<indent>[ \t]*)-[ \t]*(?:name:\s*(?P<name>[^\r\n]*)|(?P<other>[^\r\n]*))(?:\r?\n)?$"
+    )
+    root_item_indent: int | None = None
 
     for start, line in enumerate(lines):
         item_match = item_pattern.match(line)
@@ -190,6 +222,11 @@ def disable_engine_in_text(yaml_content, engine_name):
             continue
 
         item_indent = item_match.group("indent")
+        if root_item_indent is None:
+            root_item_indent = len(item_indent)
+        elif len(item_indent) > root_item_indent:
+            # Skip nested sequence items (e.g., categories: - web)
+            continue
         end = start + 1
         while end < len(lines):
             candidate = lines[end]
@@ -287,8 +324,10 @@ def process_file(settings_path, engines_dir):
 
     missing_engines = []
     for engine_entry in engines:
+        if not isinstance(engine_entry, dict):
+            continue
         name = engine_entry.get("name")
-        if not name:
+        if not isinstance(name, str) or not name:
             continue
         engine_mod = engine_entry.get("engine", name)
 

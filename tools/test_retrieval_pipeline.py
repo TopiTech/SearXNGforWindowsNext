@@ -13,6 +13,7 @@ Tests:
 
 from __future__ import annotations
 
+import itertools
 import os
 import socket
 import sys
@@ -1809,6 +1810,164 @@ class TestQueryPipeline(unittest.TestCase):
         self.assertEqual(normalize_title("【速報】"), "【速報】")
         self.assertEqual(normalize_title(" - "), "-")
         self.assertEqual(normalize_title(""), "")
+
+
+class TestUnit127RegressionFixes(unittest.TestCase):
+    """Regression coverage for URL validation, fusion, chunking, budget, and benchmark fixes."""
+
+    def test_is_safe_retrieval_url_rejects_raw_whitespace_percent_and_fullwidth_ip(self) -> None:
+        from url_normalizer import is_safe_retrieval_url
+
+        self.assertFalse(is_safe_retrieval_url(" https://93.184.216.34/", resolve_dns=False))
+        self.assertFalse(is_safe_retrieval_url("http://127.0.0.1%foo.com/", resolve_dns=False))
+        self.assertFalse(is_safe_retrieval_url("http://１２７.０.０.１/", resolve_dns=False))
+        self.assertTrue(is_safe_retrieval_url("https://93.184.216.34/", resolve_dns=False))
+
+    def test_is_signed_url_avoids_single_key_false_positives(self) -> None:
+        self.assertFalse(URLNormalizer.is_signed_url({"st": ["open"], "q": ["python"]}))
+        self.assertFalse(URLNormalizer.is_signed_url({"se": ["short"]}))
+        self.assertTrue(URLNormalizer.is_signed_url({"sv": ["2023-01-03"], "se": ["2026-01-01"]}))
+        norm = normalize_url("https://example.com/?utm_source=x&st=open&q=python")
+        self.assertNotIn("utm_source", norm)
+        self.assertIn("st=open", norm)
+        self.assertIn("q=python", norm)
+
+    def test_retrieval_response_to_dict_reflects_current_fields(self) -> None:
+        resp = RetrievalResponse(mode="deep", partial=True, warnings=["scrape timeout"])
+        payload = resp.to_dict()
+        self.assertEqual(payload["search"]["mode"], "deep")
+        self.assertTrue(payload["search"]["partial"])
+        self.assertEqual(payload["warnings"], ["scrape timeout"])
+
+    def test_rank_fusion_multi_engine_hit_receives_per_engine_rrf_contribution(self) -> None:
+        from rank_fusion import ReciprocalRankFusion
+
+        fused = reciprocal_rank_fusion(
+            candidates=[
+                EngineRankItem(
+                    url="https://docs.python.org/3/",
+                    title="Python Docs",
+                    snippet="Official Python documentation",
+                    engine="google",
+                    rank=1,
+                    query="python",
+                ),
+                EngineRankItem(
+                    url="https://docs.python.org/3/",
+                    title="Python Docs",
+                    snippet="Official Python documentation",
+                    engine="bing",
+                    rank=1,
+                    query="python",
+                ),
+                EngineRankItem(
+                    url="https://example.org/other",
+                    title="Other Docs",
+                    snippet="Alternative guide",
+                    engine="google",
+                    rank=1,
+                    query="python",
+                ),
+            ]
+        )
+        self.assertGreater(fused[0].score, fused[1].score)
+        self.assertEqual(fused[0].engines, ["bing", "google"])
+
+        empty_eng = ReciprocalRankFusion().fuse_query_runs(
+            [
+                {
+                    "query": "python",
+                    "results": [{"url": "https://example.com/", "title": "T", "content": "C", "engines": []}],
+                }
+            ]
+        )
+        self.assertEqual(len(empty_eng), 1)
+        self.assertEqual(empty_eng[0]["engines"], [])
+
+    def test_passage_chunker_skips_fenced_headings_and_zero_overlap_no_duplication(self) -> None:
+        md = (
+            "## Real Section\n"
+            "First detailed paragraph with enough characters to form one passage chunk cleanly.\n\n"
+            "```python\n"
+            "# fake comment inside code\n"
+            "x = 1\n"
+            "```\n\n"
+            "Second detailed paragraph with enough characters to form another passage chunk cleanly."
+        )
+        splitter = HeadingPassageSplitter(
+            PassageChunkerConfig(target_chunk_chars=60, max_chunk_chars=120, overlap_chars=0, max_passages_per_page=4)
+        )
+        chunks = splitter.split_into_passages(md, source_id="src_01")
+        self.assertGreaterEqual(len(chunks), 2)
+        self.assertTrue(all("# fake comment" not in c.heading for c in chunks))
+        for prev, nxt in itertools.pairwise(chunks):
+            self.assertNotIn(prev.text, nxt.text)
+
+        zero_splitter = HeadingPassageSplitter(PassageChunkerConfig(max_passages_per_page=0))
+        self.assertEqual(
+            zero_splitter.extract_evidence("Some text content.", query="text", source_id="src_01"),
+            [],
+        )
+
+    def test_retrieval_service_max_total_chars_and_timeout_warning(self) -> None:
+        from retrieval_service import RetrievalService
+
+        def fake_search(**kwargs: Any) -> dict[str, Any]:
+            return {
+                "results": [
+                    {
+                        "url": f"https://93.184.216.{34 + i}/page",
+                        "title": f"Result {i}",
+                        "content": "x " * 300,
+                        "engines": ["google"],
+                    }
+                    for i in range(3)
+                ]
+            }
+
+        stop_event = threading.Event()
+
+        def slow_scrape(url: str, **kwargs: Any) -> dict[str, Any]:
+            stop_event.wait(timeout=0.3)
+            return {"url": url, "content": "late content", "error": ""}
+
+        tight_budget = replace(get_mode_budget("balanced"), scrape_timeout_ms=50, max_total_chars=600)
+        svc = RetrievalService(search_func=fake_search, scrape_func=slow_scrape)
+        try:
+            with patch.dict("retrieval_service.BUDGETS", {"balanced": tight_budget}):
+                resp = svc.search("python asyncio", mode="balanced", count=3)
+        finally:
+            stop_event.set()
+        self.assertTrue(resp.partial)
+        self.assertTrue(any("timed out" in w.lower() for w in resp.warnings))
+        total_chars = sum(len(item.snippet) + sum(len(ev.text) for ev in item.evidence) for item in resp.results)
+        self.assertLessEqual(total_chars, 600)
+
+    def test_benchmark_metrics_and_json_output(self) -> None:
+        import json
+        import subprocess
+
+        repo_root = os.path.dirname(SCRIPT_DIR)
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from tests.evaluation.run_benchmark import calculate_ndcg
+
+        self.assertAlmostEqual(
+            calculate_ndcg([1.0, 0.0], 2, ideal_scores=[2.0, 1.0]), 1.0 / (3.0 + 1.0 / 1.5849625), places=3
+        )
+        self.assertEqual(calculate_ndcg([], 5), 0.0)
+
+        bench_py = os.path.join(repo_root, "tests", "evaluation", "run_benchmark.py")
+        proc = subprocess.run(
+            [sys.executable, bench_py, "--mode", "fast", "--json"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=True,
+        )
+        data = json.loads(proc.stdout)
+        self.assertIn("fast", data)
+        self.assertLessEqual(data["fast"]["recall_at_10"], 1.0)
 
 
 if __name__ == "__main__":

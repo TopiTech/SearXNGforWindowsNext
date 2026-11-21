@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +38,7 @@ class CrossEncoderReranker:
         self.config = config or CrossEncoderConfig()
         self._model: Any = None
         self._load_attempted: bool = False
+        self._lock = threading.Lock()
 
     def is_available(self) -> bool:
         """Check if sentence-transformers is available in the current Python environment."""
@@ -54,19 +57,23 @@ class CrossEncoderReranker:
         if self._load_attempted:
             return self._model
 
-        self._load_attempted = True
-        try:
-            mod = importlib.import_module("sentence_transformers")
-            cross_encoder_cls = mod.CrossEncoder
-            self._model = cross_encoder_cls(
-                self.config.model_name,
-                max_length=self.config.max_length,
-            )
-            return self._model
-        except Exception as exc:  # noqa: BLE001 - graceful fallback if PyTorch or weights fail to load
-            logger.debug("CrossEncoder could not be initialized (%s); using lexical ranking only.", exc)
-            self._model = None
-            return None
+        with self._lock:
+            if self._load_attempted:
+                return self._model
+            try:
+                mod = importlib.import_module("sentence_transformers")
+                cross_encoder_cls = mod.CrossEncoder
+                self._model = cross_encoder_cls(
+                    self.config.model_name,
+                    max_length=self.config.max_length,
+                )
+                return self._model
+            except Exception as exc:  # noqa: BLE001 - graceful fallback if PyTorch or weights fail to load
+                logger.debug("CrossEncoder could not be initialized (%s); using lexical ranking only.", exc)
+                self._model = None
+                return None
+            finally:
+                self._load_attempted = True
 
     def rerank(
         self,
@@ -78,14 +85,26 @@ class CrossEncoderReranker:
 
         If Cross-Encoder is disabled or unavailable, returns items unmodified.
         """
-        if not self.config.enabled or not items or not query.strip():
+        if not self.config.enabled or not items or not isinstance(query, str) or not query.strip():
             return items
 
         model = self._ensure_model()
         if model is None:
             return items
 
-        k = top_k or self.config.top_candidates
+        if top_k is None:
+            k = self.config.top_candidates
+        elif isinstance(top_k, int) and not isinstance(top_k, bool):
+            k = top_k
+        else:
+            try:
+                k = int(top_k)
+            except (ValueError, TypeError, OverflowError):
+                k = self.config.top_candidates
+
+        if k <= 0:
+            return items
+
         candidates = items[:k]
         pairs = []
         for it in candidates:
@@ -94,9 +113,17 @@ class CrossEncoderReranker:
             pairs.append([query, f"{title}. {body}"])
 
         try:
-            scores = model.predict(pairs)
-            for idx, sc in enumerate(scores):
-                candidates[idx]["cross_encoder_score"] = float(sc)
+            raw_scores = list(model.predict(pairs))
+            if len(raw_scores) != len(candidates):
+                return items
+            parsed_scores: list[float] = []
+            for sc in raw_scores:
+                val = float(sc)
+                if not math.isfinite(val):
+                    return items
+                parsed_scores.append(val)
+            for idx, val in enumerate(parsed_scores):
+                candidates[idx]["cross_encoder_score"] = val
             candidates.sort(key=lambda x: float(x.get("cross_encoder_score") or 0.0), reverse=True)
             return candidates + items[k:]
         except Exception as exc:  # noqa: BLE001 - graceful fallback to standard scores on model inference errors

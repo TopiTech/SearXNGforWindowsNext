@@ -1395,5 +1395,76 @@ class TestAgentQueryPipelineIntegration(unittest.TestCase):
             self.assertEqual(kwargs.get("pageno"), 2)
 
 
+class TestAgentToolsRegressionFixes(unittest.TestCase):
+    """Regression coverage for Unit 3 client, CLI, and MCP fixes."""
+
+    def test_client_validates_base_url_and_no_fallback_on_500(self) -> None:
+        with self.assertRaises(ValueError):
+            searxng_client._validate_base_url("file:///etc/passwd")
+
+        bad_search = searxng_client.search("python", base_url="ftp://bad.local:8888")
+        self.assertIn("error", bad_search)
+
+        import email.message
+        import io
+        import urllib.error
+
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.HTTPError(
+                "http://127.0.0.1:8888/healthz",
+                500,
+                "Err",
+                email.message.Message(),
+                io.BytesIO(b"fail"),
+            ),
+        ) as mock_open:
+            ok, msg = searxng_client.check_health("http://127.0.0.1:8888")
+            self.assertFalse(ok)
+            self.assertIn("500", msg)
+            self.assertEqual(mock_open.call_count, 1)
+
+    def test_cli_ai_does_not_override_scrape_or_url_and_deep_accepts_filters(self) -> None:
+        with patch("searxng_client.unified_search") as mock_unified:
+            mock_unified.return_value = {"mode": "scrape", "url": "https://example.com", "content": "ok"}
+            code = searxng_cli.main(["search", "https://example.com", "--ai", "--mode", "scrape", "--json"])
+            self.assertEqual(code, 0)
+            self.assertEqual(mock_unified.call_args.kwargs.get("mode"), "scrape")
+
+        with patch("searxng_client.search_deep") as mock_deep:
+            mock_deep.return_value = {"results": [], "query": "python"}
+            code = searxng_cli.main(["deep", "python", "-c", "it", "-e", "google", "-t", "week", "--json"])
+            self.assertEqual(code, 0)
+            self.assertEqual(mock_deep.call_args.kwargs.get("categories"), "it")
+            self.assertEqual(mock_deep.call_args.kwargs.get("engines"), "google")
+            self.assertEqual(mock_deep.call_args.kwargs.get("time_range"), "week")
+
+    def test_mcp_rejects_nan_non_dict_arguments_and_parses_bool_default(self) -> None:
+        self.assertTrue(mcp_server._parse_bool("invalid", default=True))
+        self.assertEqual(mcp_server.TOOLS_DEFINITIONS[1]["name"], "searxng_scrape")
+        self.assertEqual(mcp_server.TOOLS_DEFINITIONS[1]["inputSchema"]["properties"]["max_length"]["maximum"], 50000)
+
+        nan_resp = mcp_server.process_message(
+            '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "searxng_search", "arguments": {"query": NaN}}}'
+        )
+        self.assertIsNotNone(nan_resp)
+        assert nan_resp is not None
+        self.assertEqual(nan_resp["error"]["code"], -32700)
+
+        bad_args_resp = mcp_server.process_message(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "searxng_search", "arguments": ["bad"]},
+                }
+            )
+        )
+        self.assertIsNotNone(bad_args_resp)
+        assert bad_args_resp is not None
+        self.assertEqual(bad_args_resp["error"]["code"], -32602)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -212,9 +212,10 @@ def classify_source_type(domain_or_url: str) -> str:
     return "general"
 
 
-def get_mode_budget(mode: str) -> ModeBudget:
+def get_mode_budget(mode: str | None) -> ModeBudget:
     """Retrieve mode budget configuration by name."""
-    return BUDGETS.get(mode.lower().strip(), BUDGETS["balanced"])
+    norm = (mode if isinstance(mode, str) else "balanced").lower().strip()
+    return BUDGETS.get(norm, BUDGETS["balanced"])
 
 
 def compute_source_quality(
@@ -262,10 +263,10 @@ def compute_source_quality(
 
 
 def escape_markdown_link(title: str, url: str) -> tuple[str, str]:
-    """Escape brackets in Markdown title and parens in target URL."""
+    """Escape brackets/backslashes in Markdown title and spaces/parens in target URL."""
     clean_title = re.sub(r"\s+", " ", (title or url or "")).strip()
-    safe_title = clean_title.replace("[", "\\[").replace("]", "\\]")
-    safe_url = (url or "").strip().replace("(", "%28").replace(")", "%29")
+    safe_title = clean_title.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+    safe_url = re.sub(r"\s+", "%20", (url or "").strip()).replace("(", "%28").replace(")", "%29")
     return safe_title, safe_url
 
 
@@ -295,12 +296,17 @@ class QueryInfo:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> QueryInfo:
+        original = data.get("original")
+        normalized = data.get("normalized")
+        clean_text = data.get("clean_text")
+        intent = data.get("intent")
+        language = data.get("language")
         return cls(
-            original=str(data.get("original", "")),
-            normalized=str(data.get("normalized", "")),
-            clean_text=str(data.get("clean_text", "")),
-            intent=str(data.get("intent", "factual")),
-            language=str(data.get("language", "en")),
+            original="" if original is None else str(original),
+            normalized="" if normalized is None else str(normalized),
+            clean_text="" if clean_text is None else str(clean_text),
+            intent="factual" if intent is None else str(intent),
+            language="en" if language is None else str(language),
             freshness=data.get("freshness"),
         )
 
@@ -326,12 +332,20 @@ class SearchExecutionInfo:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SearchExecutionInfo:
+        mode = data.get("mode")
+        expanded = data.get("expanded_queries")
+        engines = data.get("engines_used")
+        elapsed = data.get("elapsed_ms")
+        try:
+            elapsed_val = float(elapsed) if elapsed is not None else 0.0
+        except (ValueError, TypeError):
+            elapsed_val = 0.0
         return cls(
-            mode=str(data.get("mode", "balanced")),
-            expanded_queries=list(data.get("expanded_queries", [])),
-            engines_used=list(data.get("engines_used", [])),
+            mode="balanced" if mode is None else str(mode),
+            expanded_queries=list(expanded) if isinstance(expanded, (list, tuple, set)) else [],
+            engines_used=list(engines) if isinstance(engines, (list, tuple, set)) else [],
             partial=bool(data.get("partial", False)),
-            elapsed_ms=float(data.get("elapsed_ms", 0.0)),
+            elapsed_ms=elapsed_val,
         )
 
 
@@ -435,11 +449,17 @@ class RetrievalResponse:
     def to_dict(self) -> dict[str, Any]:
         """Serialize according to the GenAI Structured Response schema."""
         query_dict = self.query.to_dict()
-        search_dict = self.search.to_dict()
+        search_info = SearchExecutionInfo(
+            mode=self.mode,
+            expanded_queries=list(self.expanded_queries),
+            engines_used=list(self.engines_used),
+            partial=self.partial,
+            elapsed_ms=self.elapsed_ms,
+        )
         return {
             "schema_version": self.schema_version,
             "query": query_dict,
-            "search": search_dict,
+            "search": search_info.to_dict(),
             "results": [r.to_dict() for r in self.results],
             "warnings": self.warnings,
         }
@@ -447,13 +467,17 @@ class RetrievalResponse:
     def to_markdown(self) -> str:
         """Format the retrieval response into rich, citation-dense Markdown."""
         q_text = self.query.clean_text or self.query.normalized or self.query.original
-        safe_q = q_text.replace("`", "'")
+        safe_q = re.sub(r"\s+", " ", q_text).strip().replace("`", "'")
         lines: list[str] = [f"## Search Retrieval: `{safe_q}` (Mode: `{self.mode}`, Intent: `{self.query.intent}`)\n"]
 
         if self.answers:
             for ans in self.answers:
-                if ans.strip():
-                    lines.append(f"> 💡 **Direct Answer**: {ans.strip()}\n")
+                ans_clean = str(ans).strip() if ans is not None else ""
+                if ans_clean:
+                    ans_lines = ans_clean.splitlines()
+                    quoted_ans = "\n".join(f"> {line}" for line in ans_lines[1:])
+                    first = f"> 💡 **Direct Answer**: {ans_lines[0]}"
+                    lines.append(f"{first}\n{quoted_ans}\n" if quoted_ans else f"{first}\n")
 
         if not self.results:
             lines.append("該当する検索結果が見つかりませんでした。別のキーワードをお試しください。")
@@ -472,14 +496,16 @@ class RetrievalResponse:
                     quote_text = "\n".join(f"> {line}" for line in ev.text.splitlines())
                     lines.append(f"- **[{ev.id}]** {heading_str}\n{quote_text}\n")
             elif item.snippet:
-                lines.append(f"> {item.snippet}\n")
+                quote_snippet = "\n".join(f"> {line}" for line in item.snippet.splitlines())
+                lines.append(f"{quote_snippet}\n")
             else:
                 lines.append("*(スニペットなし)*\n")
 
         lines.append("---\n**Citations & Sources:**")
         for item in self.results:
             safe_title, safe_url = escape_markdown_link(item.title, item.url)
+            dom = item.domain or extract_domain(item.url) or "unknown"
             dup_suffix = f" *(+ {len(item.duplicate_urls)} duplicates)*" if item.duplicate_urls else ""
-            lines.append(f"- [{item.id}] [{safe_title}]({safe_url}) ({item.domain}){dup_suffix}")
+            lines.append(f"- [{item.id}] [{safe_title}]({safe_url}) ({dom}){dup_suffix}")
 
         return "\n".join(lines).strip()

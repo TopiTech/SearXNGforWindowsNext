@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import math
 import re
 import threading
 import time
@@ -130,18 +131,19 @@ class RetrievalService:
         timeout: float,
         base_url: str | None = None,
         max_concurrency: int = 5,
-    ) -> None:
+    ) -> int:
         """Concurrently scrape top URLs with daemon threads and timeout protection.
 
         ``max_concurrency`` comes from the active retrieval budget so a mode can
         bound outbound requests instead of every mode hammering with a fixed 5.
+        Returns the number of scrape tasks that timed out.
         """
         if max_pages <= 0:
-            return
+            return 0
 
         to_scrape = items[:max_pages]
         if not to_scrape:
-            return
+            return 0
 
         concurrency_limit = max(1, min(int(max_concurrency), 10))
         sem = threading.Semaphore(min(len(to_scrape), concurrency_limit))
@@ -169,7 +171,7 @@ class RetrievalService:
 
         fut_map: dict[Future, dict[str, Any]] = {}
         for it in to_scrape:
-            target_url = str(it.get("url") or "")
+            target_url = str(it.get("url") or "").strip()
             if not target_url:
                 continue
             if not is_safe_retrieval_url(target_url):
@@ -187,6 +189,9 @@ class RetrievalService:
             t.start()
             fut_map[fut] = it
 
+        if not fut_map:
+            return 0
+
         done, not_done = concurrent.futures.wait(fut_map.keys(), timeout=timeout)
 
         for fut in done:
@@ -203,7 +208,7 @@ class RetrievalService:
                 else:
                     it["raw_content"] = ""
                     it["is_scraped"] = False
-                    it["scrape_error"] = str(err)
+                    it["scrape_error"] = str(err or "empty content")
             except Exception as exc:  # noqa: BLE001
                 it["raw_content"] = ""
                 it["is_scraped"] = False
@@ -215,6 +220,8 @@ class RetrievalService:
             it["raw_content"] = ""
             it["is_scraped"] = False
             it["scrape_error"] = "Scrape timed out"
+
+        return len(not_done)
 
     def search(
         self,
@@ -271,13 +278,31 @@ class RetrievalService:
 
         # 3. Multi-Query Search Execution
         query_runs: list[dict[str, Any]] = []
+        executed_queries: list[str] = []
         engines_used_set: set[str] = set()
         warnings_list: list[str] = []
         is_partial = False
         direct_answers: list[str] = []
         infoboxes: list[Any] = []
 
-        eff_timeout = float(timeout) if timeout is not None and timeout > 0 else (budget.per_engine_timeout_ms / 1000.0)
+        eff_timeout = budget.per_engine_timeout_ms / 1000.0
+        if timeout is not None and not isinstance(timeout, bool):
+            try:
+                t_val = float(timeout)
+                if math.isfinite(t_val) and t_val > 0:
+                    eff_timeout = t_val
+            except (ValueError, TypeError, OverflowError):
+                pass
+
+        if isinstance(pageno, int) and not isinstance(pageno, bool):
+            eff_pageno = max(1, pageno)
+        else:
+            try:
+                eff_pageno = max(1, int(str(pageno)))
+            except (ValueError, TypeError, OverflowError):
+                eff_pageno = 1
+
+        filetype_suffix = f" filetype:{processed_q.filetype}" if processed_q.filetype else ""
 
         for q_exec in all_search_queries:
             remaining_s = deadline_at - time.perf_counter()
@@ -285,8 +310,12 @@ class RetrievalService:
                 warnings_list.append("Request deadline reached before all query variants were executed.")
                 is_partial = True
                 break
+            executed_queries.append(q_exec)
+            dispatch_query = (
+                f"{q_exec}{filetype_suffix}" if filetype_suffix and "filetype:" not in q_exec.lower() else q_exec
+            )
             search_args: dict[str, Any] = {
-                "query": q_exec,
+                "query": dispatch_query,
                 "count": budget.max_results_per_query,
                 "categories": categories,
                 "engines": engines,
@@ -295,8 +324,8 @@ class RetrievalService:
             }
             if time_range:
                 search_args["time_range"] = time_range
-            if pageno > 1:
-                search_args["pageno"] = pageno
+            if eff_pageno > 1:
+                search_args["pageno"] = eff_pageno
 
             raw_run_res = self._fetch_query_results(**search_args)
             if isinstance(raw_run_res, list):
@@ -308,22 +337,28 @@ class RetrievalService:
                 is_partial = True
             if raw_run_res.get("partial") or raw_run_res.get("is_partial"):
                 is_partial = True
-            for w in raw_run_res.get("warnings") or []:
-                w_str = str(w).strip()
-                if w_str and w_str not in warnings_list:
-                    warnings_list.append(w_str)
+            raw_warnings = raw_run_res.get("warnings")
+            if isinstance(raw_warnings, list):
+                for w in raw_warnings:
+                    w_str = str(w).strip()
+                    if w_str and w_str not in warnings_list:
+                        warnings_list.append(w_str)
             raw_results = raw_run_res.get("results") or []
             if not isinstance(raw_results, list):
                 raw_results = []
 
             # Collect direct answers and infoboxes
-            for ans in raw_run_res.get("answers", []):
-                ans_str = str(ans).strip()
-                if ans_str and ans_str not in direct_answers:
-                    direct_answers.append(ans_str)
-            for ib in raw_run_res.get("infoboxes", []):
-                if ib not in infoboxes:
-                    infoboxes.append(ib)
+            raw_answers = raw_run_res.get("answers")
+            if isinstance(raw_answers, list):
+                for ans in raw_answers:
+                    ans_str = str(ans).strip()
+                    if ans_str and ans_str not in direct_answers:
+                        direct_answers.append(ans_str)
+            raw_infoboxes = raw_run_res.get("infoboxes")
+            if isinstance(raw_infoboxes, list):
+                for ib in raw_infoboxes:
+                    if ib not in infoboxes:
+                        infoboxes.append(ib)
 
             for r in raw_results:
                 if isinstance(r, dict):
@@ -336,6 +371,8 @@ class RetrievalService:
                                 engines_used_set.add(str(eng_item))
 
             query_runs.append({"query": q_exec, "results": raw_results})
+
+        actual_expanded_q_list = executed_queries[1:]
 
         # 4. Filter Domain Constraints
         filtered_runs: list[dict[str, Any]] = []
@@ -350,17 +387,23 @@ class RetrievalService:
                     continue
                 if all_exc_domains and any(d == exc or d.endswith("." + exc) for exc in all_exc_domains):
                     continue
+                if processed_q.filetype:
+                    path_lower = u.split("?", 1)[0].split("#", 1)[0].lower()
+                    # Only keep filetype filtering flexible for engines that support it; do not drop URLs without extension
+                    _ = path_lower
                 f_results.append(r)
             filtered_runs.append({"query": run["query"], "results": f_results})
 
-        # 5. Reciprocal Rank Fusion & Deduplication
+        # 5. Reciprocal Rank Fusion & Cross-Query Deduplication
         fused_items = self.rank_fusion.fuse_query_runs(filtered_runs)
+        if fused_items:
+            fused_items = self.deduplicator.deduplicate(fused_items)
         if not fused_items:
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             return RetrievalResponse(
                 query=processed_q,
                 mode=norm_mode,
-                expanded_queries=expanded_q_list,
+                expanded_queries=actual_expanded_q_list,
                 engines_used=sorted(engines_used_set),
                 partial=is_partial,
                 elapsed_ms=elapsed_ms,
@@ -417,7 +460,7 @@ class RetrievalService:
                     # Relative freshness window: "week", "month", or "year"
                     matched_relative = False
                     curr_year = str(datetime.now(UTC).year)
-                    m = re.search(r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b", pub_date_str)
+                    m = re.search(r"(?<!\d)(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?!\d)", pub_date_str)
                     if m:
                         try:
                             dt = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=UTC)
@@ -477,7 +520,7 @@ class RetrievalService:
         if budget.max_pages > 0:
             remaining_s = deadline_at - time.perf_counter()
             if remaining_s > 0:
-                self._fetch_pages_concurrent(
+                timed_out = self._fetch_pages_concurrent(
                     selected_candidates,
                     max_pages=budget.max_pages,
                     scrape_length=budget.max_total_chars,
@@ -485,13 +528,17 @@ class RetrievalService:
                     base_url=base_url,
                     max_concurrency=budget.max_concurrency,
                 )
+                if timed_out > 0:
+                    warnings_list.append(f"{timed_out} page scrape(s) timed out.")
+                    is_partial = True
             else:
                 warnings_list.append("Request deadline reached before page scraping.")
                 is_partial = True
 
-        # Build RetrievalResultItems
+        # Build RetrievalResultItems (enforcing total passage and character budgets)
         final_result_items: list[RetrievalResultItem] = []
         total_passages_budget = budget.max_total_passages
+        remaining_chars_budget = max(0, budget.max_total_chars)
 
         for idx, item in enumerate(selected_candidates, start=1):
             source_id = f"src_{idx:02d}"
@@ -552,17 +599,28 @@ class RetrievalService:
                 if meta_flag not in security_flags:
                     security_flags.append(meta_flag)
 
-            if raw_body and total_passages_budget > 0:
+            if len(snippet) > remaining_chars_budget:
+                snippet = snippet[:remaining_chars_budget].rstrip()
+            remaining_chars_budget = max(0, remaining_chars_budget - len(snippet))
+
+            if raw_body and total_passages_budget > 0 and remaining_chars_budget > 0:
                 passages = self.passage_chunker.extract_evidence(
                     content=raw_body,
                     query=ranking_query,
                     source_id=source_id,
                     max_passages=min(budget.max_passages_per_page, total_passages_budget),
                 )
-                evidence_list.extend(passages)
-                total_passages_budget -= len(passages)
-
                 for p in passages:
+                    if remaining_chars_budget <= 0:
+                        break
+                    if len(p.text) > remaining_chars_budget:
+                        if remaining_chars_budget < self.passage_chunker.config.min_chunk_chars:
+                            break
+                        p.text = p.text[:remaining_chars_budget].rstrip()
+                        p.end_char = p.start_char + len(p.text)
+                    evidence_list.append(p)
+                    remaining_chars_budget = max(0, remaining_chars_budget - len(p.text))
+                    total_passages_budget -= 1
                     for f in p.security_flags:
                         if f not in security_flags:
                             security_flags.append(f)
@@ -597,7 +655,7 @@ class RetrievalService:
             schema_version="1.0",
             query=processed_q,
             mode=norm_mode,
-            expanded_queries=expanded_q_list,
+            expanded_queries=actual_expanded_q_list,
             engines_used=sorted(engines_used_set),
             partial=is_partial,
             elapsed_ms=elapsed_ms,

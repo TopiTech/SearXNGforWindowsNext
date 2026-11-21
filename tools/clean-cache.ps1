@@ -37,29 +37,36 @@ function Remove-FileSafe {
     param([string]$FilePath)
     if (Test-Path -LiteralPath $FilePath) {
         try {
-            $item = Get-Item -LiteralPath $FilePath -Force -ErrorAction SilentlyContinue
+            $item = Get-Item -LiteralPath $FilePath -Force -ErrorAction Stop
             if ($item -and -not $item.PSIsContainer) {
-                $script:freedBytes += $item.Length
-                Remove-Item -LiteralPath $FilePath -Force -ErrorAction SilentlyContinue
+                $len = $item.Length
+                Remove-Item -LiteralPath $FilePath -Force -ErrorAction Stop
+                $script:freedBytes += $len
                 $script:cleanedFilesCount++
+                return $true
             }
         } catch {}
     }
+    return $false
 }
 
 function Remove-DirectorySafe {
     param([string]$DirPath)
     if (Test-Path -LiteralPath $DirPath) {
         try {
-            $items = Get-ChildItem -LiteralPath $DirPath -Recurse -File -Force -ErrorAction SilentlyContinue
+            $items = @(Get-ChildItem -LiteralPath $DirPath -Recurse -File -Force -ErrorAction SilentlyContinue)
+            $dirBytes = 0L
             foreach ($it in $items) {
-                $script:freedBytes += $it.Length
-                $script:cleanedFilesCount++
+                $dirBytes += $it.Length
             }
-            Remove-Item -LiteralPath $DirPath -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $DirPath -Recurse -Force -ErrorAction Stop
+            $script:freedBytes += $dirBytes
+            $script:cleanedFilesCount += $items.Count
             $script:cleanedDirsCount++
+            return $true
         } catch {}
     }
+    return $false
 }
 
 # --- Stage 1: Bytecode & Temporary Caches ---
@@ -126,8 +133,9 @@ if ($Deep -or $PruneBabel) {
         foreach ($lf in $localeFiles) {
             $baseName = $lf.BaseName.Split('_')[0].ToLower()
             if ($allowedPrefixes -notcontains $baseName) {
-                Remove-FileSafe -FilePath $lf.FullName
-                $babelPrunedCount++
+                if (Remove-FileSafe -FilePath $lf.FullName) {
+                    $babelPrunedCount++
+                }
             }
         }
         if ($babelPrunedCount -gt 0) {
@@ -175,8 +183,12 @@ if ($GitGc) {
     Write-Host "[5/5] Compacting git object database (git gc)..." -ForegroundColor Yellow
     $gitCmd = Get-Command "git" -ErrorAction SilentlyContinue
     if ($gitCmd) {
-        & $gitCmd.Source "gc" "--prune=now" "--aggressive" "--quiet"
-        Write-Host "      Git repository compacted." -ForegroundColor Gray
+        & $gitCmd.Source "-C" $workspaceRoot "gc" "--prune=now" "--aggressive" "--quiet"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "      [WARN] git gc failed with exit code $LASTEXITCODE." -ForegroundColor Yellow
+        } else {
+            Write-Host "      Git repository compacted." -ForegroundColor Gray
+        }
     }
 } else {
     Write-Host "[5/5] Skipping Git optimization (run with -GitGc to compact .git repository)." -ForegroundColor Gray

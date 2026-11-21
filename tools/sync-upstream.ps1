@@ -29,6 +29,9 @@ function Assert-UpstreamRef {
     if ([string]::IsNullOrWhiteSpace($Value)) {
         throw "Upstream ref must not be empty."
     }
+    if ($Value.StartsWith("-")) {
+        throw "Invalid upstream ref (must not start with '-'): $Value"
+    }
     if ($Value -match '[\x00-\x1F\x7F]') {
         throw "Upstream ref contains control characters."
     }
@@ -165,8 +168,16 @@ try {
     Invoke-GitAction -GitArgs @("fetch", "--depth", "1", "upstream", $Ref) -WorkingDirectory $tempRoot
     Invoke-GitAction -GitArgs @("checkout", "FETCH_HEAD") -WorkingDirectory $tempRoot
 
-    $commitSha = (git -C $tempRoot rev-parse HEAD).Trim()
-    $commitDate = (git -C $tempRoot show -s --format=%cI HEAD).Trim()
+    $commitSha = (git -C $tempRoot rev-parse HEAD)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commitSha)) {
+        throw "Failed to resolve upstream HEAD commit SHA."
+    }
+    $commitSha = $commitSha.Trim()
+    $commitDate = (git -C $tempRoot show -s --format=%cI HEAD)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commitDate)) {
+        throw "Failed to resolve upstream HEAD commit date."
+    }
+    $commitDate = $commitDate.Trim()
 
     Write-Host "[OK] Upstream checkout successful" -ForegroundColor Green
     Write-Host "  Commit:  $commitSha"
@@ -297,6 +308,9 @@ synced_at=$(Get-Date -Format o)
         if ($depsReady -ne "OK") {
             Write-Host "  Installing dependencies required for integrity verification..." -ForegroundColor Yellow
             & (Join-Path $repoRoot "tools\install-requirements.ps1") -Dev
+            if ($LASTEXITCODE -ne 0) {
+                throw "install-requirements.ps1 exited with code $LASTEXITCODE"
+            }
         }
         & (Join-Path $repoRoot "python\python.exe") (Join-Path $repoRoot "tools\test_patches.py")
         if ($LASTEXITCODE -ne 0) {

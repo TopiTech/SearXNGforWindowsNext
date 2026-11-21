@@ -7,7 +7,9 @@ Unifies HTML, CSS, and JavaScript into AI_WORKSPACE_HTML with syntax checking.
 from __future__ import annotations
 
 import ast
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent
@@ -53,6 +55,29 @@ def verify_webui_next_py(py_text: str) -> None:
         raise ValueError(f"webui_next.py is syntactically invalid after bundling: {exc}") from exc
 
 
+def _write_text_atomic(path: Path, text: str) -> None:
+    """Atomically write UTF-8 text to *path* with LF newlines."""
+    fd, tmp_name = tempfile.mkstemp(prefix=".tmp_bundle_", dir=str(path.parent), text=True)
+    closed = False
+    try:
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                closed = True
+                f.write(text)
+                f.flush()
+        finally:
+            if not closed:
+                os.close(fd)
+        os.replace(tmp_name, path)
+    except Exception:
+        if os.path.exists(tmp_name):
+            try:
+                os.remove(tmp_name)
+            except OSError:
+                pass
+        raise
+
+
 def update_webui_next_py() -> None:
     """Inject the compiled AI_WORKSPACE_HTML into tools/webui_next.py safely."""
     html_content = build_ai_workspace_html()
@@ -70,7 +95,7 @@ def update_webui_next_py() -> None:
             suffix = py_text[end_idx:]
             new_py_text = f'{prefix}_EMBEDDED_AI_WORKSPACE_HTML = r"""{html_content}{suffix}'
             verify_webui_next_py(new_py_text)
-            WEBUI_NEXT_PY.write_text(new_py_text, encoding="utf-8")
+            _write_text_atomic(WEBUI_NEXT_PY, new_py_text)
             print(
                 f"Successfully compiled {len(html_content)} bytes into _EMBEDDED_AI_WORKSPACE_HTML in {WEBUI_NEXT_PY}"
             )
@@ -87,7 +112,7 @@ def update_webui_next_py() -> None:
             suffix = py_text[end_idx:]
             new_py_text = f'{prefix}AI_WORKSPACE_HTML = """{html_content}{suffix}'
             verify_webui_next_py(new_py_text)
-            WEBUI_NEXT_PY.write_text(new_py_text, encoding="utf-8")
+            _write_text_atomic(WEBUI_NEXT_PY, new_py_text)
             print(f"Successfully compiled {len(html_content)} bytes into AI_WORKSPACE_HTML in {WEBUI_NEXT_PY}")
             return
 

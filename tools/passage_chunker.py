@@ -14,7 +14,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
-from lexical_rerank import MultilingualTokenizer
+from lexical_rerank import BM25Reranker, MultilingualTokenizer
 
 try:
     import lxml.etree
@@ -54,18 +54,15 @@ class ChunkerConfig:
         target_passage_chars: int | None = None,
         max_passage_chars: int | None = None,
     ) -> None:
-        object.__setattr__(self, "min_chunk_chars", min_chunk_chars)
-        object.__setattr__(
-            self,
-            "target_chunk_chars",
-            target_passage_chars if target_passage_chars is not None else target_chunk_chars,
-        )
-        object.__setattr__(
-            self,
-            "max_chunk_chars",
-            max_passage_chars if max_passage_chars is not None else max_chunk_chars,
-        )
-        object.__setattr__(self, "overlap_chars", overlap_chars)
+        eff_max = max(1, max_passage_chars if max_passage_chars is not None else max_chunk_chars)
+        raw_target = target_passage_chars if target_passage_chars is not None else target_chunk_chars
+        eff_target = max(1, min(raw_target, eff_max))
+        eff_min = max(0, min(min_chunk_chars, eff_max))
+        eff_overlap = max(0, min(overlap_chars, max(0, eff_target - 1)))
+        object.__setattr__(self, "min_chunk_chars", eff_min)
+        object.__setattr__(self, "target_chunk_chars", eff_target)
+        object.__setattr__(self, "max_chunk_chars", eff_max)
+        object.__setattr__(self, "overlap_chars", eff_overlap)
         object.__setattr__(self, "max_passages_per_page", max_passages_per_page)
         object.__setattr__(self, "default_heading", default_heading)
 
@@ -211,7 +208,7 @@ class HTMLMetadataExtractor:
                     if auth_meta:
                         out["author"] = str(auth_meta[0]).strip()
 
-                # Published date
+                # Published date (prefer explicit meta/pubdate; only fall back to bare <time> if still missing)
                 pub_meta = (
                     tree.xpath("//meta[@property='article:published_time']/@content")
                     or tree.xpath("//meta[@property='og:published_time']/@content")
@@ -219,12 +216,17 @@ class HTMLMetadataExtractor:
                     or tree.xpath("//meta[@name='pubdate']/@content")
                     or tree.xpath("//meta[@name='date']/@content")
                     or tree.xpath("//time[@pubdate]/@datetime")
-                    or tree.xpath("//time/@datetime")
                 )
                 if pub_meta:
                     out["published_at"] = str(pub_meta[0]).strip()
                     out["date_source"] = "meta_article_published"
                     out["date_confidence"] = "high"
+                elif not out["published_at"]:
+                    time_fallback = tree.xpath("//time/@datetime")
+                    if time_fallback:
+                        out["published_at"] = str(time_fallback[0]).strip()
+                        out["date_source"] = "html_time"
+                        out["date_confidence"] = "low"
 
                 # Updated date
                 mod_meta = (
@@ -282,12 +284,26 @@ class HeadingPassageChunker:
         sections: list[tuple[str, list[str]]] = []
         current_heading = self.config.default_heading
         current_lines: list[str] = []
+        fence_char = ""
+        fence_len = 0
 
         for line in lines:
             line_str = line.strip()
-            # Detect heading lines
-            if line_str.startswith(("# ", "## ", "### ", "#### ", "##### ", "###### ")) or re.match(
-                r"^<h[1-6][^>]*>.*?</h[1-6]>$", line_str, re.IGNORECASE
+            fence_m = re.match(r"^(`{3,}|~{3,})", line_str)
+            if fence_m:
+                delim = fence_m.group(1)
+                if not fence_char:
+                    fence_char = delim[0]
+                    fence_len = len(delim)
+                elif delim[0] == fence_char and len(delim) >= fence_len and not line_str[len(delim) :].strip():
+                    fence_char = ""
+                    fence_len = 0
+                current_lines.append(line)
+                continue
+
+            if not fence_char and (
+                line_str.startswith(("# ", "## ", "### ", "#### ", "##### ", "###### "))
+                or re.match(r"^<h[1-6][^>]*>.*?</h[1-6]>$", line_str, re.IGNORECASE)
             ):
                 if current_lines:
                     sections.append((current_heading, current_lines))
@@ -342,7 +358,7 @@ class HeadingPassageChunker:
             if len(p_clean) <= self.config.target_chunk_chars:
                 units.append(p_clean)
             else:
-                sentences = re.split(r"(?<=[.!?。！？\n])\s+", p_clean)
+                sentences = re.split(r"(?<=[.!?])\s+|(?<=[。！？\n])\s*", p_clean)
                 for s in sentences:
                     s_clean = s.strip()
                     if not s_clean:
@@ -350,7 +366,7 @@ class HeadingPassageChunker:
                     if len(s_clean) <= self.config.max_chunk_chars:
                         units.append(s_clean)
                     else:
-                        slice_len = max(self.config.target_chunk_chars, 1)
+                        slice_len = max(min(self.config.target_chunk_chars, self.config.max_chunk_chars), 1)
                         while len(s_clean) > self.config.max_chunk_chars:
                             units.append(s_clean[:slice_len].strip())
                             s_clean = s_clean[slice_len:].strip()
@@ -360,70 +376,75 @@ class HeadingPassageChunker:
         buffer = ""
         buf_start = base_char_offset
 
-        for unit in units:
-            unit_clean = unit.strip()
-            if not unit_clean:
-                continue
-
-            if buffer and (len(buffer) + len(unit_clean) + 1 > self.config.target_chunk_chars):
-                if len(buffer) >= self.config.min_chunk_chars:
-                    flags = SecurityScanner.scan_for_injection(f"{heading}\n{buffer}")
-                    passages.append(
-                        EvidencePassage(
-                            id="",
-                            source_id=source_id,
-                            heading=heading,
-                            text=buffer,
-                            start_char=buf_start,
-                            end_char=buf_start + len(buffer),
-                            security_flags=flags,
-                        )
-                    )
-                    overlap = buffer[-self.config.overlap_chars :] if len(buffer) > self.config.overlap_chars else ""
-                    if overlap and (len(overlap) + 1 + len(unit_clean) > self.config.max_chunk_chars):
-                        overlap = ""
-                    buf_start = buf_start + len(buffer) - len(overlap)
-                    buffer = f"{overlap}\n{unit_clean}" if overlap else unit_clean
-                else:
-                    if len(buffer) + len(unit_clean) + 1 > self.config.max_chunk_chars:
-                        if len(buffer) >= self.config.min_chunk_chars:
-                            flags = SecurityScanner.scan_for_injection(f"{heading}\n{buffer}")
-                            passages.append(
-                                EvidencePassage(
-                                    id="",
-                                    source_id=source_id,
-                                    heading=heading,
-                                    text=buffer,
-                                    start_char=buf_start,
-                                    end_char=buf_start + len(buffer),
-                                    security_flags=flags,
-                                )
-                            )
-                        buf_start = buf_start + len(buffer)
-                        buffer = unit_clean
-                    else:
-                        buffer = f"{buffer}\n\n{unit_clean}" if buffer else unit_clean
-            else:
-                buffer = f"{buffer}\n\n{unit_clean}" if buffer else unit_clean
-
-        if len(buffer.strip()) >= self.config.min_chunk_chars:
-            final_text = buffer.strip()
-            if len(final_text) > self.config.max_chunk_chars:
-                final_text = final_text[: self.config.max_chunk_chars].strip()
-            flags = SecurityScanner.scan_for_injection(f"{heading}\n{final_text}")
+        def _emit_buffer(text_val: str, start_off: int) -> None:
+            text_capped = text_val.strip()
+            if len(text_capped) > self.config.max_chunk_chars:
+                text_capped = text_capped[: self.config.max_chunk_chars].strip()
+            if len(text_capped) < self.config.min_chunk_chars:
+                return
+            flags = SecurityScanner.scan_for_injection(f"{heading}\n{text_capped}")
             passages.append(
                 EvidencePassage(
                     id="",
                     source_id=source_id,
                     heading=heading,
-                    text=final_text,
-                    start_char=buf_start,
-                    end_char=buf_start + len(final_text),
+                    text=text_capped,
+                    start_char=start_off,
+                    end_char=start_off + len(text_capped),
                     security_flags=flags,
                 )
             )
 
+        for unit in units:
+            unit_clean = unit.strip()
+            if not unit_clean:
+                continue
+            if len(unit_clean) > self.config.max_chunk_chars:
+                unit_clean = unit_clean[: self.config.max_chunk_chars].strip()
+
+            sep_len = 2  # joined with "\n\n"
+            if buffer and (len(buffer) + sep_len + len(unit_clean) > self.config.target_chunk_chars):
+                if len(buffer) >= self.config.min_chunk_chars:
+                    _emit_buffer(buffer, buf_start)
+                    overlap = (
+                        buffer[-self.config.overlap_chars :]
+                        if (self.config.overlap_chars > 0 and len(buffer) > self.config.overlap_chars)
+                        else ""
+                    )
+                    if overlap and (len(overlap) + 1 + len(unit_clean) > self.config.max_chunk_chars):
+                        overlap = ""
+                    buf_start = buf_start + len(buffer) - len(overlap)
+                    buffer = f"{overlap}\n{unit_clean}" if overlap else unit_clean
+                elif len(buffer) + sep_len + len(unit_clean) > self.config.max_chunk_chars:
+                    buf_start = buf_start + len(buffer)
+                    buffer = unit_clean
+                else:
+                    buffer = f"{buffer}\n\n{unit_clean}"
+            else:
+                buffer = f"{buffer}\n\n{unit_clean}" if buffer else unit_clean
+
+        if len(buffer.strip()) >= self.config.min_chunk_chars:
+            _emit_buffer(buffer, buf_start)
+
         return passages
+
+    def _score_passage_list(self, passages: list[EvidencePassage], query: str) -> None:
+        """Score passages in place using BM25 + NFKC phrase match bonuses."""
+        if not passages:
+            return
+        q_tokens = self.tokenizer.tokenize(query)
+        q_norm = unicodedata.normalize("NFKC", query or "").strip().lower()
+        corpus_tokens = [self.tokenizer.tokenize(f"{p.heading} {p.text}") for p in passages]
+        bm25_scores = BM25Reranker(corpus_tokens).score(q_tokens) if q_tokens else [0.0] * len(passages)
+
+        for p, base_score in zip(passages, bm25_scores, strict=True):
+            p_score = float(base_score)
+            if q_norm and len(q_norm) >= 3:
+                if q_norm in unicodedata.normalize("NFKC", p.text).lower():
+                    p_score += 4.0
+                if q_norm in unicodedata.normalize("NFKC", p.heading).lower():
+                    p_score += 3.0
+            p.score = p_score
 
     def extract_evidence(
         self,
@@ -436,7 +457,9 @@ class HeadingPassageChunker:
         if not content:
             return []
 
-        max_p = max_passages or self.config.max_passages_per_page
+        max_p = self.config.max_passages_per_page if max_passages is None else max_passages
+        if max_p <= 0:
+            return []
         sections = self.split_into_sections(content)
 
         all_candidates: list[EvidencePassage] = []
@@ -474,28 +497,7 @@ class HeadingPassageChunker:
                     )
                 )
 
-        # Score passages against query tokens using BM25
-        q_tokens = set(self.tokenizer.tokenize(query))
-        q_lower = query.strip().lower()
-
-        for p in all_candidates:
-            p_tokens = self.tokenizer.tokenize(f"{p.heading} {p.text}")
-            tf_map: dict[str, int] = {}
-            for t in p_tokens:
-                tf_map[t] = tf_map.get(t, 0) + 1
-
-            p_score = 0.0
-            for qt in q_tokens:
-                if qt in tf_map:
-                    p_score += tf_map[qt] * 1.5
-
-            # Phrase bonus
-            if q_lower and q_lower in p.text.lower():
-                p_score += 4.0
-            if q_lower and q_lower in p.heading.lower():
-                p_score += 3.0
-
-            p.score = p_score
+        self._score_passage_list(all_candidates, query)
 
         # Sort candidate passages by relevance score descending
         all_candidates.sort(key=lambda x: x.score, reverse=True)
@@ -550,27 +552,7 @@ class HeadingPassageChunker:
 
     def score_passages(self, passages: list[EvidencePassage], query: str) -> list[EvidencePassage]:
         """Score and sort given passages against a search query."""
-        q_tokens = set(self.tokenizer.tokenize(query))
-        q_lower = query.strip().lower()
-
-        for p in passages:
-            p_tokens = self.tokenizer.tokenize(f"{p.heading} {p.text}")
-            tf_map: dict[str, int] = {}
-            for t in p_tokens:
-                tf_map[t] = tf_map.get(t, 0) + 1
-
-            p_score = 0.0
-            for qt in q_tokens:
-                if qt in tf_map:
-                    p_score += tf_map[qt] * 1.5
-
-            if q_lower and q_lower in p.text.lower():
-                p_score += 4.0
-            if q_lower and q_lower in p.heading.lower():
-                p_score += 3.0
-
-            p.score = p_score
-
+        self._score_passage_list(passages, query)
         return sorted(passages, key=lambda x: x.score, reverse=True)
 
 

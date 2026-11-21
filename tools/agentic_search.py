@@ -17,6 +17,7 @@ import math
 import re
 import threading
 import time
+import unicodedata
 import urllib.parse
 from collections.abc import Callable
 from concurrent.futures import Future
@@ -274,8 +275,10 @@ def extract_domain(url: str) -> str:
 
 def is_url_input(text: str) -> bool:
     """Return True if text is a single HTTP/HTTPS URL rather than a search query."""
-    s = (text or "").strip()
-    if not s or " " in s or "\n" in s or "\t" in s:
+    if not isinstance(text, str):
+        return False
+    s = text.strip()
+    if not s or any(ch.isspace() for ch in s):
         return False
     if not (s.lower().startswith("http://") or s.lower().startswith("https://")):
         return False
@@ -384,7 +387,8 @@ class QueryOptimizer:
         include_domains: list[str] = []
         exclude_domains: list[str] = []
 
-        tokens = query.strip().split()
+        clean = query.strip() if isinstance(query, str) else ""
+        tokens = clean.split()
         remaining_tokens: list[str] = []
 
         for token in tokens:
@@ -415,7 +419,12 @@ class QueryOptimizer:
         news_matches = len(words & cls.NEWS_KEYWORDS)
 
         # Check for stacktrace or code patterns
-        if "traceback" in lower or "line " in lower or "error:" in lower or "exception" in lower:
+        if (
+            "traceback" in lower
+            or "error:" in lower
+            or "exception" in lower
+            or bool(re.search(r"\bline\s+\d+\b", lower))
+        ):
             return "code"
 
         if code_matches >= 1 and code_matches >= academic_matches:
@@ -461,7 +470,8 @@ class DomainScorer:
     ) -> None:
         self.boost_domains = boost_domains if boost_domains is not None else dict(DEFAULT_BOOST_DOMAINS)
         self.penalized_domains = penalized_domains if penalized_domains is not None else dict(DEFAULT_PENALIZED_DOMAINS)
-        self.spam_patterns = [re.compile(p, re.IGNORECASE) for p in (spam_patterns or DEFAULT_SPAM_PATTERNS)]
+        eff_spam = spam_patterns if spam_patterns is not None else DEFAULT_SPAM_PATTERNS
+        self.spam_patterns = [re.compile(p, re.IGNORECASE) for p in eff_spam]
 
     def get_domain_weight(self, domain: str) -> float:
         """Calculate authority multiplier for a domain."""
@@ -496,8 +506,8 @@ class DomainScorer:
         exclude_domains: list[str] | None = None,
     ) -> list[SearchResultItem]:
         """Filter and score raw search results, returning ordered items."""
-        inc_set = {d.strip().lower() for d in (include_domains or []) if d and d.strip()}
-        exc_set = {d.strip().lower() for d in (exclude_domains or []) if d and d.strip()}
+        inc_set = set(parse_domain_list(include_domains))
+        exc_set = set(parse_domain_list(exclude_domains))
 
         items: list[SearchResultItem] = []
         total = len(raw_results)
@@ -612,7 +622,7 @@ class BM25PassageExtractor:
                 if buffer:
                     passages.append(buffer.strip())
                     buffer = ""
-                sentences = re.split(r"(?<=[.!?。！？\n])\s+", b)
+                sentences = re.split(r"(?<=[.!?])\s+|(?<=[。！？\n])\s*", b)
                 for s in sentences:
                     s_clean = s.strip()
                     if not s_clean:
@@ -647,6 +657,8 @@ class BM25PassageExtractor:
 
     def extract_highlights(self, text: str, query: str, top_k: int = 2) -> list[str]:
         """Extract top_k most relevant passages from text for a query."""
+        if top_k <= 0:
+            return []
         passages = self.split_passages(text)
         if not passages:
             return []
@@ -694,8 +706,8 @@ class BM25PassageExtractor:
                 score += idf * (numerator / max(denominator, 0.001))
 
             # Bonus for containing exact continuous query string
-            q_stripped = query.strip().lower()
-            if q_stripped and q_stripped in passages[i].lower():
+            q_stripped = unicodedata.normalize("NFKC", query or "").strip().lower()
+            if q_stripped and len(q_stripped) >= 3 and q_stripped in unicodedata.normalize("NFKC", passages[i]).lower():
                 score += 3.0
 
             scores.append((score, i))
@@ -753,9 +765,15 @@ def _coerce_scrape_result(raw: Any) -> dict[str, Any]:
 class SpeculativeFetcher:
     """Performs parallel speculative fetching of top search result URLs."""
 
-    def __init__(self, scrape_func: Callable[..., dict[str, Any]], max_workers: int = 5) -> None:
+    def __init__(
+        self,
+        scrape_func: Callable[..., dict[str, Any]],
+        max_workers: int = 5,
+        resolve_dns: bool = False,
+    ) -> None:
         self.scrape_func = scrape_func
         self.max_workers = max(1, max_workers)
+        self.resolve_dns = bool(resolve_dns)
 
     def fetch_pages(
         self,
@@ -764,6 +782,7 @@ class SpeculativeFetcher:
         scrape_length: int = 12000,
         timeout: float = 6.0,
         base_url: str | None = None,
+        resolve_dns: bool | None = None,
     ) -> list[SearchResultItem]:
         """Concurrently scrape top items and populate full_content without blocking on hung threads."""
         if max_fetch <= 0 or not items:
@@ -775,10 +794,24 @@ class SpeculativeFetcher:
         if not to_fetch:
             return items
 
-        eff_timeout = float(timeout) if timeout is not None and timeout > 0 else 6.0
+        eff_timeout = 6.0
+        if timeout is not None and not isinstance(timeout, bool):
+            try:
+                t_val = float(timeout)
+                if math.isfinite(t_val) and t_val > 0:
+                    eff_timeout = t_val
+            except (ValueError, TypeError, OverflowError):
+                pass
+        eff_resolve_dns = self.resolve_dns if resolve_dns is None else bool(resolve_dns)
         sem = threading.Semaphore(self.max_workers)
 
         def _do_scrape(target_url: str) -> dict[str, Any]:
+            if eff_resolve_dns and not is_safe_retrieval_url(target_url, resolve_dns=True):
+                return {
+                    "is_scraped": False,
+                    "full_content": "",
+                    "scrape_error": "Blocked unsafe or unresolvable retrieval URL",
+                }
             scrape_kwargs: dict[str, Any] = {"max_length": scrape_length, "timeout": eff_timeout}
             if base_url is not None:
                 scrape_kwargs["base_url"] = base_url
@@ -973,7 +1006,8 @@ class TokenBudgeter:
                         quoted = "\n".join(f"> {line}" for line in h.split("\n"))
                         body_chunks.append(f"{quoted}\n")
             elif item.content:
-                body_chunks.append(f"> {item.content}\n")
+                quoted_content = "\n".join(f"> {line}" for line in item.content.splitlines())
+                body_chunks.append(f"{quoted_content}\n")
 
             rendered_item = item_header + "\n".join(body_chunks)
             item_tokens = cls.estimate_tokens(rendered_item)
@@ -997,6 +1031,19 @@ def build_rag_prompt(query: str, markdown_context: str) -> str:
     return TokenBudgeter.build_rag_prompt(query, markdown_context)
 
 
+def _coerce_bounded_int(raw: Any, default: int, minimum: int, maximum: int | None = None) -> int:
+    """Coerce an untrusted numeric argument to a bounded int (rejecting bool and non-finite)."""
+    if isinstance(raw, bool):
+        return default
+    try:
+        val = int(raw)
+    except (ValueError, TypeError, OverflowError):
+        return default
+    if maximum is not None:
+        return max(minimum, min(val, maximum))
+    return max(minimum, val)
+
+
 def execute_scrape_pipeline(
     url: str,
     scrape_func: Callable[..., dict[str, Any]],
@@ -1007,12 +1054,9 @@ def execute_scrape_pipeline(
 ) -> dict[str, Any]:
     """Execute unified URL scraping with token estimation, BM25 highlights, and RAG prompt."""
     t0 = time.perf_counter()
-    clean_url = (url or "").strip()
-    clean_q = (focus_query or "").strip()
-    try:
-        max_len = max(500, min(max_length, 50000))
-    except (ValueError, TypeError):
-        max_len = 8000
+    clean_url = url.strip() if isinstance(url, str) else ""
+    clean_q = focus_query.strip() if isinstance(focus_query, str) else ""
+    max_len = _coerce_bounded_int(max_length, default=8000, minimum=500, maximum=50000)
 
     if not clean_url:
         err_msg = "URL が指定されていません。"
@@ -1174,9 +1218,19 @@ def execute_unified_search(
     - Deep Agentic Search with parallel scraping & BM25 highlights (`mode='deep'`)
     """
     t0 = time.perf_counter()
-    raw_input = (query or "").strip()
+    raw_input = query.strip() if isinstance(query, str) else ""
     norm_mode = (mode or "auto").strip().lower()
     norm_depth = (search_depth or "advanced").strip().lower()
+    page_val = _coerce_bounded_int(pageno, default=1, minimum=1)
+
+    eff_timeout: float | None = None
+    if timeout is not None and not isinstance(timeout, bool):
+        try:
+            t_val = float(timeout)
+            if math.isfinite(t_val) and t_val > 0:
+                eff_timeout = t_val
+        except (ValueError, TypeError, OverflowError):
+            eff_timeout = None
 
     # Resolve mode when set to 'auto'
     if norm_mode == "auto":
@@ -1193,7 +1247,10 @@ def execute_unified_search(
     elif norm_mode in ("balanced", "retrieval"):
         norm_mode = "balanced"
         norm_depth = "balanced"
-    elif norm_mode not in ("deep", "fast", "classic", "scrape"):
+    elif norm_mode == "deep":
+        if norm_depth in ("fast", "json_lite"):
+            norm_depth = "advanced"
+    elif norm_mode != "scrape":
         norm_mode = "deep"
 
     # Balanced Retrieval Pipeline
@@ -1203,15 +1260,15 @@ def execute_unified_search(
             search_func=search_func,
             scrape_func=scrape_func,
             mode="balanced",
-            count=max_results,
+            count=_coerce_bounded_int(max_results, default=5, minimum=1, maximum=50),
             categories=categories or "",
             engines=engines or "",
             time_range=time_range or "",
             include_domains=include_domains,
             exclude_domains=exclude_domains,
-            pageno=pageno,
+            pageno=page_val,
             base_url=base_url,
-            timeout=timeout,
+            timeout=eff_timeout,
             **kwargs,
         )
         out = retrieval_resp.to_dict()
@@ -1221,7 +1278,9 @@ def execute_unified_search(
         out["search_depth"] = norm_depth
         out["results_count"] = len(out.get("results", []))
         out["scraped_count"] = sum(1 for r in retrieval_resp.results if r.is_scraped)
-        out["page"] = pageno
+        out["page"] = page_val
+        if not retrieval_resp.results and retrieval_resp.warnings:
+            out["error"] = "; ".join(retrieval_resp.warnings)
         return out
 
     # 1. URL Scrape Pipeline
@@ -1232,8 +1291,12 @@ def execute_unified_search(
             focus_query=focus_query or "",
             max_length=max_scrape_length,
             base_url=base_url,
-            timeout=timeout,
+            timeout=eff_timeout,
         )
+
+    max_res = _coerce_bounded_int(max_results, default=5, minimum=1, maximum=50)
+    max_tok = _coerce_bounded_int(max_tokens, default=3000, minimum=500, maximum=16000)
+    scrape_len = _coerce_bounded_int(max_scrape_length, default=8000, minimum=500, maximum=50000)
 
     # 2. Search Pipeline (Fast json_lite or Deep BM25 + Parallel Scrape)
     clean_q, explicit_inc, explicit_exc = QueryOptimizer.parse_query(raw_input)
@@ -1247,34 +1310,19 @@ def execute_unified_search(
             "results_count": 0,
             "scraped_count": 0,
             "estimated_tokens": 0,
-            "max_tokens": max_tokens,
-            "page": pageno,
+            "max_tokens": max_tok,
+            "page": page_val,
             "elapsed_ms": 0.0,
             "error": "検索クエリが空です。検索したいキーワードを指定してください。",
             "markdown": "検索クエリが空です。",
             "rag_prompt": "",
         }
 
-    try:
-        max_res = max(1, min(max_results, 50))
-    except (ValueError, TypeError):
-        max_res = 5
-
-    try:
-        max_tok = max(500, min(max_tokens, 16000))
-    except (ValueError, TypeError):
-        max_tok = 3000
-
-    try:
-        scrape_len = max(500, min(max_scrape_length, 50000))
-    except (ValueError, TypeError):
-        scrape_len = 8000
-
     # Merge explicit domain filters deterministically
     final_inc = sorted(set(parse_domain_list(include_domains) + explicit_inc))
     final_exc = sorted(set(parse_domain_list(exclude_domains) + explicit_exc))
 
-    intent = QueryOptimizer.classify_intent(clean_q)
+    intent = "code" if norm_depth == "code" else QueryOptimizer.classify_intent(clean_q)
     routed_cats, routed_engs = QueryOptimizer.get_routing(intent)
 
     cat_str = (categories or "").strip()
@@ -1297,12 +1345,12 @@ def execute_unified_search(
         "categories": target_cats,
         "engines": target_engs,
         "base_url": base_url,
-        "timeout": timeout,
+        "timeout": eff_timeout,
     }
     if tr_str:
         search_kwargs["time_range"] = tr_str
-    if pageno > 1:
-        search_kwargs["pageno"] = pageno
+    if page_val > 1:
+        search_kwargs["pageno"] = page_val
 
     try:
         search_res = call_with_supported_kwargs(search_func, **search_kwargs)
@@ -1325,7 +1373,7 @@ def execute_unified_search(
             "scraped_count": 0,
             "estimated_tokens": 0,
             "max_tokens": max_tok,
-            "page": pageno,
+            "page": page_val,
             "elapsed_ms": elapsed_ms,
             "error": err_text,
             "markdown": f"### 検索エラー\n\n{err_text}",
@@ -1341,8 +1389,14 @@ def execute_unified_search(
     infoboxes_val = search_res.get("infoboxes", [])
     infoboxes: list[Any] = infoboxes_val if isinstance(infoboxes_val, list) else []
 
+    header_label = (
+        "Classic Search Results"
+        if norm_mode == "classic"
+        else ("Fast Search Results" if norm_mode == "fast" else "Deep Search Results")
+    )
+
     if not raw_results:
-        empty_md = f"## Deep Search Results: `{clean_q}`\n\n該当する検索結果が見つかりませんでした。"
+        empty_md = f"## {header_label}: `{clean_q}`\n\n該当する検索結果が見つかりませんでした。"
         return {
             "mode": norm_mode,
             "search_depth": norm_depth,
@@ -1355,6 +1409,7 @@ def execute_unified_search(
             "infoboxes": infoboxes,
             "estimated_tokens": TokenBudgeter.estimate_tokens(empty_md),
             "max_tokens": max_tok,
+            "page": page_val,
             "elapsed_ms": elapsed_ms,
             "markdown": empty_md,
             "rag_prompt": TokenBudgeter.build_rag_prompt(clean_q, empty_md),
@@ -1372,13 +1427,16 @@ def execute_unified_search(
     # Speculative fetching & BM25 highlight extraction (for deep advanced/code modes)
     should_scrape = norm_mode == "deep" and norm_depth in ("advanced", "code") and include_highlights
     if should_scrape:
-        fetcher = SpeculativeFetcher(scrape_func=scrape_func)
+        fetcher = SpeculativeFetcher(
+            scrape_func=scrape_func,
+            resolve_dns=bool(kwargs.get("resolve_dns", False)),
+        )
         extractor = BM25PassageExtractor()
         fetcher.fetch_pages(
             top_candidates,
             max_fetch=max_res,
             scrape_length=scrape_len,
-            timeout=float(timeout) if timeout is not None and timeout > 0 else 6.0,
+            timeout=eff_timeout if eff_timeout is not None else 6.0,
             base_url=base_url,
         )
 
@@ -1391,11 +1449,6 @@ def execute_unified_search(
         for item in top_candidates:
             item.highlights = [item.content] if item.content else []
 
-    header_label = (
-        "Classic Search Results"
-        if norm_mode == "classic"
-        else ("Fast Search Results" if norm_mode == "fast" else "Deep Search Results")
-    )
     packed_markdown = TokenBudgeter.pack_markdown(
         query=clean_q,
         items=top_candidates,
@@ -1420,7 +1473,7 @@ def execute_unified_search(
         "infoboxes": infoboxes,
         "max_tokens": max_tok,
         "estimated_tokens": est_tokens,
-        "page": pageno,
+        "page": page_val,
         "elapsed_ms": elapsed_ms,
         "markdown": packed_markdown,
         "rag_prompt": TokenBudgeter.build_rag_prompt(clean_q, packed_markdown),

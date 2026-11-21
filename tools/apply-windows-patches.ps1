@@ -1,3 +1,9 @@
+param(
+    [switch]$Strict,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$PassThruArgs = @()
+)
+
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 $ErrorActionPreference = "Stop"
@@ -14,15 +20,20 @@ if (-not (Test-Path -LiteralPath $patchPy)) {
     throw "Patch script not found at: $patchPy"
 }
 
+$patchArgs = @($PassThruArgs | Where-Object { $null -ne $_ -and $_ -ne "" })
+if ($Strict -and ($patchArgs -notcontains "--strict")) {
+    $patchArgs += "--strict"
+}
+
 Write-Host "Running Python patch tool..." -ForegroundColor Cyan
-& $pythonExe $patchPy @args
+& $pythonExe $patchPy @patchArgs
 $exitCode = $LASTEXITCODE
 
 if ($exitCode -eq 0) {
     Write-Host "[OK] Windows patches applied or verified successfully." -ForegroundColor Green
     exit 0
 }
-elseif ($exitCode -eq 2) {
+elseif ($exitCode -eq 2 -and -not ($Strict -or ($patchArgs -contains "--strict"))) {
     Write-Host ""
     Write-Host "[WARN] Some non-critical patches could not be applied due to upstream changes." -ForegroundColor Yellow
     Write-Host "  The SearXNG server will run, but some optional features or tweaks may be inactive." -ForegroundColor Yellow

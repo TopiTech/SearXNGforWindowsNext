@@ -95,6 +95,40 @@
           .replace(/[\\$"\\`!]/g, function (ch) { return String.fromCharCode(92) + ch; });
       }
 
+      function formatMarkdownLink(title, url) {
+        var safeTitle = String(title || url || '').replace(/[\r\n]+/g, ' ').split('[').join('\\[').split(']').join('\\]');
+        var safeUrl = String(url || '').trim().split('(').join('%28').split(')').join('%29').replace(/\s+/g, '%20');
+        return '[' + safeTitle + '](' + safeUrl + ')';
+      }
+
+      function parseJsonResponse(r) {
+        return r.text().then(function (txt) {
+          var parsed = null;
+          if (txt) {
+            try {
+              parsed = JSON.parse(txt);
+            } catch (e) {
+              parsed = null;
+            }
+          }
+          if (!r.ok) {
+            var msg = (parsed && parsed.error) ? parsed.error : ('HTTP ' + r.status);
+            var err = new Error(msg);
+            err.status = r.status;
+            err.payload = parsed;
+            throw err;
+          }
+          if (parsed === null) {
+            throw new Error('Invalid JSON response');
+          }
+          return parsed;
+        });
+      }
+
+      function fetchJson(url, options) {
+        return fetch(url, options).then(parseJsonResponse);
+      }
+
       function safeGetStorage(key, fallback) {
         try {
           var val = localStorage.getItem(key);
@@ -287,7 +321,8 @@
         }
 
         var qs = params.toString();
-        var targetUrl = qs ? '/?' + qs : '/';
+        var basePath = window.location.pathname || '/';
+        var targetUrl = qs ? (basePath + '?' + qs) : basePath;
         var currentSearch = window.location.search || '';
         var targetSearch = qs ? '?' + qs : '';
 
@@ -336,6 +371,8 @@
             else if (m === 'classic') runClassicSearch(q, pg);
             else runUnifiedSearch(q);
           } else {
+            cancelPendingRequest();
+            activeRequestContainer = null;
             var rList = document.getElementById('results-container');
             if (rList && initialResultsEmptyHtml) {
               rList.innerHTML = initialResultsEmptyHtml;
@@ -426,9 +463,14 @@
        * ------------------------------------------------------------- */
       var suggestBox = document.getElementById('suggest-box');
       var suggestDebounceTimer = null;
+      var suggestAbortController = null;
       var activeSuggestIndex = -1;
 
       function closeSuggest() {
+        if (suggestAbortController) {
+          try { suggestAbortController.abort(); } catch (e) {}
+          suggestAbortController = null;
+        }
         suggestBox.classList.remove('show');
         suggestBox.innerHTML = '';
         activeSuggestIndex = -1;
@@ -502,15 +544,22 @@
           closeSuggest();
           return;
         }
+        if (suggestAbortController) {
+          try { suggestAbortController.abort(); } catch (e) {}
+        }
+        suggestAbortController = new AbortController();
+        var sugSignal = suggestAbortController.signal;
         var extra = (backend && backend !== 'off') ? ('&autocomplete=' + encodeURIComponent(backend)) : '';
         fetch('/autocompleter?q=' + encodeURIComponent(query) + extra, {
+          signal: sugSignal,
           headers: {
             'X-Requested-With': 'XMLHttpRequest',
             'Accept': 'application/json'
           }
         })
-          .then(function (r) { return r.json(); })
+          .then(parseJsonResponse)
           .then(function (data) {
+            if (sugSignal.aborted) return;
             var curQ = document.getElementById('q').value.trim();
             if (!curQ || isUrlText(curQ) || curQ.toLowerCase() !== query.toLowerCase()) {
               if (!curQ || isUrlText(curQ)) {
@@ -543,7 +592,10 @@
             suggestBox.classList.add('show');
             setActiveSuggestAria();
           })
-          .catch(function () { closeSuggest(); });
+          .catch(function (err) {
+            if (err && err.name === 'AbortError') return;
+            closeSuggest();
+          });
       }
 
       document.getElementById('q').addEventListener('input', function () {
@@ -826,21 +878,29 @@
 
         var fullHtml = htmlBlocks.join('\n');
 
-        // 4. Bold & Italic (applied outside code blocks)
-        fullHtml = fullHtml.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-        fullHtml = fullHtml.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-
-        // 5. Links (handles escaped brackets in titles from escape_markdown_link and rejects code tokens in URL)
+        // 4. Tokenize links BEFORE bold/italic so URLs containing '*' cannot be corrupted
+        var linkTokens = [];
         fullHtml = fullHtml.replace(/\[((?:\\\]|[^\]])+)\]\((https?:\/\/[^\s\)\"\'\u0001\u0002]+)\)/g, function (_, label, rawUrl) {
           var cleanUrl = safeHttpUrl(rawUrl.replace(/&amp;/g, '&'));
-          var displayLabel = label.replace(/\\([\[\]])/g, '$1');
+          var displayLabel = label.replace(/\\([\[\]])/g, '$1')
+            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*([^*]+)\*/g, '<em>$1</em>');
           if (cleanUrl === '#') {
             return displayLabel;
           }
-          return '<a href="' + escapeHtml(cleanUrl) + '" target="_blank" rel="noopener noreferrer">' + displayLabel + '</a>';
+          var token = '\u0001@@LINK_' + linkTokens.length + '@@\u0001';
+          linkTokens.push('<a href="' + escapeHtml(cleanUrl) + '" target="_blank" rel="noopener noreferrer">' + displayLabel + '</a>');
+          return token;
         });
 
-        // 6. Restore inline code first, then fenced code blocks (prevents token substitution inside code)
+        // 5. Bold & Italic (applied outside code blocks and links)
+        fullHtml = fullHtml.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        fullHtml = fullHtml.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+        // 6. Restore links, inline code, and fenced code blocks (prevents token substitution inside code)
+        for (var l = 0; l < linkTokens.length; l++) {
+          fullHtml = fullHtml.replace('\u0001@@LINK_' + l + '@@\u0001', function () { return linkTokens[l]; });
+        }
         for (var j = 0; j < inlineCodes.length; j++) {
           fullHtml = fullHtml.replace('\u0002@@INLINE_CODE_' + j + '@@\u0002', function () { return inlineCodes[j]; });
         }
@@ -1072,6 +1132,9 @@
           scrapeBtn.setAttribute('aria-controls', drawerId);
           scrapeBtn.addEventListener('click', function () {
             var existing = card.querySelector('.inline-scrape-drawer');
+            if (existing && existing.dataset.loading === '1') {
+              return;
+            }
             if (existing && existing.dataset.failed !== '1') {
               var isHidden = existing.style.display === 'none';
               existing.style.display = isHidden ? 'block' : 'none';
@@ -1082,13 +1145,16 @@
             drawer.className = 'inline-scrape-drawer';
             drawer.id = drawerId;
             drawer.style.display = 'block';
+            drawer.dataset.loading = '1';
             delete drawer.dataset.failed;
             drawer.innerHTML = '<span class="ui-spinner"></span> URLから本文を抽出中...';
             if (!existing) card.appendChild(drawer);
+            scrapeBtn.disabled = true;
             scrapeBtn.setAttribute('aria-expanded', 'true');
-            fetch('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
-              .then(function (r) { return r.json(); })
+            fetchJson('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
               .then(function (res) {
+                delete drawer.dataset.loading;
+                scrapeBtn.disabled = false;
                 if (res.error) {
                   drawer.dataset.failed = '1';
                   drawer.innerHTML = icon('alert') + ' 抽出失敗: ' + escapeHtml(res.error);
@@ -1097,8 +1163,10 @@
                 drawer.textContent = res.content || '(本文なし)';
               })
               .catch(function (e) {
+                delete drawer.dataset.loading;
+                scrapeBtn.disabled = false;
                 drawer.dataset.failed = '1';
-                drawer.innerHTML = icon('alert') + ' 通信エラー: ' + escapeHtml(e);
+                drawer.innerHTML = icon('alert') + ' 通信エラー: ' + escapeHtml(e && e.message ? e.message : e);
               });
           });
 
@@ -1109,10 +1177,8 @@
           copyItemBtn.setAttribute('data-action', 'copy-citation');
           copyItemBtn.innerHTML = icon('copy') + '<span>引用コピー</span>';
           copyItemBtn.addEventListener('click', function () {
-            var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
-            var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
             var hText = (item.highlights && item.highlights.length) ? item.highlights.join('\n\n') : (item.content || '');
-            var citeMd = '### [' + (idx + 1) + '] [' + safeTitle + '](' + safeUrl + ')\n> ' + hText.replace(/\n/g, '\n> ');
+            var citeMd = '### [' + (idx + 1) + '] ' + formatMarkdownLink(item.title, item.url) + '\n> ' + hText.replace(/\n/g, '\n> ');
             copyWithFeedback(citeMd, copyItemBtn, 'コピー完了');
           });
 
@@ -1167,8 +1233,7 @@
         var origin = window.location.origin;
         state.curlStr = 'curl -sG "' + origin + '/deep_search" --data-urlencode "q=' + escapeShellDoubleQuoted(query) + '" --data-urlencode "depth=' + escapeShellDoubleQuoted(depth) + '" --data-urlencode "format=markdown"';
 
-        fetch(url, { signal: signal })
-          .then(function (r) { return r.json(); })
+        fetchJson(url, { signal: signal })
           .then(function (res) {
             if (signal.aborted) return;
             container.setAttribute('aria-busy', 'false');
@@ -1490,9 +1555,7 @@
             copyBtn.setAttribute('data-action', 'copy-citation');
             copyBtn.innerHTML = icon('copy') + '<span>URLコピー</span>';
             copyBtn.addEventListener('click', function () {
-              var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
-              var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
-              var citeText = '[' + safeTitle + '](' + safeUrl + ')';
+              var citeText = formatMarkdownLink(item.title, item.url);
               copyWithFeedback(citeText, copyBtn, 'コピー済');
             });
             actRow.appendChild(copyBtn);
@@ -1579,6 +1642,9 @@
           scrapeBtn.setAttribute('aria-controls', drawerId);
           scrapeBtn.addEventListener('click', function () {
             var ex = card.querySelector('.inline-scrape-drawer');
+            if (ex && ex.dataset.loading === '1') {
+              return;
+            }
             if (ex && ex.dataset.failed !== '1') {
               var isHidden = ex.style.display === 'none';
               ex.style.display = isHidden ? 'block' : 'none';
@@ -1589,13 +1655,16 @@
             d.className = 'inline-scrape-drawer';
             d.id = drawerId;
             d.style.display = 'block';
+            d.dataset.loading = '1';
             delete d.dataset.failed;
             d.innerHTML = '<span class="ui-spinner"></span> URL本文を抽出中...';
             if (!ex) card.appendChild(d);
+            scrapeBtn.disabled = true;
             scrapeBtn.setAttribute('aria-expanded', 'true');
-            fetch('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
-              .then(function (r) { return r.json(); })
+            fetchJson('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
               .then(function (res) {
+                delete d.dataset.loading;
+                scrapeBtn.disabled = false;
                 if (res.error) {
                   d.dataset.failed = '1';
                   d.innerHTML = icon('alert') + ' 抽出エラー: ' + escapeHtml(res.error);
@@ -1604,8 +1673,10 @@
                 }
               })
               .catch(function (e) {
+                delete d.dataset.loading;
+                scrapeBtn.disabled = false;
                 d.dataset.failed = '1';
-                d.innerHTML = icon('alert') + ' 抽出エラー: ' + escapeHtml(e);
+                d.innerHTML = icon('alert') + ' 抽出エラー: ' + escapeHtml(e && e.message ? e.message : e);
               });
           });
 
@@ -1616,9 +1687,7 @@
           copyBtn.setAttribute('data-action', 'copy-citation');
           copyBtn.innerHTML = icon('copy') + '<span>引用コピー</span>';
           copyBtn.addEventListener('click', function () {
-            var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
-            var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
-            var citeText = '### [' + safeTitle + '](' + safeUrl + ')\n> ' + (item.content || '').replace(/\n/g, '\n> ');
+            var citeText = '### ' + formatMarkdownLink(item.title, item.url) + '\n> ' + (item.content || '').replace(/\n/g, '\n> ');
             copyWithFeedback(citeText, copyBtn, 'コピー済');
           });
 
@@ -1662,8 +1731,7 @@
           page: String(page)
         });
 
-        fetch('/deep_search?' + params.toString(), { signal: signal })
-          .then(function (r) { return r.json(); })
+        fetchJson('/deep_search?' + params.toString(), { signal: signal })
           .then(function (res) {
             if (signal.aborted) return;
             container.setAttribute('aria-busy', 'false');
@@ -1791,8 +1859,7 @@
         if (focusQ) api += '&q=' + encodeURIComponent(focusQ);
         state.curlStr = 'curl -sG "' + window.location.origin + '/scrape" --data-urlencode "url=' + escapeShellDoubleQuoted(targetUrl) + '"';
 
-        fetch(api, { signal: signal })
-          .then(function (r) { return r.json(); })
+        fetchJson(api, { signal: signal })
           .then(function (res) {
             if (signal.aborted) return;
             container.setAttribute('aria-busy', 'false');
@@ -2019,8 +2086,7 @@
             testBtn.disabled = true;
             testBtn.innerHTML = '<span class="ui-spinner"></span>';
             var t0 = performance.now();
-            fetch('/deep_search?q=test&count=1&engines=' + encodeURIComponent(e.name) + '&mode=classic')
-              .then(function (r) { return r.json(); })
+            fetchJson('/deep_search?q=test&count=1&engines=' + encodeURIComponent(e.name) + '&mode=classic')
               .then(function (res) {
                 var elapsed = Math.round(performance.now() - t0);
                 testBtn.disabled = false;
@@ -2033,10 +2099,10 @@
                   showToast(e.name + ': 応答なし / 0件', true);
                 }
               })
-              .catch(function () {
+              .catch(function (err) {
                 testBtn.disabled = false;
                 testBtn.textContent = 'テスト';
-                showToast(e.name + ': 通信エラー', true);
+                showToast(e.name + ': ' + (err && err.message ? err.message : '通信エラー'), true);
               });
           });
           meta.appendChild(testBtn);
@@ -2062,8 +2128,7 @@
 
         grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:2rem;"><span class="ui-spinner"></span> エンジン稼働状況を取得中...</div>';
 
-        fetch('/api/settings/engines')
-          .then(function (r) { return r.json(); })
+        fetchJson('/api/settings/engines')
           .then(function (res) {
             if (!res.success) throw new Error('Failed to load engines');
             state.settingsEngines = res.engines || [];
@@ -2332,41 +2397,41 @@
         if (container.dataset.loaded === '1') return;
         container.innerHTML = '<div class="empty-state"><h2><span class="ui-spinner"></span> 連携情報を取得中...</h2></div>';
 
-        fetch('/api/ai_info')
-          .then(function (r) { return r.json(); })
+        fetchJson('/api/ai_info')
           .then(function (info) {
+            var snippets = (info && info.snippets) ? info.snippets : {};
             container.dataset.loaded = '1';
             container.innerHTML = '';
             var items = [
               {
                 title: 'GenAI Retrieval API (/api/retrieval)',
                 desc: 'GenAIモデル・自律エージェント向けの構造化グラウンディングAPI (schema_version: 1.0)。根拠パッセージ・検証メタデータ・BM25スコアを返します。',
-                code: info.snippets.curl_retrieval + '\n\n# PowerShell:\n' + info.snippets.pwsh_retrieval
+                code: (snippets.curl_retrieval || '') + '\n\n# PowerShell:\n' + (snippets.pwsh_retrieval || '')
               },
               {
                 title: 'HTTP Deep Search API (/deep_search)',
                 desc: '1回のHTTPリクエストで検索・並列スクレイピング・BM25ハイライト抽出を実行し、MarkdownまたはJSONを返します。',
-                code: info.snippets.curl_deep_md + '\n\n# PowerShell:\n' + info.snippets.pwsh_deep
+                code: (snippets.curl_deep_md || '') + '\n\n# PowerShell:\n' + (snippets.pwsh_deep || '')
               },
               {
                 title: 'Claude Code (MCP 登録コマンド)',
                 desc: 'ターミナルで1行実行するだけで、Claude Code に searxng_deep_search / searxng_search / searxng_scrape を追加します。',
-                code: info.snippets.claude_code
+                code: snippets.claude_code || ''
               },
               {
                 title: 'Cursor / Windsurf / Claude Desktop (mcp.json)',
                 desc: '.cursor/mcp.json 等に貼り付けるだけでローカルMCPサーバーとして連携できます。',
-                code: info.snippets.cursor_mcp
+                code: snippets.cursor_mcp || ''
               },
               {
                 title: 'OpenCode (opencode.json)',
                 desc: 'プロジェクトルートの opencode.json に設定してネイティブ検索ツールとして利用できます。',
-                code: info.snippets.opencode_json
+                code: snippets.opencode_json || ''
               },
               {
                 title: 'ターミナル CLI (searxng_cli.py)',
                 desc: 'MCP非対応のエージェント（Codex CLI, Aider等）やスクリプトから直接ワンパス深層検索を実行できます。',
-                code: info.snippets.cli_deep
+                code: snippets.cli_deep || ''
               }
             ];
             items.forEach(function (it) {
@@ -2513,7 +2578,8 @@
             if (scrapeBtn) scrapeBtn.click();
           } else if (e.key === 'Enter' && state.selectedCardIndex >= 0 && state.selectedCardIndex < cards.length && active === cards[state.selectedCardIndex]) {
             var link = cards[state.selectedCardIndex].querySelector('a');
-            if (link) window.open(link.href, '_blank', 'noopener,noreferrer');
+            var rawHref = link ? link.getAttribute('href') : '';
+            if (link && rawHref && rawHref !== '#') window.open(link.href, '_blank', 'noopener,noreferrer');
           }
         }
       });

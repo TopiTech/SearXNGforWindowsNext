@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import sys
 from typing import Any
@@ -127,7 +128,7 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                     "description": "Maximum characters to return to conserve LLM context (default 4000).",
                     "default": 4000,
                     "minimum": 500,
-                    "maximum": 20000,
+                    "maximum": 50000,
                 },
                 "query": {
                     "type": "string",
@@ -297,9 +298,22 @@ def log_debug(msg: str) -> None:
     sys.stderr.flush()
 
 
+def _sanitize_json_value(val: Any) -> Any:
+    """Replace non-finite floats with None so serialized JSON is always RFC 8259 compliant."""
+    if isinstance(val, float):
+        return val if math.isfinite(val) else None
+    if isinstance(val, dict):
+        return {k: _sanitize_json_value(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_sanitize_json_value(v) for v in val]
+    if isinstance(val, tuple):
+        return [_sanitize_json_value(v) for v in val]
+    return val
+
+
 def send_response(response: dict[str, Any]) -> None:
     """Serialize and write a JSON-RPC response to stdout followed by a newline."""
-    body = json.dumps(response, ensure_ascii=False)
+    body = json.dumps(_sanitize_json_value(response), ensure_ascii=False, allow_nan=False)
     sys.stdout.write(body + "\n")
     sys.stdout.flush()
 
@@ -358,7 +372,21 @@ def _parse_bool(val: Any, default: bool = True) -> bool:
             return True
         if s in ("false", "0", "no", "off"):
             return False
-    return bool(val)
+        return default
+    return default
+
+
+def _parse_bounded_int(raw: Any, default: int, minimum: int, maximum: int | None = None) -> int:
+    """Coerce an untrusted tool argument to a bounded int without raising OverflowError."""
+    if raw is None or isinstance(raw, bool):
+        return default
+    try:
+        val = int(raw)
+    except (ValueError, TypeError, OverflowError):
+        return default
+    if maximum is not None:
+        return max(minimum, min(val, maximum))
+    return max(minimum, val)
 
 
 def _is_url_query(text: str) -> bool:
@@ -400,7 +428,9 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
     """Handle tools/call request by executing the specified SearXNG tool."""
     tool_name = params.get("name")
     raw_args = params.get("arguments")
-    arguments = raw_args if isinstance(raw_args, dict) else {}
+    if "arguments" in params and raw_args is not None and not isinstance(raw_args, dict):
+        return make_jsonrpc_error(msg_id, -32602, "Invalid params: arguments must be an object")
+    arguments: dict[str, Any] = raw_args if isinstance(raw_args, dict) else {}
 
     # Log only the tool name: full arguments can contain sensitive user
     # queries/URLs and stderr is often captured by clients.
@@ -408,10 +438,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
 
     if tool_name == "searxng_search":
         query = str(arguments.get("query") or "")
-        try:
-            count = max(1, min(int(arguments.get("count", 5)), 50))
-        except (ValueError, TypeError):
-            count = 5
+        count = _parse_bounded_int(arguments.get("count", 5), default=5, minimum=1, maximum=50)
         categories = str(arguments.get("categories") or "")
         engines = str(arguments.get("engines") or "")
         time_range = str(arguments.get("time_range") or "")
@@ -421,11 +448,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         include_highlights = _parse_bool(raw_hl, default=True)
         include_domains = _clean_domain_list(arguments.get("include_domains"))
         exclude_domains = _clean_domain_list(arguments.get("exclude_domains"))
-
-        try:
-            page = max(1, int(arguments.get("page") or arguments.get("pageno") or 1))
-        except (ValueError, TypeError):
-            page = 1
+        page = _parse_bounded_int(arguments.get("page") or arguments.get("pageno") or 1, default=1, minimum=1)
 
         use_unified = (
             mode in ("fast", "balanced", "deep", "scrape")
@@ -453,10 +476,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
             is_error = bool(data.get("error"))
             formatted_text = searxng_client.format_markdown(data)
         elif use_unified:
-            try:
-                max_tokens = max(500, min(int(arguments.get("max_tokens", 3000)), 16000))
-            except (ValueError, TypeError):
-                max_tokens = 3000
+            max_tokens = _parse_bounded_int(arguments.get("max_tokens", 3000), default=3000, minimum=500, maximum=16000)
             effective_mode = _resolve_effective_mode(mode, search_depth, query)
             uni_kwargs: dict[str, Any] = {
                 "query": query,
@@ -504,21 +524,14 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         ret_mode = str(arguments.get("mode") or "balanced").strip().lower()
         if ret_mode not in ("fast", "balanced", "deep"):
             ret_mode = "balanced"
-        try:
-            count = max(1, min(int(arguments.get("count", 5)), 50))
-        except (ValueError, TypeError):
-            count = 5
+        count = _parse_bounded_int(arguments.get("count", 5), default=5, minimum=1, maximum=50)
         categories = str(arguments.get("categories") or "")
         engines = str(arguments.get("engines") or "")
         time_range = str(arguments.get("time_range") or "")
         include_domains = _clean_domain_list(arguments.get("include_domains"))
         exclude_domains = _clean_domain_list(arguments.get("exclude_domains"))
         out_format = str(arguments.get("format") or "markdown").strip().lower()
-
-        try:
-            page = max(1, int(arguments.get("page") or arguments.get("pageno") or 1))
-        except (ValueError, TypeError):
-            page = 1
+        page = _parse_bounded_int(arguments.get("page") or arguments.get("pageno") or 1, default=1, minimum=1)
 
         ret_kwargs = {
             "query": query,
@@ -535,7 +548,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         data = searxng_client.retrieval_search(**ret_kwargs)
         is_error = bool(data.get("error"))
         if out_format == "json_ai":
-            formatted_text = json.dumps(data, ensure_ascii=False, indent=2)
+            formatted_text = json.dumps(_sanitize_json_value(data), ensure_ascii=False, indent=2, allow_nan=False)
         else:
             formatted_text = searxng_client.format_markdown(data)
 
@@ -550,10 +563,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
 
     elif tool_name == "searxng_scrape":
         url = str(arguments.get("url") or "")
-        try:
-            max_length = max(500, min(int(arguments.get("max_length", 4000)), 50000))
-        except (ValueError, TypeError):
-            max_length = 4000
+        max_length = _parse_bounded_int(arguments.get("max_length", 4000), default=4000, minimum=500, maximum=50000)
         focus_query = str(arguments.get("query") or "").strip()
 
         if focus_query:
@@ -582,23 +592,13 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
     elif tool_name == "searxng_deep_search":
         query = str(arguments.get("query") or "")
         search_depth = str(arguments.get("search_depth") or "advanced")
-        try:
-            max_results = max(1, min(int(arguments.get("max_results", 5)), 50))
-        except (ValueError, TypeError):
-            max_results = 5
+        max_results = _parse_bounded_int(arguments.get("max_results", 5), default=5, minimum=1, maximum=50)
         raw_hl = arguments.get("include_highlights")
         include_highlights = _parse_bool(raw_hl, default=True)
         include_domains = _clean_domain_list(arguments.get("include_domains"))
         exclude_domains = _clean_domain_list(arguments.get("exclude_domains"))
-        try:
-            max_tokens = max(500, min(int(arguments.get("max_tokens", 3000)), 16000))
-        except (ValueError, TypeError):
-            max_tokens = 3000
-
-        try:
-            page = max(1, int(arguments.get("page") or arguments.get("pageno") or 1))
-        except (ValueError, TypeError):
-            page = 1
+        max_tokens = _parse_bounded_int(arguments.get("max_tokens", 3000), default=3000, minimum=500, maximum=16000)
+        page = _parse_bounded_int(arguments.get("page") or arguments.get("pageno") or 1, default=1, minimum=1)
 
         categories = str(arguments.get("categories") or arguments.get("category") or "").strip()
         engines = str(arguments.get("engines") or arguments.get("engine") or "").strip()
@@ -656,6 +656,10 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         }
 
 
+def _reject_json_constant(const: str) -> Any:
+    raise ValueError(f"Non-standard JSON constant not allowed: {const}")
+
+
 def process_message(line: str) -> dict[str, Any] | None:
     """Process a single JSON-RPC request/notification line."""
     clean_line = line.strip()
@@ -663,21 +667,32 @@ def process_message(line: str) -> dict[str, Any] | None:
         return None
 
     try:
-        req = json.loads(clean_line)
-    except json.JSONDecodeError as e:
+        req = json.loads(clean_line, parse_constant=_reject_json_constant)
+    except (json.JSONDecodeError, ValueError) as e:
         return make_jsonrpc_error(None, -32700, f"Parse error: {e}")
 
     if not isinstance(req, dict):
         return make_jsonrpc_error(None, -32600, "Invalid Request: root must be an object")
 
+    has_id = "id" in req
     msg_id = req.get("id")
+    if has_id and not (
+        msg_id is None
+        or (isinstance(msg_id, str))
+        or (isinstance(msg_id, (int, float)) and not isinstance(msg_id, bool) and math.isfinite(float(msg_id)))
+    ):
+        return make_jsonrpc_error(None, -32600, "Invalid Request: id must be a string, number, or null")
+
+    if req.get("jsonrpc") != "2.0":
+        return make_jsonrpc_error(msg_id, -32600, "Invalid Request: jsonrpc must be '2.0'")
+
     method = req.get("method")
     raw_params = req.get("params")
 
     # Notifications (messages without id) require no response. A request with
     # an explicit JSON-RPC "id": null is still a request and MUST be answered,
     # so only a *missing* id key makes it a notification.
-    if "id" not in req and isinstance(method, str) and method:
+    if not has_id and isinstance(method, str) and method:
         if method == "notifications/initialized":
             log_debug("Notification received: initialized")
         return None

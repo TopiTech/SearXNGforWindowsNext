@@ -7,7 +7,6 @@ canonicalization, and citation formatting.
 
 from __future__ import annotations
 
-import contextlib
 import functools
 import ipaddress
 import re
@@ -63,10 +62,6 @@ class URLNormalizer:
         "sig",
         "x-goog-signature",
         "x-goog-credential",
-        "se",  # Azure SAS token expiry
-        "sp",  # Azure SAS token permissions
-        "sv",  # Azure SAS token version
-        "st",  # Azure SAS token start
         "token",
         "authtoken",
     }
@@ -83,10 +78,11 @@ class URLNormalizer:
     @classmethod
     def is_signed_url(cls, query_params: dict[str, list[str]]) -> bool:
         """Check if any query parameter looks like a cryptographic signature or token."""
-        for key in query_params:
-            if key.lower() in cls.SIGNED_URL_INDICATORS:
-                return True
-        return False
+        lower_keys = {key.lower() for key in query_params}
+        if lower_keys & cls.SIGNED_URL_INDICATORS:
+            return True
+        # Recognize Azure SAS multi-parameter signatures when paired with version `sv`
+        return "sv" in lower_keys and bool(lower_keys & {"se", "sp", "sr", "st"})
 
     @classmethod
     def _unquote_unreserved(cls, match: re.Match) -> str:
@@ -116,7 +112,15 @@ class URLNormalizer:
         if not host:
             return ""
 
-        h = host.strip()
+        raw = host.strip()
+        if not raw:
+            return ""
+
+        userinfo, at_sep, hostport = raw.rpartition("@")
+        h = hostport.strip()
+        if not h:
+            return raw
+
         # Handle bracketed IPv6 host like [::1]:8080
         port_suffix = ""
         if h.startswith("["):
@@ -126,20 +130,29 @@ class URLNormalizer:
                 port_part = h[bracket_end + 1 :]
                 if port_part.startswith(":"):
                     port_str = port_part[1:]
-                    if port_str.isdigit():
-                        p = int(port_str)
-                        if p != cls.DEFAULT_PORTS.get(scheme.lower()):
-                            port_suffix = f":{p}"
-                return f"{ip6_part.lower()}{port_suffix}"
+                    if port_str.isascii() and port_str.isdigit():
+                        try:
+                            p = int(port_str)
+                            if p != cls.DEFAULT_PORTS.get(scheme.lower()):
+                                port_suffix = f":{p}"
+                        except ValueError:
+                            port_suffix = port_part
+                    else:
+                        port_suffix = port_part
+                norm_hostport = f"{ip6_part.lower()}{port_suffix}"
+                return f"{userinfo}@{norm_hostport}" if at_sep else norm_hostport
 
         # Standard IPv4 or hostname with optional port
-        if ":" in h:
+        if h.count(":") == 1:
             parts = h.split(":", 1)
             h_part = parts[0]
-            if parts[1].isdigit():
-                p = int(parts[1])
-                if p != cls.DEFAULT_PORTS.get(scheme.lower()):
-                    port_suffix = f":{p}"
+            if parts[1].isascii() and parts[1].isdigit():
+                try:
+                    p = int(parts[1])
+                    if p != cls.DEFAULT_PORTS.get(scheme.lower()):
+                        port_suffix = f":{p}"
+                except ValueError:
+                    port_suffix = f":{parts[1]}"
             else:
                 port_suffix = f":{parts[1]}"
         else:
@@ -161,7 +174,8 @@ class URLNormalizer:
             except (UnicodeError, ValueError):
                 pass
 
-        return f"{h_clean}{port_suffix}"
+        norm_hostport = f"{h_clean}{port_suffix}"
+        return f"{userinfo}@{norm_hostport}" if at_sep else norm_hostport
 
     @classmethod
     def normalize_url(
@@ -478,8 +492,11 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
     if not url or not isinstance(url, str):
         return False
 
+    if contains_forbidden_url_chars(url) or "\\" in url:
+        return False
+
     clean_url = url.strip()
-    if contains_forbidden_url_chars(clean_url) or "\\" in clean_url:
+    if not clean_url:
         return False
 
     try:
@@ -512,15 +529,32 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
         host = host.replace(dot, ".")
     host = host.rstrip(".")
 
-    # Remove IPv6 zone index if present
+    # Zone IDs (%) are only meaningful on IPv6 literals; reject % on all other hosts
+    # so malformed hostnames like `8.8.8.8%25.internal` cannot be truncated.
     if "%" in host:
-        host = host.split("%", 1)[0]
+        if ":" not in host:
+            return False
+        host_base, zone_id = host.split("%", 1)
+        if not zone_id:
+            return False
+        try:
+            ip = ipaddress.IPv6Address(host_base)
+        except ValueError:
+            return False
+        return not _is_ip_blocked(ip)
 
-    if host and ":" not in host and not host.replace(".", "").isdigit():
-        with contextlib.suppress(Exception):
+    if host and ":" not in host and not host.isascii():
+        try:
             import idna
 
-            host = idna.encode(host, uts46=True).decode("ascii")
+            host = idna.encode(host, uts46=True).decode("ascii").lower()
+        except ImportError:
+            try:
+                host = host.encode("idna").decode("ascii").lower()
+            except (UnicodeError, ValueError):
+                return False
+        except (UnicodeError, ValueError):
+            return False
 
     if not host or _is_reserved_scrape_host(host):
         return False

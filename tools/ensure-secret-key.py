@@ -87,11 +87,16 @@ def set_file_permissions(path: str) -> None:
                 username = None
         if username:
             try:
-                subprocess.run(
+                result = subprocess.run(
                     ["icacls", path, "/inheritance:r", "/grant:r", f"{username}:(R,W)"],
                     check=False,
                     capture_output=True,
                 )
+                if isinstance(result.returncode, int) and result.returncode != 0:
+                    print(
+                        f"[WARN] icacls exited with status {result.returncode} for {path}",
+                        file=sys.stderr,
+                    )
             except (subprocess.SubprocessError, OSError):
                 pass
     else:

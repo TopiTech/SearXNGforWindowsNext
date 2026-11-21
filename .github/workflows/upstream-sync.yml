@@ -27,6 +27,7 @@ concurrency:
 jobs:
   sync:
     runs-on: windows-latest
+    timeout-minutes: 45
 
     env:
       DEFAULT_REF: master
@@ -147,12 +148,20 @@ jobs:
         id: changes
         shell: pwsh
         run: |
-         $status = git status --porcelain
-         if ([string]::IsNullOrWhiteSpace($status)) {
+         $statusLines = @(git status --porcelain)
+         $nonVersionChanges = @($statusLines | Where-Object { $_ -and ($_ -notmatch '\bUPSTREAM_VERSION\.txt$') })
+         $upstreamCommitChanged = [bool](git diff -- UPSTREAM_VERSION.txt | Select-String -Pattern '^[+-]resolved_commit=' -Quiet)
+         if ($nonVersionChanges.Count -eq 0 -and -not $upstreamCommitChanged) {
+           git checkout -- UPSTREAM_VERSION.txt
            "has_changes=false" >> $env:GITHUB_OUTPUT
          } else {
-           "has_changes=true" >> $env:GITHUB_OUTPUT
-           $status | Out-File -FilePath changed_files.txt -Encoding utf8
+           $statusLines = @(git status --porcelain)
+           if ($statusLines.Count -eq 0) {
+             "has_changes=false" >> $env:GITHUB_OUTPUT
+           } else {
+             "has_changes=true" >> $env:GITHUB_OUTPUT
+             $statusLines | Out-File -FilePath changed_files.txt -Encoding utf8
+           }
          }
 
       - name: Show changed files

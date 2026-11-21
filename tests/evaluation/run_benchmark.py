@@ -65,14 +65,18 @@ def calculate_dcg(relevance_scores: list[float], k: int) -> float:
     return dcg
 
 
-def calculate_ndcg(relevance_scores: list[float], k: int) -> float:
+def calculate_ndcg(
+    relevance_scores: list[float],
+    k: int,
+    ideal_scores: list[float] | None = None,
+) -> float:
     """Compute Normalized Discounted Cumulative Gain at rank k."""
     dcg = calculate_dcg(relevance_scores, k)
-    ideal_scores = sorted(relevance_scores, reverse=True)
-    idcg = calculate_dcg(ideal_scores, k)
+    ref_ideal = sorted(relevance_scores if ideal_scores is None else ideal_scores, reverse=True)
+    idcg = calculate_dcg(ref_ideal, k)
     if idcg <= 0.0:
-        return 1.0 if dcg > 0 else 0.0
-    return dcg / idcg
+        return 0.0
+    return min(1.0, dcg / idcg)
 
 
 class OfflineRetrievalEvaluator:
@@ -111,9 +115,11 @@ class OfflineRetrievalEvaluator:
 
             def mock_scrape_func(url: str, _pages=scraped_pages_map, **kwargs: Any) -> dict[str, Any]:
                 norm = normalize_url(url)
-                # Check exact or prefix in scraped_pages_map
+                # Check exact match or segment/query-bounded prefix in scraped_pages_map
                 for k, v in _pages.items():
-                    if normalize_url(k) == norm or norm.startswith(normalize_url(k)):
+                    k_norm = normalize_url(k)
+                    k_base = k_norm.rstrip("/")
+                    if norm == k_norm or norm.startswith((k_base + "/", k_base + "?")):
                         return {"success": True, "url": url, "content": v}
                 return {"success": False, "url": url, "error": "not in fixtures"}
 
@@ -123,24 +129,46 @@ class OfflineRetrievalEvaluator:
             resp: RetrievalResponse = svc.search(query=q_text, mode=mode)
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
+            # Compute ideal relevance grades over unique candidate URLs in the fixture pool
+            seen_fixture_urls: set[str] = set()
+            fixture_ideal_scores: list[float] = []
+            for raw_item in raw_search_results:
+                if not isinstance(raw_item, dict):
+                    continue
+                raw_url = str(raw_item.get("url") or "")
+                u_norm = normalize_url(raw_url) if raw_url else ""
+                if not u_norm or u_norm in seen_fixture_urls:
+                    continue
+                seen_fixture_urls.add(u_norm)
+                raw_dom = extract_domain(raw_url)
+                if raw_dom in off_domains or any(raw_dom.endswith("." + d) for d in off_domains):
+                    fixture_ideal_scores.append(2.0)
+                elif raw_dom in rel_domains or any(raw_dom.endswith("." + d) for d in rel_domains):
+                    fixture_ideal_scores.append(1.0)
+                else:
+                    fixture_ideal_scores.append(0.0)
+
             # Compute Relevance & Ranking Metrics
             relevance_list: list[float] = []
+            matched_rel_domains: set[str] = set()
             mrr_rank = 0
             official_found = False
 
             top_results = resp.results
             for idx, res_item in enumerate(top_results[:10], start=1):
                 item_domain = extract_domain(res_item.url)
-                is_official = item_domain in off_domains or any(item_domain.endswith("." + d) for d in off_domains)
-                is_rel = item_domain in rel_domains or any(item_domain.endswith("." + d) for d in rel_domains)
+                matched_off = [d for d in off_domains if item_domain == d or item_domain.endswith("." + d)]
+                matched_rel = [d for d in rel_domains if item_domain == d or item_domain.endswith("." + d)]
 
-                if is_official:
+                if matched_off:
                     relevance_list.append(2.0)
                     official_found = True
+                    matched_rel_domains.update(matched_rel or matched_off)
                     if mrr_rank == 0:
                         mrr_rank = idx
-                elif is_rel:
+                elif matched_rel:
                     relevance_list.append(1.0)
+                    matched_rel_domains.update(matched_rel)
                     if mrr_rank == 0:
                         mrr_rank = idx
                 else:
@@ -151,9 +179,9 @@ class OfflineRetrievalEvaluator:
                 if relevance_list
                 else 0.0
             )
-            recall_at_10 = sum(1.0 for s in relevance_list[:10] if s > 0) / max(len(rel_domains), 1)
+            recall_at_10 = min(1.0, len(matched_rel_domains) / max(len(rel_domains), 1))
             mrr = 1.0 / mrr_rank if mrr_rank > 0 else 0.0
-            ndcg_10 = calculate_ndcg(relevance_list, 10)
+            ndcg_10 = calculate_ndcg(relevance_list, 10, ideal_scores=fixture_ideal_scores or None)
 
             # Deduplication Rate
             raw_len = max(len(raw_search_results), 1)
@@ -169,9 +197,7 @@ class OfflineRetrievalEvaluator:
 
             extract_success_count = sum(1.0 for r in resp.results if r.is_scraped and r.raw_content)
             scraped_attempts = sum(1.0 for r in resp.results if r.is_scraped)
-            extract_success_rate = (
-                extract_success_count / scraped_attempts if scraped_attempts > 0 else (1.0 if mode == "fast" else 0.8)
-            )
+            extract_success_rate = extract_success_count / scraped_attempts if scraped_attempts > 0 else 0.0
 
             results.append(
                 QueryBenchmarkResult(
@@ -232,10 +258,11 @@ def main() -> int:
 
     summary_data: dict[str, dict[str, Any]] = {}
 
-    print("=" * 80)
-    print(" SearXNG for Windows Next -- Retrieval Quality & Performance Benchmark")
-    print(f" Total Queries: {len(queries)} (JA: 5, EN: 5)")
-    print("=" * 80)
+    if not args.json:
+        print("=" * 80)
+        print(" SearXNG for Windows Next -- Retrieval Quality & Performance Benchmark")
+        print(f" Total Queries: {len(queries)} (JA: 5, EN: 5)")
+        print("=" * 80)
 
     for m in modes_to_test:
         run_results = evaluator.run_evaluation(queries, mode=m)
@@ -273,32 +300,32 @@ def main() -> int:
             "partial_failure_rate_pct": round(partial_rate * 100, 2),
         }
 
-        print(f"\n[Mode: {m.upper()}]")
-        print(f"  * Precision@5:              {p5:.4f}  |  Recall@10: {r10:.4f}")
-        print(f"  * MRR:                      {mrr_avg:.4f}  |  nDCG@10:   {ndcg_avg:.4f}")
-        print(f"  * Dedup Rate (Top 10):      {dedup_avg * 100.0:.1f}%")
-        print(f"  * Official Source Presence: {official_rate * 100.0:.1f}%")
-        print(f"  * Citable Evidence Passages:{evidence_rate * 100.0:.1f}%")
-        print(f"  * Extraction Success Rate:  {extract_success * 100.0:.1f}%")
-        print(f"  * Latency:                  Mean: {mean_latency:.2f} ms  |  p95: {p95_latency:.2f} ms")
-        print(f"  * Mean Payload Chars:       {int(mean_chars):,} chars")
-        print(f"  * Partial Failure Rate:     {partial_rate * 100.0:.1f}%")
+        if not args.json:
+            print(f"\n[Mode: {m.upper()}]")
+            print(f"  * Precision@5:              {p5:.4f}  |  Recall@10: {r10:.4f}")
+            print(f"  * MRR:                      {mrr_avg:.4f}  |  nDCG@10:   {ndcg_avg:.4f}")
+            print(f"  * Dedup Rate (Top 10):      {dedup_avg * 100.0:.1f}%")
+            print(f"  * Official Source Presence: {official_rate * 100.0:.1f}%")
+            print(f"  * Citable Evidence Passages:{evidence_rate * 100.0:.1f}%")
+            print(f"  * Extraction Success Rate:  {extract_success * 100.0:.1f}%")
+            print(f"  * Latency:                  Mean: {mean_latency:.2f} ms  |  p95: {p95_latency:.2f} ms")
+            print(f"  * Mean Payload Chars:       {int(mean_chars):,} chars")
+            print(f"  * Partial Failure Rate:     {partial_rate * 100.0:.1f}%")
 
-    print("\n" + "=" * 80)
-    print(" Benchmark Summary Table:")
-    print(" Mode      | P@5    | R@10   | MRR    | nDCG@10 | Dedup% | Official% | Passages% | Latency(ms)")
-    print("-----------+--------+--------+--------+---------+--------+-----------+-----------+------------")
-    for m, d in summary_data.items():
-        print(
-            f" {m:<9} | {d['precision_at_5']:<6.4f} | {d['recall_at_10']:<6.4f} | "
-            f"{d['mrr']:<6.4f} | {d['ndcg_at_10']:<7.4f} | {d['dedup_rate_pct']:<5.1f}% | "
-            f"{d['official_source_rate_pct']:<8.1f}% | {d['evidence_passage_rate_pct']:<8.1f}% | "
-            f"{d['mean_latency_ms']:<8.2f}"
-        )
-    print("=" * 80)
-
-    if args.json:
-        print("\nJSON Output:")
+    if not args.json:
+        print("\n" + "=" * 80)
+        print(" Benchmark Summary Table:")
+        print(" Mode      | P@5    | R@10   | MRR    | nDCG@10 | Dedup% | Official% | Passages% | Latency(ms)")
+        print("-----------+--------+--------+--------+---------+--------+-----------+-----------+------------")
+        for _m, d in summary_data.items():
+            print(
+                f" {_m:<9} | {d['precision_at_5']:<6.4f} | {d['recall_at_10']:<6.4f} | "
+                f"{d['mrr']:<6.4f} | {d['ndcg_at_10']:<7.4f} | {d['dedup_rate_pct']:<5.1f}% | "
+                f"{d['official_source_rate_pct']:<8.1f}% | {d['evidence_passage_rate_pct']:<8.1f}% | "
+                f"{d['mean_latency_ms']:<8.2f}"
+            )
+        print("=" * 80)
+    else:
         print(json.dumps(summary_data, indent=2, ensure_ascii=False))
 
     return 0

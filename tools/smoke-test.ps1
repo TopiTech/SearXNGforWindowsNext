@@ -31,6 +31,7 @@ function Assert-HttpStatusCode {
             UseBasicParsing = $true
             ErrorAction = "Stop"
             Method = $Method
+            TimeoutSec = 30
         }
         if ($null -ne $Body) {
             $requestArgs["Body"] = $Body
@@ -64,11 +65,15 @@ function Assert-Blocked {
     Assert-HttpStatusCode -Uri $Uri -ExpectedStatusCode 400 -Label $Label
 }
 
-# Helper: Verify a JSON-like object has a non-empty property.
+# Helper: Verify a JSON-like object has a non-null, non-blank property (allows 0 or empty array).
 function Assert-JsonProperty {
     param([object]$Value, [string]$PropertyName, [string]$Label)
-    if (-not $Value.$PropertyName) {
-        throw "$Label returned no '$PropertyName'"
+    if ($null -eq $Value -or -not ($Value.PSObject.Properties.Name -contains $PropertyName)) {
+        throw "$Label returned no '$PropertyName' property"
+    }
+    $propVal = $Value.$PropertyName
+    if ($null -eq $propVal -or ($propVal -is [string] -and [string]::IsNullOrWhiteSpace($propVal))) {
+        throw "$Label returned empty '$PropertyName'"
     }
 }
 
@@ -84,7 +89,7 @@ function Assert-In {
 try {
     # Test 1: Root page
     Write-Host "Test 1: Root page..." -ForegroundColor Cyan
-    $rootResponse = Invoke-WebRequest -Uri $base -UseBasicParsing -ErrorAction Stop
+    $rootResponse = Invoke-WebRequest -Uri $base -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
     if ($rootResponse.StatusCode -ne 200) {
         throw "[FAIL] Root page expected 200, got $($rootResponse.StatusCode)"
     }
@@ -103,7 +108,7 @@ try {
     # Test 3: json_lite API (GenAI optimized)
     Write-Host "Test 3: json_lite API (GenAI optimized)..." -ForegroundColor Cyan
     $liteUri = "$base/search?q=SearXNG&format=json_lite"
-    $liteResponse = (Invoke-WebRequest -Uri $liteUri -UseBasicParsing -ErrorAction Stop).Content
+    $liteResponse = (Invoke-WebRequest -Uri $liteUri -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop).Content
     $lite = $liteResponse | ConvertFrom-Json
     Assert-JsonProperty -Value $lite -PropertyName "results" -Label "json_lite API"
     $resultCount = @($lite.results).Count
@@ -117,13 +122,13 @@ try {
             }
         }
         Write-Host "  [OK] All required fields present (title, url, content, source)" -ForegroundColor Green
+        Write-Host "  Sample result keys: $(@($firstResult.PSObject.Properties.Name | Select-Object -First 3) -join ', ')" -ForegroundColor Gray
     }
-    Write-Host "  Sample result keys: $(@($lite.results[0].PSObject.Properties.Name | Select-Object -First 3) -join ', ')" -ForegroundColor Gray
     Write-Host ""
 
     # Test 4: /scrape API (Form POST)
     Write-Host "Test 4: /scrape endpoint (Form POST)..." -ForegroundColor Cyan
-    $scrapeForm = Invoke-RestMethod -Method Post -Uri "$base/scrape" -Body @{ url = "https://example.com" } -ErrorAction Stop
+    $scrapeForm = Invoke-RestMethod -Method Post -Uri "$base/scrape" -Body @{ url = "https://example.com" } -TimeoutSec 30 -ErrorAction Stop
     Assert-JsonProperty -Value $scrapeForm -PropertyName "content" -Label "Scrape API (Form)"
     $contentLen = $scrapeForm.content.Length
     Write-Host "  [OK] Content extracted: $contentLen chars" -ForegroundColor Green
@@ -133,14 +138,14 @@ try {
     Write-Host "Test 5: /scrape endpoint (JSON POST)..." -ForegroundColor Cyan
     $scrapeJson = Invoke-RestMethod -Method Post -Uri "$base/scrape" `
         -Body (@{ url = "https://example.com" } | ConvertTo-Json) `
-        -ContentType "application/json" -ErrorAction Stop
+        -ContentType "application/json" -TimeoutSec 30 -ErrorAction Stop
     Assert-JsonProperty -Value $scrapeJson -PropertyName "content" -Label "Scrape API (JSON)"
     Write-Host "  [OK] Content extracted: $($scrapeJson.content.Length) chars" -ForegroundColor Green
     Write-Host ""
 
     # Test 6: /scrape API (GET)
     Write-Host "Test 6: /scrape endpoint (GET query param)..." -ForegroundColor Cyan
-    $scrapeGet = Invoke-RestMethod -Method Get -Uri "$base/scrape?url=https://example.com" -ErrorAction Stop
+    $scrapeGet = Invoke-RestMethod -Method Get -Uri "$base/scrape?url=https://example.com" -TimeoutSec 30 -ErrorAction Stop
     Assert-JsonProperty -Value $scrapeGet -PropertyName "content" -Label "Scrape API (GET)"
     Write-Host "  [OK] Content extracted: $($scrapeGet.content.Length) chars" -ForegroundColor Green
     Write-Host ""
@@ -188,7 +193,7 @@ try {
     # Test 28: Autocomplete endpoint
     Write-Host "Test 28: Autocomplete endpoint..." -ForegroundColor Cyan
     $acUri = "$base/autocompleter?q=python"
-    $acResponse = Invoke-WebRequest -Uri $acUri -UseBasicParsing -ErrorAction Stop
+    $acResponse = Invoke-WebRequest -Uri $acUri -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
     if ($acResponse.StatusCode -eq 200) {
         Write-Host "  [OK] Autocompleter returned 200" -ForegroundColor Green
     } else {
@@ -214,14 +219,14 @@ try {
 
     # Test 31: Healthcheck endpoint
     Write-Host "Test 31: Healthcheck endpoint..." -ForegroundColor Cyan
-    $hcResponse = Invoke-WebRequest -Uri "$base/healthz" -UseBasicParsing -ErrorAction Stop
+    $hcResponse = Invoke-WebRequest -Uri "$base/healthz" -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
     Assert-In -Value $hcResponse.Content.Trim() -Allowed @("OK") -Label "Healthcheck body"
     Write-Host "  [OK] /healthz returned OK" -ForegroundColor Green
     Write-Host ""
 
     # Test 32: Preferences page (Settings integration)
     Write-Host "Test 32: Preferences page (Settings integration)..." -ForegroundColor Cyan
-    $prefResponse = Invoke-WebRequest -Uri "$base/preferences" -UseBasicParsing -ErrorAction Stop
+    $prefResponse = Invoke-WebRequest -Uri "$base/preferences" -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
     if ($prefResponse.StatusCode -eq 200 -and ($prefResponse.Content -match 'id="tab-settings"' -or $prefResponse.Content -match 'id="pref-hash-input"')) {
         Write-Host "  [OK] /preferences returned 200 with Settings integration" -ForegroundColor Green
     } else {
@@ -235,6 +240,9 @@ try {
     $cliPy = Join-Path $repoRoot "tools\searxng_cli.py"
     if (Test-Path -LiteralPath $pythonExe) {
         $cliHealthRaw = & $pythonExe $cliPy --base-url $base health --json | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            throw "[FAIL] CLI health command exited with code $LASTEXITCODE"
+        }
         $cliHealth = $cliHealthRaw | ConvertFrom-Json
         if (-not $cliHealth.healthy) {
             throw "[FAIL] CLI health check failed: $($cliHealth.status)"
@@ -245,6 +253,9 @@ try {
         # Test 34: CLI search
         Write-Host "Test 34: SearXNG CLI search..." -ForegroundColor Cyan
         $cliSearchRaw = & $pythonExe $cliPy --base-url $base search "SearXNG" -n 2 --json | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            throw "[FAIL] CLI search command exited with code $LASTEXITCODE"
+        }
         $cliSearch = $cliSearchRaw | ConvertFrom-Json
         if ($cliSearch.error) {
             throw "[FAIL] CLI search returned error: $($cliSearch.error)"
@@ -253,6 +264,9 @@ try {
         Write-Host "  [OK] CLI search returned $(@($cliSearch.results).Count) result(s)" -ForegroundColor Green
 
         $cliSearchNoHlRaw = & $pythonExe $cliPy --base-url $base search "SearXNG" --depth advanced --no-highlights -n 2 --json | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            throw "[FAIL] CLI deep search command exited with code $LASTEXITCODE"
+        }
         $cliSearchNoHl = $cliSearchNoHlRaw | ConvertFrom-Json
         if ($cliSearchNoHl.error) {
             throw "[FAIL] CLI search with --no-highlights returned error: $($cliSearchNoHl.error)"
@@ -263,6 +277,9 @@ try {
         # Test 35: CLI scrape
         Write-Host "Test 35: SearXNG CLI scrape..." -ForegroundColor Cyan
         $cliScrapeRaw = & $pythonExe $cliPy --base-url $base scrape "https://example.com" -m 200 --json | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            throw "[FAIL] CLI scrape command exited with code $LASTEXITCODE"
+        }
         $cliScrape = $cliScrapeRaw | ConvertFrom-Json
         if ($cliScrape.error) {
             throw "[FAIL] CLI scrape returned error: $($cliScrape.error)"
@@ -277,7 +294,7 @@ try {
 
     # Test 36: AI-First WebUI (/ai) and progressive enhancement assets
     Write-Host "Test 36: AI-First WebUI (/ai) & embed assets..." -ForegroundColor Cyan
-    $aiResponse = Invoke-WebRequest -Uri "$base/ai" -UseBasicParsing -ErrorAction Stop
+    $aiResponse = Invoke-WebRequest -Uri "$base/ai" -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
     if ($aiResponse.StatusCode -ne 200 -or $aiResponse.Content -notmatch 'id="q"[^>]*aria-label="[^"]+"') {
         throw "[FAIL] /ai WebUI returned unexpected response"
     }
@@ -288,7 +305,7 @@ try {
 
     # Test 37: /api/ai_info endpoint
     Write-Host "Test 37: /api/ai_info endpoint..." -ForegroundColor Cyan
-    $aiInfo = Invoke-RestMethod -Method Get -Uri "$base/api/ai_info" -ErrorAction Stop
+    $aiInfo = Invoke-RestMethod -Method Get -Uri "$base/api/ai_info" -TimeoutSec 30 -ErrorAction Stop
     Assert-JsonProperty -Value $aiInfo -PropertyName "endpoints" -Label "/api/ai_info"
     Assert-JsonProperty -Value $aiInfo -PropertyName "snippets" -Label "/api/ai_info"
     Write-Host "  [OK] /api/ai_info returned endpoint metadata and MCP/CLI snippets" -ForegroundColor Green
@@ -297,7 +314,7 @@ try {
     # Test 38: /deep_search endpoint (JSON + validation)
     Write-Host "Test 38: /deep_search endpoint..." -ForegroundColor Cyan
     Assert-HttpStatusCode -Uri "$base/deep_search?q=" -ExpectedStatusCode 400 -Label "/deep_search rejects empty query"
-    $deepResp = Invoke-RestMethod -Method Get -Uri "$base/deep_search?q=SearXNG&count=2&max_tokens=1500" -ErrorAction Stop
+    $deepResp = Invoke-RestMethod -Method Get -Uri "$base/deep_search?q=SearXNG&count=2&max_tokens=1500" -TimeoutSec 30 -ErrorAction Stop
     Assert-JsonProperty -Value $deepResp -PropertyName "markdown" -Label "/deep_search"
     Assert-JsonProperty -Value $deepResp -PropertyName "rag_prompt" -Label "/deep_search"
     Write-Host "  [OK] /deep_search returned $(@($deepResp.results).Count) result(s) (~$($deepResp.estimated_tokens) tokens)" -ForegroundColor Green
@@ -306,7 +323,7 @@ try {
     # Test 39: /api/scrape_analyze endpoint
     Write-Host "Test 39: /api/scrape_analyze endpoint..." -ForegroundColor Cyan
     Assert-Blocked -Uri "$base/api/scrape_analyze?url=http://127.0.0.1/" -Label "/api/scrape_analyze SSRF block"
-    $scrapeAnalyze = Invoke-RestMethod -Method Get -Uri "$base/api/scrape_analyze?url=https://example.com&q=example" -ErrorAction Stop
+    $scrapeAnalyze = Invoke-RestMethod -Method Get -Uri "$base/api/scrape_analyze?url=https://example.com&q=example" -TimeoutSec 30 -ErrorAction Stop
     Assert-JsonProperty -Value $scrapeAnalyze -PropertyName "content" -Label "/api/scrape_analyze"
     Write-Host "  [OK] /api/scrape_analyze extracted $($scrapeAnalyze.char_count) chars (~$($scrapeAnalyze.estimated_tokens) tokens)" -ForegroundColor Green
     Write-Host ""
@@ -314,7 +331,7 @@ try {
     # Test 40: /api/retrieval endpoint (GenAI Structured Schema)
     Write-Host "Test 40: /api/retrieval endpoint..." -ForegroundColor Cyan
     Assert-HttpStatusCode -Uri "$base/api/retrieval?q=" -ExpectedStatusCode 400 -Label "/api/retrieval rejects empty query"
-    $retResp = Invoke-RestMethod -Method Get -Uri "$base/api/retrieval?q=SearXNG&mode=fast&count=2" -ErrorAction Stop
+    $retResp = Invoke-RestMethod -Method Get -Uri "$base/api/retrieval?q=SearXNG&mode=fast&count=2" -TimeoutSec 30 -ErrorAction Stop
     Assert-JsonProperty -Value $retResp -PropertyName "schema_version" -Label "/api/retrieval"
     Assert-JsonProperty -Value $retResp -PropertyName "query" -Label "/api/retrieval"
     Assert-JsonProperty -Value $retResp -PropertyName "results" -Label "/api/retrieval"
@@ -323,7 +340,7 @@ try {
 
     # Test 41: /api/settings/engines endpoint
     Write-Host "Test 41: /api/settings/engines endpoint..." -ForegroundColor Cyan
-    $enginesSettings = Invoke-RestMethod -Method Get -Uri "$base/api/settings/engines" -ErrorAction Stop
+    $enginesSettings = Invoke-RestMethod -Method Get -Uri "$base/api/settings/engines" -TimeoutSec 30 -ErrorAction Stop
     Assert-JsonProperty -Value $enginesSettings -PropertyName "total_engines" -Label "/api/settings/engines"
     Assert-JsonProperty -Value $enginesSettings -PropertyName "active_engines" -Label "/api/settings/engines"
     if ($enginesSettings.total_engines -le 0) {

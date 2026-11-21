@@ -10,6 +10,10 @@ if errorlevel 1 (
   echo [ERROR] Failed to upgrade pip, setuptools, wheel.
   exit /b 1
 )
+IF NOT EXIST "%~dp0..\config\requirements.txt" (
+  echo [ERROR] Requirements file not found: %~dp0..\config\requirements.txt
+  exit /b 1
+)
 "%PY%" -m pip install --prefer-binary -r "%~dp0..\config\requirements.txt"
 if errorlevel 1 (
   echo [ERROR] Failed to install main requirements.

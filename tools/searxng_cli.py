@@ -265,6 +265,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="advanced",
         help="Search depth: 'basic' (snippets), 'advanced' (highlights), 'code' (tech/code priority), or 'fast' (json_lite)",
     )
+    deep_parser.add_argument("-c", "--category", dest="category", default="", help="Category filter")
+    deep_parser.add_argument("-e", "--engines", dest="engines", default="", help="Comma-separated engine list")
+    deep_parser.add_argument(
+        "-t",
+        "--time-range",
+        dest="time_range",
+        choices=["day", "week", "month", "year"],
+        default="",
+        help="Time range filter",
+    )
     deep_parser.add_argument(
         "-p",
         "--page",
@@ -373,7 +383,8 @@ def cmd_search(args: argparse.Namespace) -> int:
         or (mode == "auto" and _is_url_arg(args.query))
     )
 
-    if mode == "balanced" or getattr(args, "as_ai", False):
+    is_explicit_scrape = mode == "scrape" or (mode == "auto" and _is_url_arg(args.query))
+    if not is_explicit_scrape and (mode == "balanced" or getattr(args, "as_ai", False)):
         ret_mode = mode if mode in ("fast", "balanced", "deep") else "balanced"
         res = searxng_client.retrieval_search(
             query=args.query,
@@ -480,6 +491,9 @@ def cmd_deep(args: argparse.Namespace) -> int:
         include_highlights=args.include_highlights,
         include_domains=inc_domains or None,
         exclude_domains=exc_domains or None,
+        categories=getattr(args, "category", ""),
+        engines=getattr(args, "engines", ""),
+        time_range=getattr(args, "time_range", ""),
         max_tokens=args.max_tokens,
         pageno=getattr(args, "page", 1),
         base_url=args.base_url,

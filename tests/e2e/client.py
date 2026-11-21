@@ -41,6 +41,14 @@ _SERVER_LOCK = threading.Lock()
 _EPHEMERAL_SERVER: Any = None
 _EPHEMERAL_SERVER_THREAD: threading.Thread | None = None
 _RESOLVED_BASE_URL: str | None = None
+_SAVED_ENV_KEYS = (
+    "SEARXNG_SECRET",
+    "SEARXNG_SETTINGS_PATH",
+    "SEARXNG_LIMITER",
+    "SEARXNG_RATE_LIMIT",
+    "SEARXNG_BASE_URL",
+)
+_PREV_ENV: dict[str, str | None] = {}
 
 
 class E2EResponse:
@@ -95,7 +103,11 @@ def start_test_server() -> str:
             _RESOLVED_BASE_URL = configured_url
             return _RESOLVED_BASE_URL
 
-        # 2. Setup environment variables for local SearXNG
+        # 2. Save original environment and set up test environment for local SearXNG
+        _PREV_ENV.clear()
+        for env_key in _SAVED_ENV_KEYS:
+            _PREV_ENV[env_key] = os.environ.get(env_key)
+
         if not os.environ.get("SEARXNG_SECRET"):
             os.environ["SEARXNG_SECRET"] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         if not os.environ.get("SEARXNG_SETTINGS_PATH") and os.path.exists(SETTINGS_PATH):
@@ -122,16 +134,28 @@ def start_test_server() -> str:
 
 
 def stop_test_server() -> None:
-    """Shut down the ephemeral background test server if started."""
+    """Shut down the ephemeral background test server and restore env if started."""
     global _EPHEMERAL_SERVER, _EPHEMERAL_SERVER_THREAD, _RESOLVED_BASE_URL
 
     with _SERVER_LOCK:
         if _EPHEMERAL_SERVER:
             with contextlib.suppress(Exception):
                 _EPHEMERAL_SERVER.shutdown()
+            with contextlib.suppress(Exception):
+                _EPHEMERAL_SERVER.server_close()
+            if _EPHEMERAL_SERVER_THREAD is not None:
+                with contextlib.suppress(Exception):
+                    _EPHEMERAL_SERVER_THREAD.join(timeout=5.0)
             _EPHEMERAL_SERVER = None
             _EPHEMERAL_SERVER_THREAD = None
             _RESOLVED_BASE_URL = None
+        if _PREV_ENV:
+            for env_key, prev_val in _PREV_ENV.items():
+                if prev_val is None:
+                    os.environ.pop(env_key, None)
+                else:
+                    os.environ[env_key] = prev_val
+            _PREV_ENV.clear()
 
 
 class E2EClient:
@@ -151,7 +175,11 @@ class E2EClient:
         timeout: float = 20.0,
     ) -> E2EResponse:
         """Execute HTTP GET request."""
-        query_str = f"?{urllib.parse.urlencode(params)}" if params else ""
+        if params:
+            sep = "&" if "?" in path else "?"
+            query_str = f"{sep}{urllib.parse.urlencode(params)}"
+        else:
+            query_str = ""
         full_url = f"{self.base_url}{path}{query_str}"
         req_headers = {
             "User-Agent": "SearXNG-E2E-Test/1.0",
@@ -169,10 +197,11 @@ class E2EClient:
                 resp_headers = dict(resp.headers)
                 return E2EResponse(resp.status, resp_headers, text, data)
         except urllib.error.HTTPError as exc:
-            data = exc.read()
-            text = data.decode("utf-8", errors="replace")
-            resp_headers = dict(exc.headers)
-            return E2EResponse(exc.code, resp_headers, text, data)
+            with contextlib.closing(exc):
+                data = exc.read()
+                text = data.decode("utf-8", errors="replace")
+                resp_headers = dict(exc.headers)
+                return E2EResponse(exc.code, resp_headers, text, data)
 
     def post(
         self,
@@ -208,10 +237,11 @@ class E2EClient:
                 resp_headers = dict(resp.headers)
                 return E2EResponse(resp.status, resp_headers, text, resp_data)
         except urllib.error.HTTPError as exc:
-            resp_data = exc.read()
-            text = resp_data.decode("utf-8", errors="replace")
-            resp_headers = dict(exc.headers)
-            return E2EResponse(exc.code, resp_headers, text, resp_data)
+            with contextlib.closing(exc):
+                resp_data = exc.read()
+                text = resp_data.decode("utf-8", errors="replace")
+                resp_headers = dict(exc.headers)
+                return E2EResponse(exc.code, resp_headers, text, resp_data)
 
 
 class E2ECLIRunner:

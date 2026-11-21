@@ -1045,5 +1045,70 @@ class TestRegressionHardening(unittest.TestCase):
         self.assertIn("internal boom", str(res.get("error", "")))
 
 
+class TestAgenticSearchRegressionFixes(unittest.TestCase):
+    """Regression coverage for Unit 3 agentic_search fixes."""
+
+    def test_deep_mode_overrides_fast_depth_and_code_depth_sets_code_intent(self) -> None:
+        res_deep = agentic_search.execute_unified_search(
+            query="python asyncio",
+            search_func=lambda **kwargs: {
+                "results": [
+                    {
+                        "url": "https://docs.python.org/3/library/asyncio.html",
+                        "title": "asyncio",
+                        "content": "Asynchronous I/O in Python.",
+                        "engine": "google",
+                    }
+                ]
+            },
+            scrape_func=lambda url, **kwargs: {"url": url, "content": "Extracted deep text for asyncio.", "error": ""},
+            mode="deep",
+            search_depth="fast",
+            max_results=1,
+        )
+        self.assertEqual(res_deep["search_depth"], "advanced")
+        self.assertEqual(res_deep["scraped_count"], 1)
+
+        res_code = agentic_search.execute_unified_search(
+            query="example widget usage",
+            search_func=lambda **kwargs: {"results": []},
+            scrape_func=lambda url, **kwargs: {"url": url, "content": ""},
+            mode="auto",
+            search_depth="code",
+        )
+        self.assertEqual(res_code["intent"], "code")
+
+    def test_balanced_mode_propagates_search_error_and_empty_scrape_label(self) -> None:
+        res_err = agentic_search.execute_unified_search(
+            query="python",
+            search_func=lambda **kwargs: {"results": [], "error": "backend unreachable"},
+            scrape_func=lambda url, **kwargs: {"content": ""},
+            mode="balanced",
+        )
+        self.assertIn("backend unreachable", res_err.get("error", ""))
+
+        res_scrape = agentic_search.execute_unified_search(
+            query="https://93.184.216.34/empty",
+            search_func=lambda **kwargs: {"results": []},
+            scrape_func=lambda url, **kwargs: {"url": url, "content": ""},
+            mode="scrape",
+        )
+        self.assertIn("抽出可能な本文が見つかりませんでした", res_scrape.get("markdown", ""))
+
+    def test_domain_scorer_empty_spam_patterns_and_cjk_sentence_split(self) -> None:
+        scorer = agentic_search.DomainScorer(spam_patterns=[])
+        self.assertEqual(scorer.spam_patterns, [])
+        extractor = agentic_search.BM25PassageExtractor()
+        self.assertEqual(
+            extractor.extract_highlights("短い文。非同期プログラミングの詳細解説です。結論。", "非同期", top_k=0), []
+        )
+        cjk_text = "関係ない前置きです。ここで十分な長さの前提説明を書いてから本題に入ります。Pythonの非同期I/Oとコルーチン実装に関する詳細な重要解説です。後書きとしてまとめを記載します。"
+        passages = extractor.split_passages(cjk_text, min_chars=10, max_chars=45)
+        self.assertGreaterEqual(len(passages), 2)
+        hl = extractor.extract_highlights(cjk_text, "非同期", top_k=1)
+        self.assertEqual(len(hl), 1)
+        self.assertIn("非同期", hl[0])
+
+
 if __name__ == "__main__":
     unittest.main()

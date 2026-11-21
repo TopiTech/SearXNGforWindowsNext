@@ -686,8 +686,10 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "_RESERVED_TLDS\n"
             "pinned_dns\n"
             "_scrape_client\n"
+            "_scrape_clients\n"
             "_scrape_client_lock\n"
             "_scrape_client_verify_ssl\n"
+            "active_client.stream\n"
             "_thread_local_dns\n"
             "def _parse_scrape_url\n"
             "def _read_scrape_response\n"
@@ -701,6 +703,8 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "v19-bulletproof-scrape-fix\n"
             "v20-redosos-scrape-fix\n"
             "v22-credentials-backslash-scrape-fix\n"
+            "v23-hardened-scrape-fix\n"
+            "# --- End GenAI Scrape ---\n"
             "host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B'))\n"
             ".localdomain\n"
             ".arpa\n"
@@ -840,7 +844,7 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
 
         # The request must use the normalized safe_url (not the raw URL).
         self.assertIn("safe_ips, original_host, port, safe_url = _get_safe_ip_url(current_url)", res)
-        self.assertIn("with _scrape_client.stream('GET', safe_url, headers=headers) as response:", res)
+        self.assertIn("with active_client.stream('GET', safe_url, headers=headers) as response:", res)
         self.assertIn("current_url = urllib.parse.urljoin(safe_url, location.strip())", res)
         self.assertNotIn("stream('GET', current_url, headers=headers)", res)
 
@@ -4289,6 +4293,88 @@ class TestPatchHardeningM2(unittest.TestCase):
 
         reapplied_modern = apply_patches.patch_autocomplete_timeout(patched_modern, "searx/autocomplete.py")
         self.assertEqual(reapplied_modern, "ALREADY_APPLIED")
+
+
+class TestUnit4RegressionFixes(unittest.TestCase):
+    """Regression coverage for Unit 4 patcher and engine helper fixes."""
+
+    def test_patch_valkeydb_arbitrary_indent_and_settings_defaults_no_bracket_mismatch(self) -> None:
+        vk_sample = (
+            "import os\n"
+            "import pwd\n"
+            "logger = logging.getLogger(__name__)\n\n"
+            "def connect():\n"
+            "    if True:\n"
+            "        if True:\n"
+            "            _pw = pwd.getpwuid(os.getuid())\n"
+            "            logger.exception('can\\'t connect valkey DB ...')\n"
+        )
+        patched_vk = apply_patches.patch_valkeydb(vk_sample, "valkeydb.py")
+        self.assertIn("            _user_name, _user_uid = _windows_safe_current_user()", patched_vk)
+        self.assertEqual(patched_vk.count("_user_name, _user_uid = _windows_safe_current_user()"), 1)
+
+        sd_sample = "OUTPUT_FORMATS: tuple[str, ...] = (\n    'html',\n    'json',\n)\n"
+        patched_sd = apply_patches.patch_settings_defaults(sd_sample, "settings_defaults.py")
+        self.assertIn("'json_lite'", patched_sd)
+        import ast
+
+        ast.parse(patched_sd)
+
+    def test_patch_online_captcha_none_safe_and_attach_response_string_parens(self) -> None:
+        raw_online = (
+            "from searx.metrics.error_recorder import count_error\n"
+            "from .abstract import EngineProcessor, RequestParams\n"
+            "        except (\n"
+            "            SearxEngineCaptchaException,\n"
+            "            SearxEngineTooManyRequestsException,\n"
+            "            SearxEngineAccessDeniedException,\n"
+            "        ) as e:\n"
+            "            self.handle_exception(result_container, e, suspend=True)\n"
+            "            self.logger.debug(e.message)\n"
+        )
+        patched = apply_patches.patch_online_captcha(raw_online, "online.py")
+        self.assertIn("retry_after if e.suspended_time is None else min(e.suspended_time, retry_after)", patched)
+        self.assertEqual(apply_patches.patch_online_captcha("unrelated content", "online.py"), "unrelated content")
+
+        raise_src = 'def f(resp):\n    raise SearxEngineCaptchaException(message="oops ) paren")  # ) comment\n'
+        rewritten, changed = apply_patches._attach_response_to_raises(raise_src)
+        self.assertTrue(changed)
+        self.assertIn('_exc = SearxEngineCaptchaException(message="oops ) paren")', rewritten)
+        self.assertIn("_exc.response = resp", rewritten)
+
+    def test_disable_missing_engines_nested_list_and_non_dict_resilience(self) -> None:
+        sample = "engines:\n  - name: google\n    categories:\n      - web\n      - it\n    inactive: true\n"
+        engines = disable_missing_engines.parse_engines_fallback(sample)
+        self.assertEqual(len(engines), 1)
+        self.assertEqual(engines[0]["name"], "google")
+        self.assertTrue(engines[0]["inactive"])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = os.path.join(tmpdir, "settings.yml")
+            eng_dir = os.path.join(tmpdir, "engines")
+            os.makedirs(eng_dir)
+            with open(cfg, "w", encoding="utf-8") as f:
+                f.write("engines:\n  - null\n  - name: valid\n    inactive: true\n")
+            self.assertFalse(disable_missing_engines.process_file(cfg, eng_dir))
+
+    def test_patch_transaction_collision_free_backup_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bak_dir = os.path.join(tmpdir, "backups")
+            f1 = os.path.join(tmpdir, "a", "b_c.py")
+            f2 = os.path.join(tmpdir, "a_b", "c.py")
+            tx = apply_patches.PatchTransaction(backup_dir=bak_dir)
+            tx.record_original(f1, "one")
+            tx.record_original(f2, "two")
+            with mock.patch.object(apply_patches, "REPO_ROOT", tmpdir):
+                tx.persist_backups()
+            with open(os.path.join(bak_dir, "manifest.json"), encoding="utf-8") as mf:
+                manifest = json.load(mf)
+            b1 = manifest[os.path.abspath(f1)]
+            b2 = manifest[os.path.abspath(f2)]
+            self.assertNotEqual(b1, b2)
+            with open(b1, encoding="utf-8") as fh1, open(b2, encoding="utf-8") as fh2:
+                self.assertEqual(fh1.read(), "one")
+                self.assertEqual(fh2.read(), "two")
 
 
 if __name__ == "__main__":

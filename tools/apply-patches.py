@@ -1,6 +1,7 @@
 import argparse
 import ast
 import errno
+import hashlib
 import json
 import logging
 import os
@@ -118,23 +119,31 @@ class PatchTransaction:
                 except (OSError, json.JSONDecodeError):
                     pass
             for path, content in self.originals.items():
-                safe_rel = _safe_relpath(path, REPO_ROOT).replace(":", "_").replace("/", "_")
-                backup_file = os.path.join(self.backup_dir, f"{safe_rel}.bak")
-                if path not in manifest or not os.path.exists(backup_file):
-                    with open(backup_file, "w", encoding="utf-8") as f:
-                        f.write(content)
+                safe_rel = _safe_relpath(path, REPO_ROOT).replace(":", "_").replace("/", "_").replace("\\", "_")
+                path_hash = hashlib.sha256(os.path.normcase(os.path.realpath(path)).encode("utf-8")).hexdigest()[:8]
+                norm_bak_dir = os.path.normcase(os.path.realpath(self.backup_dir))
+                existing_bak = manifest.get(path)
+                if (
+                    isinstance(existing_bak, str)
+                    and os.path.normcase(os.path.realpath(existing_bak)).startswith(norm_bak_dir + os.sep)
+                    and os.path.exists(existing_bak)
+                ):
+                    backup_file = existing_bak
+                else:
+                    backup_file = os.path.join(self.backup_dir, f"{safe_rel}_{path_hash}.bak")
+                    if not os.path.exists(backup_file):
+                        _atomic_write(backup_file, content, encoding="utf-8", newline="\n")
                 manifest[path] = backup_file
-            with open(manifest_file, "w", encoding="utf-8") as f:
-                json.dump(manifest, f, indent=2)
+            _atomic_write(manifest_file, json.dumps(manifest, indent=2), encoding="utf-8", newline="\n")
         except OSError as exc:
             logger.warning(f"Could not persist rollback backups: {exc}")
 
     def rollback(self) -> list[str]:
         """Roll back all modified files to their original state."""
         restored = []
-        norm_repo = os.path.abspath(REPO_ROOT)
-        norm_sp = os.path.abspath(SITE_PACKAGES)
-        norm_bak_dir = os.path.abspath(self.backup_dir)
+        norm_repo = os.path.realpath(REPO_ROOT)
+        norm_sp = os.path.realpath(SITE_PACKAGES)
+        norm_bak_dir = os.path.realpath(self.backup_dir)
 
         c_repo = os.path.normcase(norm_repo)
         c_sp = os.path.normcase(norm_sp)
@@ -156,9 +165,13 @@ class PatchTransaction:
             try:
                 with open(manifest_file, "r", encoding="utf-8") as f:
                     manifest = json.load(f)
+                if not isinstance(manifest, dict):
+                    return restored
                 for orig_path, bak_path in manifest.items():
-                    norm_orig = os.path.abspath(orig_path)
-                    norm_bak = os.path.abspath(bak_path)
+                    if not isinstance(orig_path, str) or not isinstance(bak_path, str):
+                        continue
+                    norm_orig = os.path.realpath(orig_path)
+                    norm_bak = os.path.realpath(bak_path)
                     c_orig = os.path.normcase(norm_orig)
                     c_bak = os.path.normcase(norm_bak)
 
@@ -589,7 +602,29 @@ def patch_valkeydb(content, path):
         flags=re.MULTILINE,
     )
 
-    # 2. Inject Windows fallback function after logger (PEP 8: 2 blank lines)
+    # 2. Replace call-site BEFORE injecting helper so arbitrary indentation is safe
+    content = re.sub(
+        r"^([ \t]+)_pw = pwd\.getpwuid\(os\.getuid\(\)\)(?![ \t]*(?:\r?\n[ \t]*return _pw\.pw_name))",
+        r"\1_user_name, _user_uid = _windows_safe_current_user()",
+        content,
+        flags=re.MULTILINE,
+    )
+    content = re.sub(
+        r"^([ \t]+)\w+\s*=\s*pwd\.getpwuid\([^)]+\)(?![ \t]*(?:\r?\n[ \t]*return ))",
+        r"\1_user_name, _user_uid = _windows_safe_current_user()",
+        content,
+        flags=re.MULTILINE,
+    )
+
+    # 3. Update logger.exception call with new variables
+    content = re.sub(
+        r'^([ \t]+)logger\.exception\(".*?can\'t connect valkey DB \.\.\..*?\)',
+        r'\1logger.exception("[%s (%s)] can\'t connect valkey DB ...", _user_name, _user_uid)',
+        content,
+        flags=re.MULTILINE,
+    )
+
+    # 4. Inject Windows fallback function after logger (PEP 8: 2 blank lines)
     helper = '''
 
 
@@ -632,27 +667,6 @@ def _windows_safe_current_user():
             else:
                 content = helper + "\n" + content
 
-    # 3. Replace call-site (indent-aware, exclude nested blocks)
-    content = re.sub(
-        r"^(\s{1,8})_pw = pwd\.getpwuid\(os\.getuid\(\)\)",
-        r"\1_user_name, _user_uid = _windows_safe_current_user()",
-        content,
-        flags=re.MULTILINE,
-    )
-    content = re.sub(
-        r"^(\s{1,8})\w+\s*=\s*pwd\.getpwuid\([^)]+\)",
-        r"\1_user_name, _user_uid = _windows_safe_current_user()",
-        content,
-        flags=re.MULTILINE,
-    )
-
-    # 4. Update logger.exception call with new variables
-    content = re.sub(
-        r'^(\s{1,8})logger\.exception\(".*?can\'t connect valkey DB \.\.\..*?\)',
-        r'\1logger.exception("[%s (%s)] can\'t connect valkey DB ...", _user_name, _user_uid)',
-        content,
-        flags=re.MULTILINE,
-    )
     return content
 
 
@@ -661,14 +675,18 @@ def patch_settings_defaults(content, path):
     if "'json_lite'" in content or '"json_lite"' in content:
         return "ALREADY_APPLIED"
 
-    # Match list or tuple, with optional type annotations
-    match = re.search(r"(?ms)(OUTPUT_FORMATS(?:\s*:\s*[^=]+)?\s*=\s*(\[|\())(.*?)(\]|\))", content)
+    # Match list [...] or tuple (...) separately with optional type annotations
+    match = re.search(
+        r"(?ms)(?P<prefix>OUTPUT_FORMATS(?:\s*:\s*[^=]+)?\s*=\s*)(?:\[(?P<list_body>.*?)\]|\((?P<tuple_body>.*?)\))",
+        content,
+    )
     if not match:
         return content
 
-    opening = match.group(1)
-    body = match.group(3)
-    closing = match.group(4)
+    is_list = match.group("list_body") is not None
+    opening = match.group("prefix") + ("[" if is_list else "(")
+    body = match.group("list_body") if is_list else match.group("tuple_body")
+    closing = "]" if is_list else ")"
 
     if re.search(r"(?m)^\s*['\"]json_lite['\"]\s*,?\s*$", body):
         return "ALREADY_APPLIED"
@@ -683,8 +701,10 @@ def patch_settings_defaults(content, path):
         body = body.rstrip()
         if body:
             body += ", 'json_lite'"
-        else:
+        elif is_list:
             body = "'json_lite'"
+        else:
+            body = "'json_lite',"
 
     return content[: match.start()] + opening + body + closing + content[match.end() :]
 
@@ -1208,8 +1228,10 @@ def patch_webapp_scrape_route(content, path):
         "_RESERVED_TLDS",
         "pinned_dns",
         "_scrape_client",
+        "_scrape_clients",
         "_scrape_client_lock",
         "_scrape_client_verify_ssl",
+        "active_client.stream",
         "_thread_local_dns",
         "def _parse_scrape_url",
         "def _read_scrape_response",
@@ -1223,6 +1245,8 @@ def patch_webapp_scrape_route(content, path):
         "v19-bulletproof-scrape-fix",
         "v20-redosos-scrape-fix",
         "v22-credentials-backslash-scrape-fix",
+        "v23-hardened-scrape-fix",
+        "# --- End GenAI Scrape ---",
         "host_clean.startswith(('0x', '0X', '0o', '0O', '0b', '0B'))",
         ".localdomain",
         ".arpa",
@@ -1252,8 +1276,8 @@ def patch_webapp_scrape_route(content, path):
     ):
         return "ALREADY_APPLIED"
 
-    # 1. Add imports at module level (ensure re, html, httpx, idna, time, and urllib are present)
-    for mod in ("re", "html", "httpx", "idna", "time", "urllib"):
+    # 1. Add imports at module level (ensure re, html, httpx, idna, math, time, and urllib are present)
+    for mod in ("re", "html", "httpx", "idna", "math", "time", "urllib"):
         if f"import {mod}" not in content:
             content, count = re.subn(r"(import warnings\n)", f"import {mod}\n" + r"\1", content, count=1)
             if count == 0:
@@ -1291,6 +1315,16 @@ def patch_webapp_scrape_route(content, path):
                     raise RuntimeError(f"Patch failed for {path}: Could not find import anchor for {mod}.")
 
     # 2. Clean ALL previous helper blocks and scrape routes completely (idempotency & duplicate removal)
+    while "# --- GenAI Scrape Helpers ---" in content and "# --- End GenAI Scrape ---" in content:
+        content, replaced = re.subn(
+            r"(?s)\n?# --- GenAI Scrape Helpers ---.*?\n# --- End GenAI Scrape ---\n?",
+            "\n",
+            content,
+            count=1,
+        )
+        if replaced == 0:
+            break
+
     while "# --- GenAI Scrape Helpers ---" in content:
         content = re.sub(
             r"(?s)\n# --- GenAI Scrape Helpers ---.*?(?=\n@app\.route|\n# --- GenAI Scrape Helpers ---|\Z)",
@@ -1301,7 +1335,7 @@ def patch_webapp_scrape_route(content, path):
 
     while "@app.route('/scrape'" in content or '@app.route("/scrape"' in content:
         content = re.sub(
-            r'(?s)\n@app\.route\(\s*[\'"]/scrape[\'"].*?(?=\n# --- GenAI Next WebUI Integration ---|\n@app\.route|\Z)',
+            r'(?s)\n@app\.route\(\s*[\'"]/scrape[\'"].*?(?=\n# --- GenAI Next WebUI Integration ---|\n# --- End GenAI Scrape ---|\n@app\.route|\Z)',
             "",
             content,
             count=1,
@@ -1312,6 +1346,7 @@ def patch_webapp_scrape_route(content, path):
     scrape_route_code = r'''
 
 # --- GenAI Scrape Helpers ---
+# v23-hardened-scrape-fix
 # v20-redosos-scrape-fix: the former chained regex tag substitutions
 # (case-insensitive script/style/noscript/iframe/template removal plus a
 # catch-all tag regex) had super-linear worst-case cost on adversarial HTML.
@@ -1389,7 +1424,7 @@ _SCRAPE_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 def _read_scrape_response(response, max_duration=15.0):
     try:
         env_dur = float(os.environ.get('SEARXNG_SCRAPE_MAX_DURATION', max_duration))
-        if env_dur > 0:
+        if math.isfinite(env_dur) and env_dur > 0:
             max_duration = env_dur
     except (ValueError, TypeError):
         pass
@@ -1420,6 +1455,7 @@ def _read_scrape_response(response, max_duration=15.0):
 
 
 _scrape_client = None
+_scrape_clients = {}
 _scrape_client_lock = threading.Lock()
 _scrape_client_verify_ssl = None
 _thread_local_dns = threading.local()
@@ -1442,10 +1478,7 @@ def _safe_getaddrinfo(h, p, *args, **kwargs):
                 h_str = h or ''
             # Normalize both sides the same way httpx does: Unicode dot
             # variants (U+3002/U+FF0E/U+FF61) become '.', trailing dots are
-            # stripped, then compare raw, ASCII-lowercase and IDNA forms.
-            # Without this, httpx may hand the transport a normalized host
-            # that differs textually from the pinned host and the pin would
-            # be silently skipped (DNS rebinding / SSRF regression).
+            # stripped, then compare raw, ASCII-lowercase, IP canonical and IDNA forms.
             def _norm_gai_host(value):
                 value = (value or '').strip().strip('[]').lower()
                 for dot in (chr(0x3002), chr(0xFF0E), chr(0xFF61)):
@@ -1458,11 +1491,17 @@ def _safe_getaddrinfo(h, p, *args, **kwargs):
                 host_matches = True
             else:
                 try:
-                    enc_h = idna.encode(h_clean, uts46=True).decode('ascii')
-                    enc_pin = idna.encode(pin_clean, uts46=True).decode('ascii')
-                    host_matches = (enc_h == enc_pin)
-                except Exception:
+                    if ipaddress.ip_address(h_clean) == ipaddress.ip_address(pin_clean):
+                        host_matches = True
+                except ValueError:
                     pass
+                if not host_matches:
+                    try:
+                        enc_h = idna.encode(h_clean, uts46=True).decode('ascii')
+                        enc_pin = idna.encode(pin_clean, uts46=True).decode('ascii')
+                        host_matches = (enc_h == enc_pin)
+                    except Exception:
+                        pass
 
         if host_matches:
             pin_port = pin.get('port')
@@ -1607,6 +1646,12 @@ def _is_ip_blocked(ip):
     teredo = getattr(ip, 'teredo', None)
     if teredo is not None and (_is_ip_blocked(teredo[0]) or _is_ip_blocked(teredo[1])):
         return True
+    if ip.version == 6:
+        ip_int = int(ip)
+        # NAT64 Well-Known Prefix 64:ff9b::/96 (embedded IPv4 in low 32 bits)
+        if (ip_int >> 32) == 0x0064FF9B0000000000000000:
+            if _is_ip_blocked(ipaddress.IPv4Address(ip_int & 0xFFFFFFFF)):
+                return True
     return False
 
 
@@ -1621,12 +1666,17 @@ def _is_blocked_scrape_host(host, resolve_dns=True):
         host_clean = host_clean.replace(dot, '.')
     host_clean = host_clean.rstrip('.')
     if '%' in host_clean:
-        host_clean = host_clean.split('%', 1)[0]
-    if host_clean and ':' not in host_clean and not host_clean.replace('.', '').isdigit():
+        if ':' in host_clean:
+            host_clean = host_clean.split('%', 1)[0]
+        else:
+            return True
+    ascii_digits = host_clean.replace('.', '')
+    if host_clean and ':' not in host_clean and not (ascii_digits.isdigit() and ascii_digits.isascii()):
         try:
             host_clean = idna.encode(host_clean, uts46=True).decode('ascii')
         except Exception:
-            pass
+            if not host_clean.isascii():
+                return True
     if not host_clean or _is_reserved_scrape_host(host_clean):
         return True
     try:
@@ -1736,26 +1786,27 @@ def scrape():
               'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36')
 
         with _scrape_client_lock:
-            if _scrape_client is None or _scrape_client_verify_ssl != verify_ssl:
-                # Reusable HTTP client with explicit limits and disabled keepalive
-                scrape_limits = httpx.Limits(max_keepalive_connections=0, max_connections=50)
-                if _scrape_client is not None:
-                    try:
-                        _scrape_client.close()
-                    except Exception:
-                        pass
-                # Do not inherit proxy or CA settings from the process environment.
-                # In particular, routing through HTTP(S)_PROXY would make the
-                # proxy resolve the user-controlled hostname and bypass the DNS
-                # validation and pinning performed below.
-                _scrape_client = httpx.Client(
-                    timeout=httpx.Timeout(10.0, connect=5.0, read=10.0, write=5.0),
-                    follow_redirects=False,
-                    verify=verify_ssl,
-                    limits=scrape_limits,
-                    trust_env=False,
-                )
-                _scrape_client_verify_ssl = verify_ssl
+            active_client = _scrape_clients.get(verify_ssl)
+            if active_client is None:
+                if _scrape_client is not None and _scrape_client_verify_ssl == verify_ssl:
+                    active_client = _scrape_client
+                else:
+                    # Reusable HTTP client with explicit limits and disabled keepalive
+                    scrape_limits = httpx.Limits(max_keepalive_connections=0, max_connections=50)
+                    # Do not inherit proxy or CA settings from the process environment.
+                    # In particular, routing through HTTP(S)_PROXY would make the
+                    # proxy resolve the user-controlled hostname and bypass the DNS
+                    # validation and pinning performed below.
+                    active_client = httpx.Client(
+                        timeout=httpx.Timeout(10.0, connect=5.0, read=10.0, write=5.0),
+                        follow_redirects=False,
+                        verify=verify_ssl,
+                        limits=scrape_limits,
+                        trust_env=False,
+                    )
+                _scrape_clients[verify_ssl] = active_client
+            _scrape_client = active_client
+            _scrape_client_verify_ssl = verify_ssl
 
         def _normalize_scrape_host(host_raw):
             """Normalize a host the same way httpx does before transport.
@@ -1773,12 +1824,17 @@ def scrape():
                 host_norm = host_norm.replace(dot, '.')
             host_norm = host_norm.rstrip('.')
             if '%' in host_norm:
-                host_norm = host_norm.split('%', 1)[0]
-            if host_norm and ':' not in host_norm and not host_norm.replace('.', '').isdigit():
+                if ':' in host_norm:
+                    host_norm = host_norm.split('%', 1)[0]
+                else:
+                    return ''
+            ascii_digits = host_norm.replace('.', '')
+            if host_norm and ':' not in host_norm and not (ascii_digits.isdigit() and ascii_digits.isascii()):
                 try:
                     host_norm = idna.encode(host_norm, uts46=True).decode('ascii')
                 except Exception:
-                    pass
+                    if not host_norm.isascii():
+                        return ''
             return host_norm
 
         def _get_safe_ip_url(url_to_resolve):
@@ -1888,7 +1944,7 @@ def scrape():
                 # transport always looks up the exact pinned host. TLS verify
                 # still uses the host name, while the socket connects to the
                 # validated safe IP.
-                with _scrape_client.stream('GET', safe_url, headers=headers) as response:
+                with active_client.stream('GET', safe_url, headers=headers) as response:
                     if response.status_code not in (301, 302, 303, 307, 308):
                         response.raise_for_status()
                         return _read_scrape_response(response)
@@ -1943,6 +1999,8 @@ def scrape():
         return jsonify({'error': str(e)[:100]}), 502
     except Exception as e:
         return jsonify({'error': f'Fetch failed: {str(e)[:100]}'}), 500
+
+# --- End GenAI Scrape ---
 
 '''
 
@@ -2174,6 +2232,7 @@ def patch_online_captcha(content, path):
         and "except SearxEngineTooManyRequestsException as e:" in content
         and ("parsedate_to_datetime" in content or "return max(5, min(v, 900))" not in content)
         and ("datetime.timezone.utc" in content or "return max(5, min(v, 900))" not in content)
+        and "e.suspended_time = min(e.suspended_time, retry_after)" not in content
         and "utcnow" not in content
     ):
         return "ALREADY_APPLIED"
@@ -2246,6 +2305,10 @@ def patch_online_captcha(content, path):
             )
         # Legacy hard-coded CAPTCHA cap from pre-patch-11 installs.
         content = content.replace("            e.suspended_time = min(e.suspended_time, 900)\n", "")
+        content = content.replace(
+            "e.suspended_time = min(e.suspended_time, retry_after)",
+            "e.suspended_time = retry_after if e.suspended_time is None else min(e.suspended_time, retry_after)",
+        )
 
     old_combined = (
         "        except (\n"
@@ -2260,13 +2323,13 @@ def patch_online_captcha(content, path):
         "        except SearxEngineCaptchaException as e:\n"
         "            retry_after = _parse_retry_after_header(getattr(e, 'response', None))\n"
         "            if retry_after is not None:\n"
-        "                e.suspended_time = min(e.suspended_time, retry_after)\n"
+        "                e.suspended_time = retry_after if e.suspended_time is None else min(e.suspended_time, retry_after)\n"
         "            self.handle_exception(result_container, e, suspend=True)\n"
         '            self.logger.warning("CAPTCHA %s suspended for %ss: %s", self.engine.name, e.suspended_time, e.message)\n'
         "        except SearxEngineTooManyRequestsException as e:\n"
         "            retry_after = _parse_retry_after_header(getattr(e, 'response', None))\n"
         "            if retry_after is not None:\n"
-        "                e.suspended_time = min(e.suspended_time, retry_after)\n"
+        "                e.suspended_time = retry_after if e.suspended_time is None else min(e.suspended_time, retry_after)\n"
         "            self.handle_exception(result_container, e, suspend=True)\n"
         "            self.logger.debug(e.message)\n"
         "        except SearxEngineAccessDeniedException as e:\n"
@@ -2285,7 +2348,7 @@ def patch_online_captcha(content, path):
         "        except SearxEngineTooManyRequestsException as e:\n"
         "            retry_after = _parse_retry_after_header(getattr(e, 'response', None))\n"
         "            if retry_after is not None:\n"
-        "                e.suspended_time = min(e.suspended_time, retry_after)\n"
+        "                e.suspended_time = retry_after if e.suspended_time is None else min(e.suspended_time, retry_after)\n"
         "            self.handle_exception(result_container, e, suspend=True)\n"
         "            self.logger.debug(e.message)\n"
         "        except SearxEngineAccessDeniedException as e:\n"
@@ -2308,7 +2371,9 @@ def patch_online_captcha(content, path):
             if pattern.search(content):
                 content = pattern.sub(new_split, content, count=1)
 
-    return "ALREADY_APPLIED" if content == original else content
+    if content == original:
+        return "ALREADY_APPLIED" if helper_present else content
+    return content
 
 
 # --- Patch 11b: network/raise_for_httperror.py (attach response to exceptions) ---
@@ -2334,14 +2399,35 @@ def _attach_response_to_raises(content: str) -> tuple[str, bool]:
     out = []
     pos = 0
     changed = False
+    n = len(content)
     for match in pattern.finditer(content):
-        # Find the matching close paren (args may contain nested parens).
+        # Find the matching close paren while ignoring parens inside string literals and comments.
         depth = 1
         i = match.end("open")
-        while i < len(content) and depth:
-            if content[i] == "(":
+        while i < n and depth:
+            ch = content[i]
+            if ch == "#":
+                while i < n and content[i] != "\n":
+                    i += 1
+                continue
+            if ch in ("'", '"'):
+                quote = content[i : i + 3] if content[i : i + 3] in ("'''", '"""') else ch
+                i += len(quote)
+                while i < n:
+                    if content[i] == "\\":
+                        i += 2
+                        continue
+                    if len(quote) == 1 and content[i] == "\n":
+                        i += 1
+                        break
+                    if content[i : i + len(quote)] == quote:
+                        i += len(quote)
+                        break
+                    i += 1
+                continue
+            if ch == "(":
                 depth += 1
-            elif content[i] == ")":
+            elif ch == ")":
                 depth -= 1
             i += 1
         if depth:
@@ -2538,7 +2624,7 @@ def patch_simple_index_ai_webui(content, path):
         "onclick=\"var q=document.getElementById('q');window.location.href='/ai'+(q&&q.value.trim()?'?q='+encodeURIComponent(q.value.trim()):'');\">"
         "⚡ AI Search &amp; Scrape Studio</button>\n"
         '        <a href="/ai?mode=agent" class="sxng-ai-btn">🤖 Agent &amp; MCP Hub</a>\n'
-        '        <script>(function(){if(!window.__AI_STUDIO_LOADED__&&window.location.pathname!=="/"){window.location.replace("/"+(window.location.search||""));}})();</script>\n'
+        '        <script>(function(){var p=window.location.pathname;if(!window.__AI_STUDIO_LOADED__&&/\\/index\\.html$/i.test(p)){window.location.replace(p.replace(/index\\.html$/i,"")+(window.location.search||""));}})();</script>\n'
         "    </div>"
     )
 
@@ -2697,7 +2783,9 @@ def patch_autocomplete_timeout(content: str, path: str) -> str:
     if "except (RequestException, SearxEngineResponseException, Exception):" not in content:
         repl2 = "except (RequestException, SearxEngineResponseException, Exception):"
         exc_pattern = r"except \((?:RequestException|HTTPError),\s*SearxEngineResponseException\):"
-        content = re.sub(exc_pattern, repl2, content, count=1)
+        content, c2 = re.subn(exc_pattern, repl2, content, count=1)
+        if c2 == 0:
+            raise RuntimeError(f"Patch failed for {path}: Could not locate search_autocomplete exception handler.")
 
     # 3. Update duckduckgo to safe traits lookup
     if "ddg_engine = engines.get('duckduckgo')" not in content:
@@ -3111,8 +3199,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.report:
-        norm_report = os.path.abspath(args.report)
-        norm_repo = os.path.abspath(REPO_ROOT)
+        norm_report = os.path.realpath(args.report)
+        norm_repo = os.path.realpath(REPO_ROOT)
         c_report = os.path.normcase(norm_report)
         c_repo = os.path.normcase(norm_repo)
         if not (c_report.startswith(c_repo + os.sep) or c_report == c_repo):
@@ -3167,8 +3255,12 @@ def main() -> int:
                     os.path.join(REPO_ROOT, "config", "settings.yml"),
                     os.path.join(SITE_PACKAGES, "searx", "settings.yml"),
                 ):
-                    if os.path.exists(cfg_file) and mod.process_file(cfg_file, engines_dir):
-                        logger.info(f"Marked missing engines inactive in {cfg_file}")
+                    if os.path.exists(cfg_file):
+                        with open(cfg_file, "r", encoding="utf-8-sig") as orig_f:
+                            pre_cfg = orig_f.read()
+                        if mod.process_file(cfg_file, engines_dir):
+                            transaction.record_original(cfg_file, pre_cfg)
+                            logger.info(f"Marked missing engines inactive in {cfg_file}")
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Could not check missing engines: {exc}")
 
@@ -3232,8 +3324,8 @@ def main() -> int:
     # Save diagnostic report file if requested or if any failures occurred
     report_path = args.report or (REPORT_FILE if all_failures else None)
     if report_path:
-        norm_report = os.path.abspath(report_path)
-        norm_repo = os.path.abspath(REPO_ROOT)
+        norm_report = os.path.realpath(report_path)
+        norm_repo = os.path.realpath(REPO_ROOT)
         c_report = os.path.normcase(norm_report)
         c_repo = os.path.normcase(norm_repo)
         if not (c_report.startswith(c_repo + os.sep) or c_report == c_repo):

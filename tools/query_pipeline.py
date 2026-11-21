@@ -235,7 +235,9 @@ class QueryProcessor:
         has_code_keywords = bool(words & cls.CODE_KEYWORDS)
         has_howto_keywords = any(w in low for w in cls.HOWTO_KEYWORDS)
         has_research_keywords = any(w in low for w in cls.RESEARCH_KEYWORDS)
-        has_stacktrace = "traceback" in low or "error:" in low or "exception" in low or "line " in low
+        has_stacktrace = (
+            "traceback" in low or "error:" in low or "exception" in low or bool(re.search(r"\bline\s+\d+\b", low))
+        )
 
         # Check navigation
         nav_matches = {
@@ -389,7 +391,8 @@ class QueryProcessor:
         Returns:
             List of expanded query strings (excluding the original).
         """
-        if mode == "fast":
+        norm_mode = (mode or "balanced").strip().lower()
+        if norm_mode == "fast":
             return []
 
         base = processed.clean_no_quotes or processed.clean_text
@@ -409,7 +412,7 @@ class QueryProcessor:
                         if item_b.endswith("の"):
                             item_b = item_b[:-1].strip()
                         if item_a and item_b:
-                            if mode == "balanced":
+                            if norm_mode == "balanced":
                                 expansions.append(f"{item_a} {item_b}")
                             else:
                                 expansions.append(item_a)
@@ -419,13 +422,13 @@ class QueryProcessor:
         elif processed.intent == "code":
             if "documentation" not in base.lower() and "docs" not in base.lower():
                 expansions.append(f"{base} documentation")
-            if mode == "deep" and "github" not in base.lower():
+            if norm_mode == "deep" and "github" not in base.lower():
                 expansions.append(f"{base} github")
 
         elif processed.intent == "fresh":
             if "cve" in base.lower() or "vulnerability" in base.lower():
                 expansions.append(f"{base} advisory")
-            elif processed.freshness and processed.freshness not in base:
+            elif processed.freshness and processed.freshness.isdigit() and processed.freshness not in base:
                 expansions.append(f"{base} {processed.freshness}")
 
         elif processed.intent == "howto":
@@ -437,11 +440,14 @@ class QueryProcessor:
                 else:
                     expansions.append(f"{base} tutorial")
 
-        elif processed.intent == "research" and mode == "deep" and "architecture" not in base.lower():
-            expansions.append(f"{base} architecture")
+        elif processed.intent == "research":
+            if "cve" in base.lower() or "vulnerability" in base.lower():
+                expansions.append(f"{base} advisory")
+            if norm_mode == "deep" and "architecture" not in base.lower():
+                expansions.append(f"{base} architecture")
 
         # Cap according to mode
-        max_exp = 1 if mode == "balanced" else 2
+        max_exp = 1 if norm_mode == "balanced" else 2
         return expansions[:max_exp]
 
 

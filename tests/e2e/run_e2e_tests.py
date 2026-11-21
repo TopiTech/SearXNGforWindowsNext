@@ -106,6 +106,8 @@ def run_e2e_tests(
         total_passed = 0
         total_failed = 0
         total_errors = 0
+        total_skipped = 0
+        total_unexpected = 0
         tier_results: list[dict[str, Any]] = []
 
         for tier_num, suite in tier_suites.items():
@@ -122,7 +124,12 @@ def run_e2e_tests(
             result = runner.run(suite)
             tier_elapsed = time.time() - tier_start
 
-            passed_count = result.testsRun - len(result.failures) - len(result.errors)
+            skipped_count = len(result.skipped)
+            unexpected_count = len(result.unexpectedSuccesses)
+            passed_count = max(
+                0,
+                result.testsRun - len(result.failures) - len(result.errors) - skipped_count - unexpected_count,
+            )
             failed_count = len(result.failures)
             error_count = len(result.errors)
 
@@ -130,6 +137,8 @@ def run_e2e_tests(
             total_passed += passed_count
             total_failed += failed_count
             total_errors += error_count
+            total_skipped += skipped_count
+            total_unexpected += unexpected_count
 
             tier_info = {
                 "tier": tier_num,
@@ -138,6 +147,8 @@ def run_e2e_tests(
                 "passed": passed_count,
                 "failed": failed_count,
                 "errors": error_count,
+                "skipped": skipped_count,
+                "unexpected_successes": unexpected_count,
                 "duration_seconds": round(tier_elapsed, 3),
                 "failures": [{"test": f[0].id(), "message": f[1].strip()[:200]} for f in result.failures],
                 "error_details": [{"test": e[0].id(), "message": e[1].strip()[:200]} for e in result.errors],
@@ -145,11 +156,16 @@ def run_e2e_tests(
             tier_results.append(tier_info)
 
             if not as_json:
-                status_label = "[PASSED]" if (failed_count == 0 and error_count == 0) else "[FAILED]"
-                print(f" {status_label} {tier_title}: {passed_count}/{result.testsRun} passed in {tier_elapsed:.2f}s")
+                tier_ok = result.testsRun > 0 and failed_count == 0 and error_count == 0 and unexpected_count == 0
+                status_label = "[PASSED]" if tier_ok else "[FAILED]"
+                print(
+                    f" {status_label} {tier_title}: {passed_count}/{result.testsRun} passed"
+                    + (f" ({skipped_count} skipped)" if skipped_count else "")
+                    + f" in {tier_elapsed:.2f}s"
+                )
 
         total_elapsed = time.time() - start_time
-        all_passed = total_failed == 0 and total_errors == 0
+        all_passed = total_tests > 0 and total_failed == 0 and total_errors == 0 and total_unexpected == 0
 
         if as_json:
             report = {
@@ -158,6 +174,8 @@ def run_e2e_tests(
                 "passed": total_passed,
                 "failed": total_failed,
                 "errors": total_errors,
+                "skipped": total_skipped,
+                "unexpected_successes": total_unexpected,
                 "duration_seconds": round(total_elapsed, 3),
                 "base_url": base_url,
                 "tiers": tier_results,
@@ -168,14 +186,18 @@ def run_e2e_tests(
             print(" E2E Test Suite Summary")
             print("=" * 80)
             for tr in tier_results:
-                mark = "OK" if (tr["failed"] == 0 and tr["errors"] == 0) else "FAIL"
+                tier_ok = (
+                    tr["tests_run"] > 0 and tr["failed"] == 0 and tr["errors"] == 0 and tr["unexpected_successes"] == 0
+                )
+                mark = "OK" if tier_ok else "FAIL"
                 print(
                     f" * [{mark}] {tr['name']:<40} : {tr['passed']}/{tr['tests_run']} passed ({tr['duration_seconds']}s)"
                 )
             print("-" * 80)
             overall_status = "ALL TESTS PASSED" if all_passed else "TESTS FAILED"
             print(
-                f" Status: {overall_status} | Total: {total_tests} | Passed: {total_passed} | Failed: {total_failed} | Errors: {total_errors}"
+                f" Status: {overall_status} | Total: {total_tests} | Passed: {total_passed} | "
+                f"Failed: {total_failed} | Errors: {total_errors} | Skipped: {total_skipped}"
             )
             print(f" Total Duration: {total_elapsed:.2f}s")
             print("=" * 80)
@@ -219,7 +241,18 @@ def main() -> None:
     args = parser.parse_args()
     selected_tiers = None
     if args.tiers:
-        selected_tiers = [int(t.strip()) for t in args.tiers.split(",") if t.strip().isdigit()]
+        selected_tiers = []
+        for raw_tok in args.tiers.split(","):
+            tok = raw_tok.strip()
+            if not tok:
+                continue
+            if not tok.isdigit() or int(tok) not in TIER_MODULES:
+                parser.error(f"Invalid tier {tok!r}; choose from {sorted(TIER_MODULES)}")
+            tier_num = int(tok)
+            if tier_num not in selected_tiers:
+                selected_tiers.append(tier_num)
+        if not selected_tiers:
+            parser.error("At least one valid tier must be specified with --tier")
 
     exit_code = run_e2e_tests(
         selected_tiers=selected_tiers,

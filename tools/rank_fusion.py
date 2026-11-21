@@ -148,23 +148,60 @@ class ReciprocalRankFusion:
             if not isinstance(raw_results, list):
                 continue
 
-            # First deduplicate within the query run to avoid duplicate spam from same engine
-            deduped_run_results = deduplicate_results(raw_results, query=q_text)
+            dict_results = [r for r in raw_results if isinstance(r, dict)]
 
-            for pos_idx, item in enumerate(deduped_run_results, start=1):
+            # Deduplicate per engine within the query run so spam from the same engine
+            # collapses without prematurely discarding distinct engines' ranks before RRF.
+            engine_groups: dict[str, list[dict[str, Any]]] = {}
+            for item in dict_results:
+                raw_eng = item.get("engine") or item.get("source")
+                if not raw_eng:
+                    raw_engines_val = item.get("engines")
+                    if isinstance(raw_engines_val, (list, tuple)) and len(raw_engines_val) == 1:
+                        raw_eng = raw_engines_val[0]
+                    elif isinstance(raw_engines_val, str):
+                        raw_eng = raw_engines_val
+                eng_key = str(raw_eng or "").strip()
+                engine_groups.setdefault(eng_key, []).append(item)
+
+            deduped_entries: list[tuple[int, dict[str, Any]]] = []
+            for group_items in engine_groups.values():
+                deduped_group = deduplicate_results(group_items, query=q_text)
+                for pos_idx, item in enumerate(deduped_group, start=1):
+                    deduped_entries.append((pos_idx, item))
+
+            for pos_idx, item in deduped_entries:
                 url = str(item.get("url") or "").strip()
                 if not url:
                     continue
 
                 raw_rank = item.get("rank")
                 try:
-                    rank_idx = max(1, int(raw_rank)) if raw_rank is not None else pos_idx
-                except (ValueError, TypeError):
+                    rank_idx = (
+                        max(1, int(raw_rank)) if raw_rank is not None and not isinstance(raw_rank, bool) else pos_idx
+                    )
+                except (ValueError, TypeError, OverflowError):
                     rank_idx = pos_idx
 
                 d_key = get_dedup_key(url)
-                eng = str(item.get("engine") or item.get("source") or "unknown").strip()
-                item_engines: list[str] = item.get("engines") or ([eng] if eng else [])
+                raw_engines = item.get("engines")
+                item_engines: list[str] = []
+                if isinstance(raw_engines, (list, tuple, set)):
+                    item_engines = [str(e).strip() for e in raw_engines if e is not None and str(e).strip()]
+                elif isinstance(raw_engines, str) and raw_engines.strip():
+                    item_engines = [raw_engines.strip()]
+                if not item_engines:
+                    eng = str(item.get("engine") or item.get("source") or "").strip()
+                    if eng:
+                        item_engines = [eng]
+
+                item_matched_queries: set[str] = {q_text} if q_text else set()
+                raw_mq = item.get("matched_queries")
+                if isinstance(raw_mq, (list, tuple, set)):
+                    for mq in raw_mq:
+                        mq_s = str(mq or "").strip()
+                        if mq_s:
+                            item_matched_queries.add(mq_s)
 
                 rrf_term = 1.0 / (self.config.rrf_k + rank_idx)
 
@@ -174,16 +211,15 @@ class ReciprocalRankFusion:
                         "rrf_score": rrf_term,
                         "engine_ranks": {e: rank_idx for e in item_engines},
                         "query_ranks": {q_text: rank_idx} if q_text else {},
-                        "matched_queries": {q_text} if q_text else set(),
+                        "matched_queries": set(item_matched_queries),
                         "engines": set(item_engines),
                     }
                 else:
                     state = doc_states[d_key]
                     state["rrf_score"] += rrf_term
-                    if q_text:
-                        state["matched_queries"].add(q_text)
-                        if q_text not in state["query_ranks"] or rank_idx < state["query_ranks"][q_text]:
-                            state["query_ranks"][q_text] = rank_idx
+                    state["matched_queries"].update(item_matched_queries)
+                    if q_text and (q_text not in state["query_ranks"] or rank_idx < state["query_ranks"][q_text]):
+                        state["query_ranks"][q_text] = rank_idx
 
                     for e in item_engines:
                         state["engines"].add(e)

@@ -91,22 +91,23 @@ def normalize_title(title: str) -> str:
     return norm or base
 
 
-def levenshtein_ratio(s1: str, s2: str) -> float:
+def levenshtein_ratio(s1: str, s2: str, max_chars: int = _FUZZY_INPUT_CAP) -> float:
     """Calculate normalized Levenshtein similarity ratio between 0.0 and 1.0.
 
     Uses rapidfuzz if available; otherwise uses an optimized pure-Python dynamic programming approach.
 
-    Inputs are truncated to ``_FUZZY_INPUT_CAP`` characters: the DP fallback is
+    Inputs are truncated to ``max_chars`` characters: the DP fallback is
     O(len1*len2), so untrusted multi-KB strings would take seconds per pair
     (CPU DoS via crafted SERP titles/snippets). Truncation only affects inputs
     that are far beyond any realistic title length and never flips a
     duplicate verdict for strings that differ within the capped prefix.
     """
+    cap = max(1, max_chars)
     if _HAS_RAPIDFUZZ and _rf_fuzz is not None:
-        return float(_rf_fuzz.ratio(s1[:_FUZZY_INPUT_CAP], s2[:_FUZZY_INPUT_CAP]) / 100.0)
+        return float(_rf_fuzz.ratio(s1[:cap], s2[:cap]) / 100.0)
 
-    s1 = s1[:_FUZZY_INPUT_CAP]
-    s2 = s2[:_FUZZY_INPUT_CAP]
+    s1 = s1[:cap]
+    s2 = s2[:cap]
     if s1 == s2:
         return 1.0
     len1, len2 = len(s1), len(s2)
@@ -132,12 +133,15 @@ def levenshtein_ratio(s1: str, s2: str) -> float:
     return 1.0 - (dist / max(len1, len2))
 
 
-def ngram_jaccard_similarity(s1: str, s2: str, n: int = 2) -> float:
+def ngram_jaccard_similarity(s1: str, s2: str, n: int = 2, max_chars: int = _FUZZY_INPUT_CAP) -> float:
     """Compute character N-gram Jaccard similarity (well-suited for Japanese/CJK text)."""
+    cap = max(1, max_chars)
+    s1 = s1[:cap]
+    s2 = s2[:cap]
     if s1 == s2:
         return 1.0
     if len(s1) < n or len(s2) < n:
-        return levenshtein_ratio(s1, s2)
+        return levenshtein_ratio(s1, s2, max_chars=cap)
 
     set1 = {s1[i : i + n] for i in range(len(s1) - n + 1)}
     set2 = {s2[i : i + n] for i in range(len(s2) - n + 1)}
@@ -149,19 +153,20 @@ def ngram_jaccard_similarity(s1: str, s2: str, n: int = 2) -> float:
     return intersection / union
 
 
-def text_similarity(s1: str, s2: str) -> float:
+def text_similarity(s1: str, s2: str, max_chars: int = _FUZZY_INPUT_CAP) -> float:
     """Blended similarity metric combining Levenshtein ratio and character bi-gram Jaccard."""
     if not s1 or not s2:
         return 0.0
-    lev = levenshtein_ratio(s1, s2)
+    cap = max(1, max_chars)
+    lev = levenshtein_ratio(s1, s2, max_chars=cap)
     # If high Levenshtein, return immediately
     if lev >= 0.90:
         return lev
-    jac = ngram_jaccard_similarity(s1, s2, n=2)
+    jac = ngram_jaccard_similarity(s1, s2, n=2, max_chars=cap)
     return max(lev, jac)
 
 
-def _min_coverage_ratio(s1: str, s2: str, n: int = 2) -> float:
+def _min_coverage_ratio(s1: str, s2: str, n: int = 2, max_chars: int = _FUZZY_INPUT_CAP) -> float:
     """Return the share of the shorter string's n-grams found in the longer one.
 
     Used as a guard against boilerplate-only merges: two templated snippets can
@@ -170,6 +175,9 @@ def _min_coverage_ratio(s1: str, s2: str, n: int = 2) -> float:
     own bigrams are not almost fully contained in the longer text, the pair is
     a partial overlap, not a reprint.
     """
+    cap = max(1, max_chars)
+    s1 = s1[:cap]
+    s2 = s2[:cap]
     if len(s1) < n or len(s2) < n:
         return 1.0
     shorter, longer = (s1, s2) if len(s1) <= len(s2) else (s2, s1)
@@ -180,12 +188,23 @@ def _min_coverage_ratio(s1: str, s2: str, n: int = 2) -> float:
     return len(short_set & longer_set) / len(short_set)
 
 
-def _min_word_coverage_ratio(s1: str, s2: str) -> float:
-    """Return the share of the shorter string's words/tokens found in the longer one."""
+_CJK_CHAR_PAT = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+
+
+def _is_cjk_spaceless(text: str) -> bool:
+    """Return True when text contains CJK/Hangul scripts and lacks whitespace word segmentation."""
+    return bool(_CJK_CHAR_PAT.search(text)) and len(text.split()) < 4
+
+
+def _min_word_coverage_ratio(s1: str, s2: str, max_chars: int = _FUZZY_INPUT_CAP) -> float:
+    """Return the share of the shorter string's words/tokens found in the longer one.
+
+    Falls back to character bigram coverage for spaceless CJK/Hangul titles.
+    """
     w1 = [w for w in s1.split() if w]
     w2 = [w for w in s2.split() if w]
-    if not w1 or not w2:
-        return _min_coverage_ratio(s1, s2, n=2)
+    if not w1 or not w2 or _is_cjk_spaceless(s1) or _is_cjk_spaceless(s2):
+        return _min_coverage_ratio(s1, s2, n=2, max_chars=max_chars)
     shorter, longer = (w1, w2) if len(w1) <= len(w2) else (w2, w1)
     short_set = set(shorter)
     longer_set = set(longer)
@@ -214,6 +233,11 @@ class DeduplicatedCluster:
     engines: list[str] = field(default_factory=list)
     matched_queries: list[str] = field(default_factory=list)
     dedup_reason: str = ""
+    dedup_url_key: str = ""
+    canonical_key: str = ""
+    norm_title: str = ""
+    norm_snippet: str = ""
+    domain: str = ""
 
 
 class ResultDeduplicator:
@@ -235,8 +259,12 @@ class ResultDeduplicator:
             return []
 
         clusters: list[DeduplicatedCluster] = []
+        url_index: dict[str, DeduplicatedCluster] = {}
+        fuzzy_cap = max(1, self.config.max_fuzzy_input_chars)
 
         for item in items:
+            if not isinstance(item, dict):
+                continue
             url = str(item.get("url") or "").strip()
             if not url:
                 continue
@@ -252,13 +280,14 @@ class ResultDeduplicator:
 
             raw_snippet = str(item.get("content") or item.get("snippet") or "").strip()
             norm_snip = unicodedata.normalize("NFKC", raw_snippet).strip().lower()
+            dom1 = str(item.get("domain") or extract_domain(url))
 
             item_engines: list[str] = []
             eng = item.get("engine") or item.get("source")
             if eng:
                 item_engines.append(str(eng).strip())
             engs = item.get("engines")
-            if isinstance(engs, (list, tuple)):
+            if isinstance(engs, (list, tuple, set)):
                 for e in engs:
                     if e and str(e) not in item_engines:
                         item_engines.append(str(e))
@@ -267,124 +296,107 @@ class ResultDeduplicator:
             if query:
                 item_matched_q.append(query)
             extra_q = item.get("matched_queries")
-            if isinstance(extra_q, list):
+            if isinstance(extra_q, (list, tuple, set)):
                 for q in extra_q:
                     if q and str(q) not in item_matched_q:
                         item_matched_q.append(str(q))
 
-            # Check matching against existing clusters
+            item_dups: list[str] = []
+            raw_dups = item.get("duplicate_urls")
+            if isinstance(raw_dups, list):
+                for dup in raw_dups:
+                    dup_s = str(dup or "").strip()
+                    if dup_s and dup_s != url and dup_s not in item_dups:
+                        item_dups.append(dup_s)
+
+            # Check matching against existing clusters (O(1) exact/canonical URL first)
             matched_cluster: DeduplicatedCluster | None = None
             match_reason = ""
 
-            for cluster in clusters:
-                c_item = cluster.primary_item
-                c_url = str(c_item.get("url") or "")
-                c_dedup_url_key = get_dedup_key(c_url)
-                c_canonical = str(c_item.get("canonical_url") or "")
-                c_canonical_key = get_dedup_key(c_canonical) if c_canonical else ""
+            if dedup_url_key and dedup_url_key in url_index:
+                matched_cluster = url_index[dedup_url_key]
+                match_reason = "exact_url"
+            elif self.config.enable_canonical_dedup and canonical_key and canonical_key in url_index:
+                matched_cluster = url_index[canonical_key]
+                match_reason = "canonical_url"
 
-                # 1. Exact normalized URL match
-                if dedup_url_key and dedup_url_key == c_dedup_url_key:
-                    matched_cluster = cluster
-                    match_reason = "exact_url"
-                    break
+            if matched_cluster is None:
+                is_cross_domain_title_eligible = (len(norm_tit) >= 28 and len(norm_tit.split()) >= 4) or (
+                    _is_cjk_spaceless(norm_tit) and len(norm_tit) >= 14
+                )
+                for cluster in clusters:
+                    c_norm_tit = cluster.norm_title
+                    c_snip = cluster.norm_snippet
+                    dom2 = cluster.domain
 
-                # 2. Canonical URL match
-                if self.config.enable_canonical_dedup:
-                    if canonical_key and (canonical_key == c_canonical_key or canonical_key == c_dedup_url_key):
-                        matched_cluster = cluster
-                        match_reason = "canonical_url"
-                        break
-                    if c_canonical_key and c_canonical_key == dedup_url_key:
-                        matched_cluster = cluster
-                        match_reason = "canonical_url"
-                        break
+                    # 3. Exact normalized title match
+                    if norm_tit and c_norm_tit and norm_tit == c_norm_tit:
+                        if dom1 and dom2 and dom1 == dom2:
+                            matched_cluster = cluster
+                            match_reason = "exact_title_same_domain"
+                            break
+                        elif is_cross_domain_title_eligible:
+                            matched_cluster = cluster
+                            match_reason = "exact_title_cross_domain"
+                            break
 
-                c_title = str(c_item.get("title") or "")
-                c_norm_tit = normalize_title(c_title)
-                c_raw_snip = str(c_item.get("content") or c_item.get("snippet") or "").strip()
-                c_snip = unicodedata.normalize("NFKC", c_raw_snip).strip().lower()
-
-                # 3. Exact normalized title match
-                if norm_tit and c_norm_tit and norm_tit == c_norm_tit:
-                    dom1 = str(item.get("domain") or extract_domain(str(item.get("url") or "")))
-                    dom2 = str(c_item.get("domain") or extract_domain(str(c_item.get("url") or "")))
-                    if dom1 and dom2 and dom1 == dom2:
-                        matched_cluster = cluster
-                        match_reason = "exact_title_same_domain"
-                        break
-                    elif len(norm_tit) >= 28 and len(norm_tit.split()) >= 4:
-                        matched_cluster = cluster
-                        match_reason = "exact_title_cross_domain"
-                        break
-
-                # 4. Near-duplicate title match
-                if (
-                    len(norm_tit) >= self.config.min_title_length_for_fuzzy
-                    and len(c_norm_tit) >= self.config.min_title_length_for_fuzzy
-                ):
-                    dom1 = str(item.get("domain") or extract_domain(str(item.get("url") or "")))
-                    dom2 = str(c_item.get("domain") or extract_domain(str(c_item.get("url") or "")))
-                    same_domain = bool(dom1 and dom1 == dom2)
-                    threshold = (
-                        self.config.same_domain_title_threshold
-                        if same_domain
-                        else self.config.title_similarity_threshold
-                    )
-                    sim = text_similarity(norm_tit, c_norm_tit)
-                    if sim >= threshold:
-                        # If domains differ, never merge short/generic titles across different sites
-                        if not same_domain and (len(norm_tit) < 28 or len(norm_tit.split()) < 4):
-                            continue
-                        # Cross-domain fuzzy merges need stronger evidence:
-                        # titles differing by one character/token still score
-                        # ~0.94-0.96 with char-level similarity, which would
-                        # collapse distinct results hosted on different sites.
-                        if not same_domain and (
-                            sim < self.config.cross_domain_title_threshold
-                            or _min_word_coverage_ratio(norm_tit, c_norm_tit)
-                            < self.config.cross_domain_title_min_word_coverage
-                        ):
-                            # Fall back to snippet-alignment evidence: merge only
-                            # when the snippets are strong near-duplicates too.
-                            if not (norm_snip and len(norm_snip) >= 20 and c_snip and len(c_snip) >= 20):
+                    # 4. Near-duplicate title match
+                    if (
+                        len(norm_tit) >= self.config.min_title_length_for_fuzzy
+                        and len(c_norm_tit) >= self.config.min_title_length_for_fuzzy
+                    ):
+                        same_domain = bool(dom1 and dom1 == dom2)
+                        threshold = (
+                            self.config.same_domain_title_threshold
+                            if same_domain
+                            else self.config.title_similarity_threshold
+                        )
+                        sim = text_similarity(norm_tit, c_norm_tit, max_chars=fuzzy_cap)
+                        if sim >= threshold:
+                            # If domains differ, never merge short/generic titles across different sites
+                            if not same_domain and not is_cross_domain_title_eligible:
                                 continue
-                            snip_chk_sim = text_similarity(norm_snip[:300], c_snip[:300])
-                            if snip_chk_sim < self.config.snippet_similarity_threshold:
-                                continue
-                            if _min_coverage_ratio(norm_snip[:300], c_snip[:300]) < self.config.snippet_min_jaccard:
-                                continue
+                            # Cross-domain fuzzy merges need stronger evidence
+                            if not same_domain and (
+                                sim < self.config.cross_domain_title_threshold
+                                or _min_word_coverage_ratio(norm_tit, c_norm_tit, max_chars=fuzzy_cap)
+                                < self.config.cross_domain_title_min_word_coverage
+                            ):
+                                if not (norm_snip and len(norm_snip) >= 20 and c_snip and len(c_snip) >= 20):
+                                    continue
+                                snip_chk_sim = text_similarity(norm_snip[:300], c_snip[:300], max_chars=fuzzy_cap)
+                                if snip_chk_sim < self.config.snippet_similarity_threshold:
+                                    continue
+                                if (
+                                    _min_coverage_ratio(norm_snip[:300], c_snip[:300], max_chars=fuzzy_cap)
+                                    < self.config.snippet_min_jaccard
+                                ):
+                                    continue
 
-                        # Extra validation: check if snippets are also somewhat aligned
-                        if norm_snip and len(norm_snip) >= 20 and c_snip and len(c_snip) >= 20:
-                            snip_sim = text_similarity(norm_snip[:150], c_snip[:150])
-                            # Require non-trivial snippet correlation or same domain
-                            if snip_sim >= 0.40 or dom1 == dom2:
+                            # Extra validation: check if snippets are also somewhat aligned
+                            if norm_snip and len(norm_snip) >= 20 and c_snip and len(c_snip) >= 20:
+                                snip_sim = text_similarity(norm_snip[:150], c_snip[:150], max_chars=fuzzy_cap)
+                                if snip_sim >= 0.40 or same_domain:
+                                    matched_cluster = cluster
+                                    match_reason = f"fuzzy_title(sim={sim:.2f})"
+                                    break
+                            else:
                                 matched_cluster = cluster
                                 match_reason = f"fuzzy_title(sim={sim:.2f})"
                                 break
-                        else:
-                            matched_cluster = cluster
-                            match_reason = f"fuzzy_title(sim={sim:.2f})"
-                            break
 
-                # 5. Near-duplicate snippet / mirror match
-                if (
-                    len(norm_snip) >= self.config.min_snippet_length_for_fuzzy
-                    and len(c_snip) >= self.config.min_snippet_length_for_fuzzy
-                ):
-                    snip_sim = text_similarity(norm_snip[:300], c_snip[:300])
-                    if snip_sim >= self.config.snippet_similarity_threshold:
-                        # Boilerplate guard: templated snippets (listing pages,
-                        # cookie/disclaimer text) share most bigrams yet
-                        # describe distinct results. Require the shorter
-                        # snippet's bigrams to be almost fully contained in the
-                        # longer one before treating this as a mirror/reprint.
-                        coverage = _min_coverage_ratio(norm_snip[:300], c_snip[:300])
-                        if coverage >= self.config.snippet_min_jaccard:
-                            matched_cluster = cluster
-                            match_reason = f"fuzzy_snippet(sim={snip_sim:.2f})"
-                            break
+                    # 5. Near-duplicate snippet / mirror match
+                    if (
+                        len(norm_snip) >= self.config.min_snippet_length_for_fuzzy
+                        and len(c_snip) >= self.config.min_snippet_length_for_fuzzy
+                    ):
+                        snip_sim = text_similarity(norm_snip[:300], c_snip[:300], max_chars=fuzzy_cap)
+                        if snip_sim >= self.config.snippet_similarity_threshold:
+                            coverage = _min_coverage_ratio(norm_snip[:300], c_snip[:300], max_chars=fuzzy_cap)
+                            if coverage >= self.config.snippet_min_jaccard:
+                                matched_cluster = cluster
+                                match_reason = f"fuzzy_snippet(sim={snip_sim:.2f})"
+                                break
 
             if matched_cluster:
                 # Merge into existing cluster
@@ -392,6 +404,13 @@ class ResultDeduplicator:
                 p_url = str(p_item.get("url") or "").strip()
                 if url != p_url and url not in matched_cluster.duplicate_urls:
                     matched_cluster.duplicate_urls.append(url)
+                for dup in item_dups:
+                    if dup != p_url and dup not in matched_cluster.duplicate_urls:
+                        matched_cluster.duplicate_urls.append(dup)
+                if dedup_url_key and dedup_url_key not in url_index:
+                    url_index[dedup_url_key] = matched_cluster
+                if self.config.enable_canonical_dedup and canonical_key and canonical_key not in url_index:
+                    url_index[canonical_key] = matched_cluster
                 for eng in item_engines:
                     if eng not in matched_cluster.engines:
                         matched_cluster.engines.append(eng)
@@ -402,27 +421,33 @@ class ResultDeduplicator:
                 # Prefer canonical URL or longer content if the new item is better quality
                 if not p_item.get("canonical_url") and norm_canonical:
                     p_item["canonical_url"] = norm_canonical
-                # Compare like with like: norm_snip is NFKC-folded and lowercased,
-                # so its length cannot be compared to the stored raw snippet.
-                # A folded 4-char snippet could previously overwrite a longer
-                # 6-char one whenever full-width characters collapsed.
                 p_snip_len = len(str(p_item.get("content") or p_item.get("snippet") or ""))
                 if len(raw_snippet) > p_snip_len:
                     p_item["content"] = raw_snippet
+                    matched_cluster.norm_snippet = norm_snip
             else:
                 # Create a new cluster
                 new_cluster = DeduplicatedCluster(
                     primary_item=dict(item),
-                    duplicate_urls=[],
+                    duplicate_urls=list(item_dups),
                     engines=list(item_engines),
                     matched_queries=list(item_matched_q),
                     dedup_reason=match_reason,
+                    dedup_url_key=dedup_url_key,
+                    canonical_key=canonical_key,
+                    norm_title=norm_tit,
+                    norm_snippet=norm_snip,
+                    domain=dom1,
                 )
                 # Store normalized URL
                 new_cluster.primary_item["normalized_url"] = norm_url
                 if norm_canonical:
                     new_cluster.primary_item["canonical_url"] = norm_canonical
                 clusters.append(new_cluster)
+                if dedup_url_key:
+                    url_index.setdefault(dedup_url_key, new_cluster)
+                if self.config.enable_canonical_dedup and canonical_key:
+                    url_index.setdefault(canonical_key, new_cluster)
 
         # Build output items with consolidated metadata
         deduped_results: list[dict[str, Any]] = []

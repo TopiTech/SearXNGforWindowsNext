@@ -8,9 +8,11 @@ It requires only the Python standard library so it runs without additional depen
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,6 +20,9 @@ from typing import Any
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8888"
 DEFAULT_TIMEOUT = 15.0
+_MAX_HEALTH_BYTES = 64 * 1024
+_MAX_ERROR_BYTES = 64 * 1024
+_MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 DEFAULT_HEADERS = {
     "User-Agent": "SearXNG-Agent-Client/1.0",
     "Accept": "application/json",
@@ -51,16 +56,47 @@ def get_base_url() -> str:
         return custom_url.rstrip("/")
 
     port_raw = os.environ.get("SEARXNG_PORT", "").strip()
-    if port_raw:
-        try:
-            port_num = int(port_raw)
-            if 1 <= port_num <= 65535:
-                host = _normalize_bind_host(os.environ.get("SEARXNG_BIND_ADDRESS", ""))
-                return f"http://{host}:{port_num}"
-        except ValueError:
-            pass
+    bind_raw = os.environ.get("SEARXNG_BIND_ADDRESS", "").strip()
+    if port_raw or bind_raw:
+        port_num = 8888
+        if port_raw:
+            try:
+                parsed_port = int(port_raw)
+                if 1 <= parsed_port <= 65535:
+                    port_num = parsed_port
+            except ValueError:
+                pass
+        host = _normalize_bind_host(bind_raw)
+        return f"http://{host}:{port_num}"
 
     return DEFAULT_BASE_URL.rstrip("/")
+
+
+def _validate_base_url(base_url: str | None) -> str:
+    """Validate and normalize SearXNG base URL (restricting to http/https with host)."""
+    if base_url is None or base_url == "":
+        raw = get_base_url()
+    elif isinstance(base_url, str):
+        raw = base_url.strip()
+        if not raw:
+            raise ValueError("Invalid base_url: whitespace-only URL is not allowed")
+    else:
+        raise ValueError("Invalid base_url: must be a string")
+
+    parsed = urllib.parse.urlsplit(raw)
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+        raise ValueError(f"Invalid base_url (must use http or https with a valid host): {raw!r}")
+    return raw.rstrip("/")
+
+
+def _read_limited(resp: Any, max_bytes: int) -> bytes:
+    """Read response body up to ``max_bytes``, raising ValueError if exceeded."""
+    data = resp.read(max_bytes + 1)
+    if not isinstance(data, (bytes, bytearray)):
+        data = bytes(data)
+    if len(data) > max_bytes:
+        raise ValueError(f"Response exceeds {max_bytes} byte limit")
+    return bytes(data)
 
 
 def _coerce_timeout(raw: Any) -> float | None:
@@ -112,7 +148,11 @@ def check_health(base_url: str | None = None, timeout: float | None = None) -> t
     Returns:
         tuple[bool, str]: (is_healthy, status_message)
     """
-    target_base = (base_url or get_base_url()).rstrip("/")
+    try:
+        target_base = _validate_base_url(base_url)
+    except ValueError as e:
+        return False, f"SearXNG URL エラー: {e}"
+
     t = _resolve_timeout(timeout)
     health_url = f"{target_base}/healthz"
 
@@ -123,20 +163,24 @@ def check_health(base_url: str | None = None, timeout: float | None = None) -> t
         )
         with urllib.request.urlopen(req, timeout=t) as resp:
             status = resp.status
-            body = resp.read().decode("utf-8", errors="replace").strip()
+            body = _read_limited(resp, _MAX_HEALTH_BYTES).decode("utf-8", errors="replace").strip()
             if status == 200 and body == "OK":
                 return True, f"SearXNG サーバー稼働中 ({target_base}): OK"
             return True, f"SearXNG サーバー応答あり ({target_base}, status: {status})"
     except urllib.error.HTTPError as e:
-        # If /healthz returns 404 on some older SearXNG setups, try root URL
-        try:
-            root_req = urllib.request.Request(
-                target_base,
-                headers={"User-Agent": "SearXNG-Client/1.0"},
-            )
-            with urllib.request.urlopen(root_req, timeout=t) as resp:
-                return True, f"SearXNG サーバー応答あり ({target_base}, status: {resp.status})"
-        except (urllib.error.URLError, TimeoutError, OSError):
+        with contextlib.closing(e):
+            if e.code in (404, 405):
+                # Older SearXNG setups without /healthz: try root URL only on 404/405
+                try:
+                    root_req = urllib.request.Request(
+                        target_base,
+                        headers={"User-Agent": "SearXNG-Client/1.0"},
+                    )
+                    with urllib.request.urlopen(root_req, timeout=t) as resp:
+                        _read_limited(resp, _MAX_HEALTH_BYTES)
+                        return True, f"SearXNG サーバー応答あり ({target_base}, status: {resp.status})"
+                except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+                    pass
             return False, f"SearXNG HTTP エラー: {e.code} ({e.reason})"
     except urllib.error.URLError as e:
         return False, _make_offline_error_message(target_base, str(e.reason))
@@ -171,7 +215,7 @@ def search(
     Returns:
         dict: Standardized dictionary containing 'query', 'results', and optional 'error'.
     """
-    clean_query = query.strip()
+    clean_query = query.strip() if isinstance(query, str) else ""
     if not clean_query:
         return {
             "query": "",
@@ -179,13 +223,17 @@ def search(
             "error": "検索クエリが空です。検索したいキーワードを指定してください。",
         }
 
-    target_base = (base_url or get_base_url()).rstrip("/")
+    try:
+        target_base = _validate_base_url(base_url)
+    except ValueError as e:
+        return {"query": clean_query, "results": [], "error": f"SearXNG URL エラー: {e}"}
+
     t = _resolve_timeout(timeout)
 
     # Cap count within safe boundaries (1 to 50)
     try:
-        count = int(count)
-    except (ValueError, TypeError):
+        count = 5 if isinstance(count, bool) else int(count)
+    except (ValueError, TypeError, OverflowError):
         count = 5
     count = max(1, min(count, 50))
 
@@ -204,8 +252,8 @@ def search(
         params["time_range"] = tr_clean
 
     try:
-        page_val = int(pageno)
-    except (ValueError, TypeError):
+        page_val = 1 if isinstance(pageno, bool) else int(pageno)
+    except (ValueError, TypeError, OverflowError):
         page_val = 1
     if page_val > 1:
         params["pageno"] = str(page_val)
@@ -218,7 +266,8 @@ def search(
             headers=DEFAULT_HEADERS,
         )
         with urllib.request.urlopen(req, timeout=t) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            raw_bytes = _read_limited(resp, _MAX_RESPONSE_BYTES)
+            data = json.loads(raw_bytes.decode("utf-8", errors="replace"))
 
         raw_results = data.get("results", []) if isinstance(data, dict) else []
         results = [r for r in raw_results if isinstance(r, dict)] if isinstance(raw_results, list) else []
@@ -238,14 +287,15 @@ def search(
         }
 
     except urllib.error.HTTPError as e:
-        err_msg = f"SearXNG HTTP エラー: {e.code} ({e.reason})"
-        try:
-            err_body = e.read().decode("utf-8", errors="replace")
-            if "No query" in err_body:
-                err_msg = "検索クエリが認識されませんでした。"
-        except (OSError, UnicodeDecodeError):
-            pass
-        return {"query": clean_query, "results": [], "error": err_msg}
+        with contextlib.closing(e):
+            err_msg = f"SearXNG HTTP エラー: {e.code} ({e.reason})"
+            try:
+                err_body = _read_limited(e, _MAX_ERROR_BYTES).decode("utf-8", errors="replace")
+                if "No query" in err_body:
+                    err_msg = "検索クエリが認識されませんでした。"
+            except (OSError, UnicodeDecodeError, ValueError):
+                pass
+            return {"query": clean_query, "results": [], "error": err_msg}
 
     except urllib.error.URLError as e:
         return {
@@ -289,7 +339,7 @@ def scrape(
     Returns:
         dict: Standardized dictionary containing 'url', 'content', and optional 'error'.
     """
-    clean_url = url.strip()
+    clean_url = url.strip() if isinstance(url, str) else ""
     if not clean_url:
         return {"url": "", "content": "", "error": "URL が指定されていません。"}
 
@@ -324,11 +374,15 @@ def scrape(
             ),
         }
 
-    target_base = (base_url or get_base_url()).rstrip("/")
+    try:
+        target_base = _validate_base_url(base_url)
+    except ValueError as e:
+        return {"url": clean_url, "content": "", "error": f"SearXNG URL エラー: {e}"}
+
     t = _resolve_timeout(timeout)
     try:
-        max_length = int(max_length)
-    except (ValueError, TypeError):
+        max_length = 4000 if isinstance(max_length, bool) else int(max_length)
+    except (ValueError, TypeError, OverflowError):
         max_length = 4000
     if max_length < 0:
         max_length = 4000
@@ -342,7 +396,8 @@ def scrape(
             headers=DEFAULT_HEADERS,
         )
         with urllib.request.urlopen(req, timeout=t) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            raw_bytes = _read_limited(resp, _MAX_RESPONSE_BYTES)
+            data = json.loads(raw_bytes.decode("utf-8", errors="replace"))
 
         raw_content = data.get("content", "") if isinstance(data, dict) else ""
         content = str(raw_content) if raw_content is not None else ""
@@ -364,18 +419,19 @@ def scrape(
         return out_dict
 
     except urllib.error.HTTPError as e:
-        if e.code == 400:
-            err_msg = (
-                f"スクレイピング拒否 (400): 対象 URL ({clean_url}) はプライベートネットワーク、"
-                "ループバック、または許可されていないスキームのため安全機構 (SSRF対策) によりブロックされました。"
-            )
-        elif e.code == 422:
-            err_msg = f"本文抽出失敗 (422): {clean_url} から本文テキストを抽出できませんでした。"
-        elif e.code == 504:
-            err_msg = "スクレイピングタイムアウト (504): 対象サイトからの応答が得られませんでした。"
-        else:
-            err_msg = f"SearXNG スクレイピング HTTP エラー: {e.code} ({e.reason})"
-        return {"url": clean_url, "content": "", "error": err_msg}
+        with contextlib.closing(e):
+            if e.code == 400:
+                err_msg = (
+                    f"スクレイピング拒否 (400): 対象 URL ({clean_url}) はプライベートネットワーク、"
+                    "ループバック、または許可されていないスキームのため安全機構 (SSRF対策) によりブロックされました。"
+                )
+            elif e.code == 422:
+                err_msg = f"本文抽出失敗 (422): {clean_url} から本文テキストを抽出できませんでした。"
+            elif e.code == 504:
+                err_msg = "スクレイピングタイムアウト (504): 対象サイトからの応答が得られませんでした。"
+            else:
+                err_msg = f"SearXNG スクレイピング HTTP エラー: {e.code} ({e.reason})"
+            return {"url": clean_url, "content": "", "error": err_msg}
 
     except urllib.error.URLError as e:
         return {
@@ -407,9 +463,10 @@ def scrape(
 
 
 def _escape_markdown_link(title: str, url: str) -> tuple[str, str]:
-    """Escape brackets in Markdown title and parens in target URL."""
-    safe_title = (title or url or "").replace("[", "\\[").replace("]", "\\]")
-    safe_url = (url or "").replace("(", "%28").replace(")", "%29")
+    """Escape brackets/backslashes in Markdown title and spaces/parens in target URL."""
+    clean_title = re.sub(r"\s+", " ", (title or url or "")).strip()
+    safe_title = clean_title.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+    safe_url = re.sub(r"\s+", "%20", (url or "").strip()).replace("(", "%28").replace(")", "%29")
     return safe_title, safe_url
 
 

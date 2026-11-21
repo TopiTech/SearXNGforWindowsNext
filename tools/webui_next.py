@@ -24,6 +24,7 @@ import errno
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -135,7 +136,7 @@ def _parse_bool(val: Any, default: bool = True) -> bool:
 
 def _parse_int(val: Any, default: int, minimum: int, maximum: int) -> int:
     """Parse integer parameter within [minimum, maximum] bounds."""
-    if val is None or val == "":
+    if val is None or val == "" or isinstance(val, bool):
         return default
     try:
         n = int(val)
@@ -145,12 +146,14 @@ def _parse_int(val: Any, default: int, minimum: int, maximum: int) -> int:
 
 
 def _parse_float(val: Any, default: float, minimum: float, maximum: float) -> float:
-    """Parse float parameter within [minimum, maximum] bounds."""
-    if val is None or val == "":
+    """Parse finite float parameter within [minimum, maximum] bounds."""
+    if val is None or val == "" or isinstance(val, bool):
         return default
     try:
         n = float(val)
     except (ValueError, TypeError):
+        return default
+    if not math.isfinite(n):
         return default
     return max(minimum, min(n, maximum))
 
@@ -222,12 +225,19 @@ def _scrape_url_direct(
             host_norm = host_norm.replace(dot, ".")
         host_norm = host_norm.rstrip(".")
         if "%" in host_norm:
-            host_norm = host_norm.split("%", 1)[0]
-        if host_norm and ":" not in host_norm and not host_norm.replace(".", "").isdigit():
-            with contextlib.suppress(Exception):
+            if ":" in host_norm:
+                host_norm = host_norm.split("%", 1)[0]
+            else:
+                return ""
+        ascii_digits = host_norm.replace(".", "")
+        if host_norm and ":" not in host_norm and not (ascii_digits.isdigit() and ascii_digits.isascii()):
+            try:
                 import idna  # local import: only needed for IDN hosts
 
                 host_norm = idna.encode(host_norm, uts46=True).decode("ascii")
+            except (ImportError, UnicodeError, ValueError, OSError):
+                if not host_norm.isascii():
+                    return ""
         return host_norm
 
     def _parse_url(value: str) -> urllib.parse.ParseResult:
@@ -269,7 +279,7 @@ def _scrape_url_direct(
         except ValueError:
             if ":" in host_clean:
                 return True
-            if host_clean.replace(".", "").isdigit():
+            if host_clean.replace(".", "").isdigit() and host_clean.replace(".", "").isascii():
                 parsed_any = False
                 if "." not in host_clean:
                     with contextlib.suppress(ValueError, TypeError, OverflowError):
@@ -302,13 +312,14 @@ def _scrape_url_direct(
     try:
         parsed = _parse_url(clean_url)
     except (ValueError, RuntimeError, blocked_exc_cls) as exc:
-        return {"url": clean_url, "content": "", "error": f"スクレイピング拒否 (400): {exc}"}
+        return {"url": clean_url, "content": "", "error": f"スクレイピング拒否 (400): {exc}", "error_code": "blocked"}
 
     if parsed.scheme not in ("http", "https") or _is_static_host_blocked(parsed.hostname):
         return {
             "url": clean_url,
             "content": "",
             "error": "スクレイピング拒否 (400): プライベートIP、ループバック、または許可されていないスキームです。",
+            "error_code": "blocked",
         }
 
     def _resolve_safe_ip(url_to_resolve: str) -> tuple[list[str], str, int, str]:
@@ -362,21 +373,47 @@ def _scrape_url_direct(
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
         )
         with webapp_mod._scrape_client_lock:
-            if webapp_mod._scrape_client is None or webapp_mod._scrape_client_verify_ssl != verify_ssl:
-                scrape_limits = httpx_mod.Limits(max_keepalive_connections=0, max_connections=50)
-                if webapp_mod._scrape_client is not None:
-                    with contextlib.suppress(Exception):
-                        webapp_mod._scrape_client.close()
-                webapp_mod._scrape_client = httpx_mod.Client(
-                    timeout=httpx_mod.Timeout(10.0, connect=5.0, read=10.0, write=5.0),
-                    follow_redirects=False,
-                    verify=verify_ssl,
-                    limits=scrape_limits,
-                    trust_env=False,
-                )
+            clients_map = getattr(webapp_mod, "_scrape_clients", None)
+            if isinstance(clients_map, dict):
+                active_client = clients_map.get(verify_ssl)
+                if active_client is None:
+                    if (
+                        getattr(webapp_mod, "_scrape_client", None) is not None
+                        and getattr(webapp_mod, "_scrape_client_verify_ssl", None) == verify_ssl
+                    ):
+                        active_client = webapp_mod._scrape_client
+                    else:
+                        scrape_limits = httpx_mod.Limits(max_keepalive_connections=0, max_connections=50)
+                        active_client = httpx_mod.Client(
+                            timeout=httpx_mod.Timeout(10.0, connect=5.0, read=10.0, write=5.0),
+                            follow_redirects=False,
+                            verify=verify_ssl,
+                            limits=scrape_limits,
+                            trust_env=False,
+                        )
+                    clients_map[verify_ssl] = active_client
+                webapp_mod._scrape_client = active_client
                 webapp_mod._scrape_client_verify_ssl = verify_ssl
+            else:
+                if (
+                    getattr(webapp_mod, "_scrape_client", None) is None
+                    or getattr(webapp_mod, "_scrape_client_verify_ssl", None) != verify_ssl
+                ):
+                    scrape_limits = httpx_mod.Limits(max_keepalive_connections=0, max_connections=50)
+                    if getattr(webapp_mod, "_scrape_client", None) is not None:
+                        with contextlib.suppress(Exception):
+                            webapp_mod._scrape_client.close()
+                    webapp_mod._scrape_client = httpx_mod.Client(
+                        timeout=httpx_mod.Timeout(10.0, connect=5.0, read=10.0, write=5.0),
+                        follow_redirects=False,
+                        verify=verify_ssl,
+                        limits=scrape_limits,
+                        trust_env=False,
+                    )
+                    webapp_mod._scrape_client_verify_ssl = verify_ssl
+                active_client = webapp_mod._scrape_client
 
-        eff_stream_timeout = float(timeout or 10.0)
+        eff_stream_timeout = _parse_float(timeout, 10.0, 0.5, 60.0)
         req_timeout = httpx_mod.Timeout(
             eff_stream_timeout,
             connect=min(eff_stream_timeout, 5.0),
@@ -393,12 +430,12 @@ def _scrape_url_direct(
             headers = {"User-Agent": ua}
             with (
                 webapp_mod.pinned_dns(original_host, safe_ips, port),
-                webapp_mod._scrape_client.stream("GET", safe_url, headers=headers, timeout=req_timeout) as response,
+                active_client.stream("GET", safe_url, headers=headers, timeout=req_timeout) as response,
             ):
                 if response.status_code not in (301, 302, 303, 307, 308):
                     response.raise_for_status()
                     downloaded = webapp_mod._read_scrape_response(
-                        response, max_duration=min(max(float(timeout or 10.0), 2.0), 15.0)
+                        response, max_duration=min(max(eff_stream_timeout, 2.0), 15.0)
                     )
                     break
                 location = response.headers.get("location")
@@ -443,7 +480,12 @@ def _scrape_url_direct(
     except too_large_exc_cls:
         return {"url": clean_url, "content": "", "error": "レスポンスサイズが上限を超えています。"}
     except blocked_exc_cls as exc:
-        return {"url": clean_url, "content": "", "error": f"スクレイピング拒否: {str(exc)[:120]}"}
+        return {
+            "url": clean_url,
+            "content": "",
+            "error": f"スクレイピング拒否: {str(exc)[:120]}",
+            "error_code": "blocked",
+        }
     except Exception as exc:  # noqa: BLE001
         return {"url": clean_url, "content": "", "error": f"取得失敗: {str(exc)[:120]}"}
 
@@ -489,15 +531,8 @@ def _search_in_process(
             "error": "検索クエリが空です。検索したいキーワードを指定してください。",
         }
 
-    try:
-        count_int = max(1, min(count, 50))
-    except (ValueError, TypeError):
-        count_int = 5
-
-    try:
-        page_int = max(1, min(pageno, 100))
-    except (ValueError, TypeError):
-        page_int = 1
+    count_int = _parse_int(count, default=5, minimum=1, maximum=50)
+    page_int = _parse_int(pageno, default=1, minimum=1, maximum=100)
 
     base_url = _sanitize_local_base_url(base_url)
 
@@ -925,7 +960,7 @@ def get_engines_settings_data(
     suspended_count = 0
 
     for name, e in sorted(all_engines.items(), key=lambda kv: kv[0]):
-        cats = list(getattr(e, "categories", []))
+        cats = list(getattr(e, "categories", None) or [])
         def_disabled = bool(getattr(e, "disabled", False))
 
         # Determine enabled state
@@ -958,8 +993,9 @@ def get_engines_settings_data(
         if rel_pct is not None:
             with contextlib.suppress(Exception):
                 rel_val = float(str(rel_pct))
-                total_reliability += rel_val
-                rel_count += 1
+                if math.isfinite(rel_val):
+                    total_reliability += rel_val
+                    rel_count += 1
 
         errors = rel_data.get("errors", [])
 
@@ -1022,12 +1058,28 @@ def _clean_engine_names(raw: Any) -> list[str]:
         return []
     names: list[str] = []
     for x in raw:
-        name = str(x).strip()
+        if not isinstance(x, str):
+            continue
+        name = x.strip()
         if not name or not _ENGINE_NAME_RE.fullmatch(name):
             continue
         if name not in names:
             names.append(name)
     return names
+
+
+def _format_yaml_engine_name(name: str) -> str:
+    """Format an engine name for YAML emission, quoting only YAML-ambiguous scalars."""
+    low = name.lower()
+    needs_quote = (
+        low in {"true", "false", "null", "yes", "no", "on", "off", "y", "n", "~"}
+        or name.startswith(("-", ".", "+"))
+        or bool(re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", name))
+    )
+    if needs_quote:
+        escaped = name.replace("'", "''")
+        return f"'{escaped}'"
+    return name
 
 
 class EngineSyncResult:
@@ -1138,7 +1190,10 @@ def sync_engines_to_settings_file_result(
                 if target_disabled is None:
                     return match.group(0)
 
-                dis_pat = re.compile(r"(?m)^([ \t]*disabled[ \t]*:[ \t]*)(?:true|false|yes|no)(.*)$", re.IGNORECASE)
+                dis_pat = re.compile(
+                    r"(?m)^([ \t]*disabled[ \t]*:[ \t]*)(?:true|false|yes|no|on|off|0|1)(.*)$",
+                    re.IGNORECASE,
+                )
                 if dis_pat.search(body):
                     new_val = "true" if target_disabled else "false"
                     new_body = dis_pat.sub(rf"\g<1>{new_val}\g<2>", body)
@@ -1179,13 +1234,14 @@ def sync_engines_to_settings_file_result(
                     module = str(getattr(registry_map.get(e), "engine", "") or "").strip()
                     if not module and re.fullmatch(r"[a-z0-9_.]+", e):
                         module = e
+                    yaml_name = _format_yaml_engine_name(e)
                     if module and re.fullmatch(r"[a-z0-9_.]+", module):
                         to_insert += (
-                            f"  - name: {e}{line_ending}    engine: {module}"
+                            f"  - name: {yaml_name}{line_ending}    engine: {module}"
                             f"{line_ending}    disabled: {flag}{line_ending}"
                         )
                     else:
-                        to_insert += f"  - name: {e}{line_ending}    disabled: {flag}{line_ending}"
+                        to_insert += f"  - name: {yaml_name}{line_ending}    disabled: {flag}{line_ending}"
 
                 # 1) Existing `engines:` block (an optional inline comment is kept).
                 top_level_pat = re.compile(r"(?m)(^engines:[ \t]*(?:#[^\r\n]*)?\r?\n[\s\S]*?)(?=^[a-zA-Z0-9_]+:|\Z)")
@@ -1673,8 +1729,12 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
   }
 
   function escapeMdLink(title, url) {
-    var safeTitle = (title || url || '').replace(/\\[/g, '\\\\[').replace(/\\]/g, '\\\\\\]');
-    var safeUrl = (url || '').replace(/\\(/g, '%28').replace(/\\)/g, '%29');
+    var safeTitle = String(title || url || '')
+      .replace(/[\\r\\n]+/g, ' ')
+      .replace(/\\\\/g, '\\\\\\\\')
+      .replace(/\\[/g, '\\\\[')
+      .replace(/\\]/g, '\\\\\\]');
+    var safeUrl = String(url || '').trim().replace(/\\(/g, '%28').replace(/\\)/g, '%29').replace(/\\s+/g, '%20');
     return { title: safeTitle, url: safeUrl };
   }
 
@@ -1763,7 +1823,16 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
         var qVal = qInput ? qInput.value.trim() : '';
         var apiUrl = '/api/scrape_analyze?url=' + encodeURIComponent(targetUrl) + '&q=' + encodeURIComponent(qVal) + '&max_length=6000';
         fetch(apiUrl)
-          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            if (!r.ok) {
+              return r.text().then(function (txt) {
+                var msg = 'HTTP ' + r.status;
+                try { var p = JSON.parse(txt); if (p && p.error) msg = p.error; } catch (e) {}
+                throw new Error(msg);
+              });
+            }
+            return r.json();
+          })
           .then(function (res) {
             scrapeBtn.disabled = false;
             if (res.error) {
@@ -1849,11 +1918,23 @@ SIMPLE_EMBED_JS = """/* SearXNG Next — Progressive AI Enhancement for Simple T
 
         var bar = document.getElementById('sxng-ai-results-bar');
         var q = (bar && bar.dataset.query) || (document.getElementById('q') ? document.getElementById('q').value : '');
-        if (!q) return;
+        if (!q) {
+          deepDrawer.innerHTML = '<div style="color:#ef4444;">⚠️ 検索クエリが取得できませんでした。</div>';
+          return;
+        }
 
         deepDrawer.innerHTML = '<div>⚡ <strong>Agentic Deep Search 実行中...</strong> (並列本文抽出 + BM25 ハイライト + ドメイン評価)</div>';
         fetch('/deep_search?q=' + encodeURIComponent(q) + '&depth=advanced&max_results=5&max_tokens=3000')
-          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            if (!r.ok) {
+              return r.text().then(function (txt) {
+                var msg = 'HTTP ' + r.status;
+                try { var p = JSON.parse(txt); if (p && p.error) msg = p.error; } catch (e) {}
+                throw new Error(msg);
+              });
+            }
+            return r.json();
+          })
           .then(function (res) {
             if (res.error) {
               deepDrawer.innerHTML = '<div style="color:#ef4444;">⚠️ ' + escapeHtml(res.error) + '</div>';
@@ -4051,6 +4132,40 @@ footer.ws-footer {
           .replace(/[\\$"\\`!]/g, function (ch) { return String.fromCharCode(92) + ch; });
       }
 
+      function formatMarkdownLink(title, url) {
+        var safeTitle = String(title || url || '').replace(/[\r\n]+/g, ' ').split('[').join('\\[').split(']').join('\\]');
+        var safeUrl = String(url || '').trim().split('(').join('%28').split(')').join('%29').replace(/\s+/g, '%20');
+        return '[' + safeTitle + '](' + safeUrl + ')';
+      }
+
+      function parseJsonResponse(r) {
+        return r.text().then(function (txt) {
+          var parsed = null;
+          if (txt) {
+            try {
+              parsed = JSON.parse(txt);
+            } catch (e) {
+              parsed = null;
+            }
+          }
+          if (!r.ok) {
+            var msg = (parsed && parsed.error) ? parsed.error : ('HTTP ' + r.status);
+            var err = new Error(msg);
+            err.status = r.status;
+            err.payload = parsed;
+            throw err;
+          }
+          if (parsed === null) {
+            throw new Error('Invalid JSON response');
+          }
+          return parsed;
+        });
+      }
+
+      function fetchJson(url, options) {
+        return fetch(url, options).then(parseJsonResponse);
+      }
+
       function safeGetStorage(key, fallback) {
         try {
           var val = localStorage.getItem(key);
@@ -4243,7 +4358,8 @@ footer.ws-footer {
         }
 
         var qs = params.toString();
-        var targetUrl = qs ? '/?' + qs : '/';
+        var basePath = window.location.pathname || '/';
+        var targetUrl = qs ? (basePath + '?' + qs) : basePath;
         var currentSearch = window.location.search || '';
         var targetSearch = qs ? '?' + qs : '';
 
@@ -4292,6 +4408,8 @@ footer.ws-footer {
             else if (m === 'classic') runClassicSearch(q, pg);
             else runUnifiedSearch(q);
           } else {
+            cancelPendingRequest();
+            activeRequestContainer = null;
             var rList = document.getElementById('results-container');
             if (rList && initialResultsEmptyHtml) {
               rList.innerHTML = initialResultsEmptyHtml;
@@ -4382,9 +4500,14 @@ footer.ws-footer {
        * ------------------------------------------------------------- */
       var suggestBox = document.getElementById('suggest-box');
       var suggestDebounceTimer = null;
+      var suggestAbortController = null;
       var activeSuggestIndex = -1;
 
       function closeSuggest() {
+        if (suggestAbortController) {
+          try { suggestAbortController.abort(); } catch (e) {}
+          suggestAbortController = null;
+        }
         suggestBox.classList.remove('show');
         suggestBox.innerHTML = '';
         activeSuggestIndex = -1;
@@ -4458,15 +4581,22 @@ footer.ws-footer {
           closeSuggest();
           return;
         }
+        if (suggestAbortController) {
+          try { suggestAbortController.abort(); } catch (e) {}
+        }
+        suggestAbortController = new AbortController();
+        var sugSignal = suggestAbortController.signal;
         var extra = (backend && backend !== 'off') ? ('&autocomplete=' + encodeURIComponent(backend)) : '';
         fetch('/autocompleter?q=' + encodeURIComponent(query) + extra, {
+          signal: sugSignal,
           headers: {
             'X-Requested-With': 'XMLHttpRequest',
             'Accept': 'application/json'
           }
         })
-          .then(function (r) { return r.json(); })
+          .then(parseJsonResponse)
           .then(function (data) {
+            if (sugSignal.aborted) return;
             var curQ = document.getElementById('q').value.trim();
             if (!curQ || isUrlText(curQ) || curQ.toLowerCase() !== query.toLowerCase()) {
               if (!curQ || isUrlText(curQ)) {
@@ -4499,7 +4629,10 @@ footer.ws-footer {
             suggestBox.classList.add('show');
             setActiveSuggestAria();
           })
-          .catch(function () { closeSuggest(); });
+          .catch(function (err) {
+            if (err && err.name === 'AbortError') return;
+            closeSuggest();
+          });
       }
 
       document.getElementById('q').addEventListener('input', function () {
@@ -4782,21 +4915,29 @@ footer.ws-footer {
 
         var fullHtml = htmlBlocks.join('\n');
 
-        // 4. Bold & Italic (applied outside code blocks)
-        fullHtml = fullHtml.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-        fullHtml = fullHtml.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-
-        // 5. Links (handles escaped brackets in titles from escape_markdown_link and rejects code tokens in URL)
+        // 4. Tokenize links BEFORE bold/italic so URLs containing '*' cannot be corrupted
+        var linkTokens = [];
         fullHtml = fullHtml.replace(/\[((?:\\\]|[^\]])+)\]\((https?:\/\/[^\s\)\"\'\u0001\u0002]+)\)/g, function (_, label, rawUrl) {
           var cleanUrl = safeHttpUrl(rawUrl.replace(/&amp;/g, '&'));
-          var displayLabel = label.replace(/\\([\[\]])/g, '$1');
+          var displayLabel = label.replace(/\\([\[\]])/g, '$1')
+            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*([^*]+)\*/g, '<em>$1</em>');
           if (cleanUrl === '#') {
             return displayLabel;
           }
-          return '<a href="' + escapeHtml(cleanUrl) + '" target="_blank" rel="noopener noreferrer">' + displayLabel + '</a>';
+          var token = '\u0001@@LINK_' + linkTokens.length + '@@\u0001';
+          linkTokens.push('<a href="' + escapeHtml(cleanUrl) + '" target="_blank" rel="noopener noreferrer">' + displayLabel + '</a>');
+          return token;
         });
 
-        // 6. Restore inline code first, then fenced code blocks (prevents token substitution inside code)
+        // 5. Bold & Italic (applied outside code blocks and links)
+        fullHtml = fullHtml.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        fullHtml = fullHtml.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+        // 6. Restore links, inline code, and fenced code blocks (prevents token substitution inside code)
+        for (var l = 0; l < linkTokens.length; l++) {
+          fullHtml = fullHtml.replace('\u0001@@LINK_' + l + '@@\u0001', function () { return linkTokens[l]; });
+        }
         for (var j = 0; j < inlineCodes.length; j++) {
           fullHtml = fullHtml.replace('\u0002@@INLINE_CODE_' + j + '@@\u0002', function () { return inlineCodes[j]; });
         }
@@ -5028,6 +5169,9 @@ footer.ws-footer {
           scrapeBtn.setAttribute('aria-controls', drawerId);
           scrapeBtn.addEventListener('click', function () {
             var existing = card.querySelector('.inline-scrape-drawer');
+            if (existing && existing.dataset.loading === '1') {
+              return;
+            }
             if (existing && existing.dataset.failed !== '1') {
               var isHidden = existing.style.display === 'none';
               existing.style.display = isHidden ? 'block' : 'none';
@@ -5038,13 +5182,16 @@ footer.ws-footer {
             drawer.className = 'inline-scrape-drawer';
             drawer.id = drawerId;
             drawer.style.display = 'block';
+            drawer.dataset.loading = '1';
             delete drawer.dataset.failed;
             drawer.innerHTML = '<span class="ui-spinner"></span> URLから本文を抽出中...';
             if (!existing) card.appendChild(drawer);
+            scrapeBtn.disabled = true;
             scrapeBtn.setAttribute('aria-expanded', 'true');
-            fetch('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
-              .then(function (r) { return r.json(); })
+            fetchJson('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
               .then(function (res) {
+                delete drawer.dataset.loading;
+                scrapeBtn.disabled = false;
                 if (res.error) {
                   drawer.dataset.failed = '1';
                   drawer.innerHTML = icon('alert') + ' 抽出失敗: ' + escapeHtml(res.error);
@@ -5053,8 +5200,10 @@ footer.ws-footer {
                 drawer.textContent = res.content || '(本文なし)';
               })
               .catch(function (e) {
+                delete drawer.dataset.loading;
+                scrapeBtn.disabled = false;
                 drawer.dataset.failed = '1';
-                drawer.innerHTML = icon('alert') + ' 通信エラー: ' + escapeHtml(e);
+                drawer.innerHTML = icon('alert') + ' 通信エラー: ' + escapeHtml(e && e.message ? e.message : e);
               });
           });
 
@@ -5065,10 +5214,8 @@ footer.ws-footer {
           copyItemBtn.setAttribute('data-action', 'copy-citation');
           copyItemBtn.innerHTML = icon('copy') + '<span>引用コピー</span>';
           copyItemBtn.addEventListener('click', function () {
-            var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
-            var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
             var hText = (item.highlights && item.highlights.length) ? item.highlights.join('\n\n') : (item.content || '');
-            var citeMd = '### [' + (idx + 1) + '] [' + safeTitle + '](' + safeUrl + ')\n> ' + hText.replace(/\n/g, '\n> ');
+            var citeMd = '### [' + (idx + 1) + '] ' + formatMarkdownLink(item.title, item.url) + '\n> ' + hText.replace(/\n/g, '\n> ');
             copyWithFeedback(citeMd, copyItemBtn, 'コピー完了');
           });
 
@@ -5123,8 +5270,7 @@ footer.ws-footer {
         var origin = window.location.origin;
         state.curlStr = 'curl -sG "' + origin + '/deep_search" --data-urlencode "q=' + escapeShellDoubleQuoted(query) + '" --data-urlencode "depth=' + escapeShellDoubleQuoted(depth) + '" --data-urlencode "format=markdown"';
 
-        fetch(url, { signal: signal })
-          .then(function (r) { return r.json(); })
+        fetchJson(url, { signal: signal })
           .then(function (res) {
             if (signal.aborted) return;
             container.setAttribute('aria-busy', 'false');
@@ -5446,9 +5592,7 @@ footer.ws-footer {
             copyBtn.setAttribute('data-action', 'copy-citation');
             copyBtn.innerHTML = icon('copy') + '<span>URLコピー</span>';
             copyBtn.addEventListener('click', function () {
-              var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
-              var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
-              var citeText = '[' + safeTitle + '](' + safeUrl + ')';
+              var citeText = formatMarkdownLink(item.title, item.url);
               copyWithFeedback(citeText, copyBtn, 'コピー済');
             });
             actRow.appendChild(copyBtn);
@@ -5535,6 +5679,9 @@ footer.ws-footer {
           scrapeBtn.setAttribute('aria-controls', drawerId);
           scrapeBtn.addEventListener('click', function () {
             var ex = card.querySelector('.inline-scrape-drawer');
+            if (ex && ex.dataset.loading === '1') {
+              return;
+            }
             if (ex && ex.dataset.failed !== '1') {
               var isHidden = ex.style.display === 'none';
               ex.style.display = isHidden ? 'block' : 'none';
@@ -5545,13 +5692,16 @@ footer.ws-footer {
             d.className = 'inline-scrape-drawer';
             d.id = drawerId;
             d.style.display = 'block';
+            d.dataset.loading = '1';
             delete d.dataset.failed;
             d.innerHTML = '<span class="ui-spinner"></span> URL本文を抽出中...';
             if (!ex) card.appendChild(d);
+            scrapeBtn.disabled = true;
             scrapeBtn.setAttribute('aria-expanded', 'true');
-            fetch('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
-              .then(function (r) { return r.json(); })
+            fetchJson('/api/scrape_analyze?url=' + encodeURIComponent(item.url) + '&q=' + encodeURIComponent(query || ''))
               .then(function (res) {
+                delete d.dataset.loading;
+                scrapeBtn.disabled = false;
                 if (res.error) {
                   d.dataset.failed = '1';
                   d.innerHTML = icon('alert') + ' 抽出エラー: ' + escapeHtml(res.error);
@@ -5560,8 +5710,10 @@ footer.ws-footer {
                 }
               })
               .catch(function (e) {
+                delete d.dataset.loading;
+                scrapeBtn.disabled = false;
                 d.dataset.failed = '1';
-                d.innerHTML = icon('alert') + ' 抽出エラー: ' + escapeHtml(e);
+                d.innerHTML = icon('alert') + ' 抽出エラー: ' + escapeHtml(e && e.message ? e.message : e);
               });
           });
 
@@ -5572,9 +5724,7 @@ footer.ws-footer {
           copyBtn.setAttribute('data-action', 'copy-citation');
           copyBtn.innerHTML = icon('copy') + '<span>引用コピー</span>';
           copyBtn.addEventListener('click', function () {
-            var safeTitle = (item.title || item.url || '').split('[').join('\\[').split(']').join('\\]');
-            var safeUrl = (item.url || '').split('(').join('%28').split(')').join('%29');
-            var citeText = '### [' + safeTitle + '](' + safeUrl + ')\n> ' + (item.content || '').replace(/\n/g, '\n> ');
+            var citeText = '### ' + formatMarkdownLink(item.title, item.url) + '\n> ' + (item.content || '').replace(/\n/g, '\n> ');
             copyWithFeedback(citeText, copyBtn, 'コピー済');
           });
 
@@ -5618,8 +5768,7 @@ footer.ws-footer {
           page: String(page)
         });
 
-        fetch('/deep_search?' + params.toString(), { signal: signal })
-          .then(function (r) { return r.json(); })
+        fetchJson('/deep_search?' + params.toString(), { signal: signal })
           .then(function (res) {
             if (signal.aborted) return;
             container.setAttribute('aria-busy', 'false');
@@ -5747,8 +5896,7 @@ footer.ws-footer {
         if (focusQ) api += '&q=' + encodeURIComponent(focusQ);
         state.curlStr = 'curl -sG "' + window.location.origin + '/scrape" --data-urlencode "url=' + escapeShellDoubleQuoted(targetUrl) + '"';
 
-        fetch(api, { signal: signal })
-          .then(function (r) { return r.json(); })
+        fetchJson(api, { signal: signal })
           .then(function (res) {
             if (signal.aborted) return;
             container.setAttribute('aria-busy', 'false');
@@ -5975,8 +6123,7 @@ footer.ws-footer {
             testBtn.disabled = true;
             testBtn.innerHTML = '<span class="ui-spinner"></span>';
             var t0 = performance.now();
-            fetch('/deep_search?q=test&count=1&engines=' + encodeURIComponent(e.name) + '&mode=classic')
-              .then(function (r) { return r.json(); })
+            fetchJson('/deep_search?q=test&count=1&engines=' + encodeURIComponent(e.name) + '&mode=classic')
               .then(function (res) {
                 var elapsed = Math.round(performance.now() - t0);
                 testBtn.disabled = false;
@@ -5989,10 +6136,10 @@ footer.ws-footer {
                   showToast(e.name + ': 応答なし / 0件', true);
                 }
               })
-              .catch(function () {
+              .catch(function (err) {
                 testBtn.disabled = false;
                 testBtn.textContent = 'テスト';
-                showToast(e.name + ': 通信エラー', true);
+                showToast(e.name + ': ' + (err && err.message ? err.message : '通信エラー'), true);
               });
           });
           meta.appendChild(testBtn);
@@ -6018,8 +6165,7 @@ footer.ws-footer {
 
         grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:2rem;"><span class="ui-spinner"></span> エンジン稼働状況を取得中...</div>';
 
-        fetch('/api/settings/engines')
-          .then(function (r) { return r.json(); })
+        fetchJson('/api/settings/engines')
           .then(function (res) {
             if (!res.success) throw new Error('Failed to load engines');
             state.settingsEngines = res.engines || [];
@@ -6288,41 +6434,41 @@ footer.ws-footer {
         if (container.dataset.loaded === '1') return;
         container.innerHTML = '<div class="empty-state"><h2><span class="ui-spinner"></span> 連携情報を取得中...</h2></div>';
 
-        fetch('/api/ai_info')
-          .then(function (r) { return r.json(); })
+        fetchJson('/api/ai_info')
           .then(function (info) {
+            var snippets = (info && info.snippets) ? info.snippets : {};
             container.dataset.loaded = '1';
             container.innerHTML = '';
             var items = [
               {
                 title: 'GenAI Retrieval API (/api/retrieval)',
                 desc: 'GenAIモデル・自律エージェント向けの構造化グラウンディングAPI (schema_version: 1.0)。根拠パッセージ・検証メタデータ・BM25スコアを返します。',
-                code: info.snippets.curl_retrieval + '\n\n# PowerShell:\n' + info.snippets.pwsh_retrieval
+                code: (snippets.curl_retrieval || '') + '\n\n# PowerShell:\n' + (snippets.pwsh_retrieval || '')
               },
               {
                 title: 'HTTP Deep Search API (/deep_search)',
                 desc: '1回のHTTPリクエストで検索・並列スクレイピング・BM25ハイライト抽出を実行し、MarkdownまたはJSONを返します。',
-                code: info.snippets.curl_deep_md + '\n\n# PowerShell:\n' + info.snippets.pwsh_deep
+                code: (snippets.curl_deep_md || '') + '\n\n# PowerShell:\n' + (snippets.pwsh_deep || '')
               },
               {
                 title: 'Claude Code (MCP 登録コマンド)',
                 desc: 'ターミナルで1行実行するだけで、Claude Code に searxng_deep_search / searxng_search / searxng_scrape を追加します。',
-                code: info.snippets.claude_code
+                code: snippets.claude_code || ''
               },
               {
                 title: 'Cursor / Windsurf / Claude Desktop (mcp.json)',
                 desc: '.cursor/mcp.json 等に貼り付けるだけでローカルMCPサーバーとして連携できます。',
-                code: info.snippets.cursor_mcp
+                code: snippets.cursor_mcp || ''
               },
               {
                 title: 'OpenCode (opencode.json)',
                 desc: 'プロジェクトルートの opencode.json に設定してネイティブ検索ツールとして利用できます。',
-                code: info.snippets.opencode_json
+                code: snippets.opencode_json || ''
               },
               {
                 title: 'ターミナル CLI (searxng_cli.py)',
                 desc: 'MCP非対応のエージェント（Codex CLI, Aider等）やスクリプトから直接ワンパス深層検索を実行できます。',
-                code: info.snippets.cli_deep
+                code: snippets.cli_deep || ''
               }
             ];
             items.forEach(function (it) {
@@ -6469,7 +6615,8 @@ footer.ws-footer {
             if (scrapeBtn) scrapeBtn.click();
           } else if (e.key === 'Enter' && state.selectedCardIndex >= 0 && state.selectedCardIndex < cards.length && active === cards[state.selectedCardIndex]) {
             var link = cards[state.selectedCardIndex].querySelector('a');
-            if (link) window.open(link.href, '_blank', 'noopener,noreferrer');
+            var rawHref = link ? link.getAttribute('href') : '';
+            if (link && rawHref && rawHref !== '#') window.open(link.href, '_blank', 'noopener,noreferrer');
           }
         }
       });
@@ -6591,7 +6738,7 @@ def _get_rate_capacity() -> float:
     """Get active rate limit burst capacity (env SEARXNG_RATE_CAPACITY overrides default)."""
     try:
         val = float(os.environ.get("SEARXNG_RATE_CAPACITY", _RATE_CAPACITY))
-        return val if val > 0 else _RATE_CAPACITY
+        return val if math.isfinite(val) and val > 0 else _RATE_CAPACITY
     except (ValueError, TypeError):
         return _RATE_CAPACITY
 
@@ -6600,7 +6747,7 @@ def _get_rate_refill() -> float:
     """Get active rate limit refill rate in tokens/sec (env SEARXNG_RATE_REFILL overrides default)."""
     try:
         val = float(os.environ.get("SEARXNG_RATE_REFILL", _RATE_REFILL_PER_SEC))
-        return val if val > 0 else _RATE_REFILL_PER_SEC
+        return val if math.isfinite(val) and val > 0 else _RATE_REFILL_PER_SEC
     except (ValueError, TypeError):
         return _RATE_REFILL_PER_SEC
 
@@ -6683,6 +6830,8 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         if orig_autocompleter is not None:
             with contextlib.suppress(Exception):
                 upstream_resp = orig_autocompleter()
+                if isinstance(upstream_resp, tuple) and upstream_resp:
+                    upstream_resp = upstream_resp[0]
                 if hasattr(upstream_resp, "get_data"):
                     raw_data = upstream_resp.get_data(as_text=True)
                     parsed = json.loads(raw_data)
@@ -6819,12 +6968,11 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             if sec_fetch_site == "cross-site":
                 return jsonify({"error": "Cross-site request rejected"}), 403
 
-            req_name = (request.host or "").lower()
-            req_name = (
-                req_name.rsplit(":", 1)[0]
-                if req_name and ":" in req_name and not req_name.startswith("[")
-                else req_name
-            )
+            req_raw = (request.host or "").lower().strip()
+            if req_raw.startswith("[") and "]" in req_raw:
+                req_name = req_raw[1 : req_raw.index("]")]
+            else:
+                req_name = req_raw.rsplit(":", 1)[0] if ":" in req_raw else req_raw
 
             # Standard browser CSRF defense: a cross-site form cannot set a
             # custom Origin; fetch/XHR always carry it for cross-origin calls.
@@ -6832,25 +6980,23 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
             if origin:
                 if origin.lower() == "null":
                     return jsonify({"error": "Cross-origin request rejected"}), 403
-                with contextlib.suppress(ValueError):
-                    o_host = urllib.parse.urlsplit(origin).netloc.lower()
-                    o_name = (
-                        o_host.rsplit(":", 1)[0] if o_host and ":" in o_host and not o_host.startswith("[") else o_host
-                    )
-                    if not o_name or (o_name != req_name and o_name.strip("[]") not in _TRUSTED_HOST_NAMES):
-                        return jsonify({"error": "Cross-origin request rejected"}), 403
+                try:
+                    o_parsed = urllib.parse.urlsplit(origin)
+                except ValueError:
+                    return jsonify({"error": "Cross-origin request rejected"}), 403
+                o_name = (o_parsed.hostname or "").lower()
+                if not o_name or (o_name != req_name and o_name not in _TRUSTED_HOST_NAMES):
+                    return jsonify({"error": "Cross-origin request rejected"}), 403
             else:
                 referer = (request.headers.get("Referer") or "").strip()
                 if referer:
-                    with contextlib.suppress(ValueError):
-                        r_host = urllib.parse.urlsplit(referer).netloc.lower()
-                        r_name = (
-                            r_host.rsplit(":", 1)[0]
-                            if r_host and ":" in r_host and not r_host.startswith("[")
-                            else r_host
-                        )
-                        if not r_name or (r_name != req_name and r_name.strip("[]") not in _TRUSTED_HOST_NAMES):
-                            return jsonify({"error": "Cross-origin request rejected"}), 403
+                    try:
+                        r_parsed = urllib.parse.urlsplit(referer)
+                    except ValueError:
+                        return jsonify({"error": "Cross-origin request rejected"}), 403
+                    r_name = (r_parsed.hostname or "").lower()
+                    if not r_name or (r_name != req_name and r_name not in _TRUSTED_HOST_NAMES):
+                        return jsonify({"error": "Cross-origin request rejected"}), 403
             if not _request_host_trusted():
                 return jsonify({"error": "Untrusted Host header"}), 403
         return None
@@ -6984,7 +7130,7 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         )
         err = str(res.get("error") or "")
         err_lower = err.lower()
-        is_blocked = (
+        is_blocked = res.get("error_code") == "blocked" or (
             "拒否" in err
             or "400" in err
             or "blocked" in err_lower

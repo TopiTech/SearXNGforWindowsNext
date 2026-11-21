@@ -2109,5 +2109,89 @@ class TestSyncEnginesSettingsFile(unittest.TestCase):
         self.assertIn("safeSetStorage('sxng_pref_safesearch', ss);", then_block)
 
 
+class TestUnit5RegressionFixes(unittest.TestCase):
+    """Regression coverage for Unit 5 WebUI backend and frontend fixes."""
+
+    def test_sync_engines_quotes_only_yaml_ambiguous_names(self) -> None:
+        import tempfile
+
+        import yaml
+
+        initial_yaml = "engines:\n  - name: google\n    engine: google\n    disabled: false\n"
+        fake_engines = FakeSearxEnginesModule("searx.engines")
+        fake_engines.engines = {"true": object(), "arch linux wiki": object()}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cfg_path = os.path.join(tmp_dir, "settings.yml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(initial_yaml)
+            with patch.dict(sys.modules, {"searx.engines": fake_engines}):
+                changed = webui_next.sync_engines_to_settings_file(
+                    enabled_engines=["true", "arch linux wiki"],
+                    settings_path=cfg_path,
+                )
+            self.assertTrue(changed)
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("- name: 'true'", content)
+            self.assertIn("- name: arch linux wiki", content)
+            parsed = yaml.safe_load(content)
+            names = [entry["name"] for entry in parsed["engines"]]
+            self.assertIn("true", names)
+
+    def test_state_change_guard_rejects_malformed_origin_and_referer(self) -> None:
+        app = Flask(__name__)
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        with patch("webui_next.save_engines_settings_data") as mock_save:
+            r1 = client.post(
+                "/api/settings/engines", json={"enabled_engines": ["google"]}, headers={"Origin": "http://[invalid"}
+            )
+            r2 = client.post(
+                "/api/settings/engines", json={"enabled_engines": ["google"]}, headers={"Referer": "http://[::1"}
+            )
+            self.assertEqual(r1.status_code, 403)
+            self.assertEqual(r2.status_code, 403)
+            self.assertEqual(mock_save.call_count, 0)
+
+    def test_parse_helpers_and_per_ssl_scrape_clients_isolation(self) -> None:
+        import contextlib
+        import socket
+
+        self.assertEqual(webui_next._parse_int(True, 5, 1, 10), 5)
+        self.assertEqual(webui_next._parse_float("nan", 2.5, 1.0, 10.0), 2.5)
+        self.assertEqual(webui_next._parse_float(False, 2.5, 1.0, 10.0), 2.5)
+
+        fake_client_true = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {}
+        fake_client_true.stream.return_value.__enter__.return_value = mock_resp
+
+        fake_client_false = MagicMock()
+        fake_webapp = types.SimpleNamespace(
+            _is_blocked_scrape_host=lambda h: False,
+            _is_reserved_scrape_host=lambda h: False,
+            _is_ip_blocked=lambda ip: False,
+            _scrape_clients={True: fake_client_true, False: fake_client_false},
+            _scrape_client=fake_client_false,
+            _scrape_client_verify_ssl=False,
+            _scrape_client_lock=contextlib.nullcontext(),
+            _read_scrape_response=lambda resp, max_duration=15.0: "<html><body>hi</body></html>",
+            pinned_dns=lambda h, ips, p: contextlib.nullcontext(),
+            httpx=MagicMock(),
+            trafilatura=types.SimpleNamespace(extract=lambda html, **kw: "hi"),
+        )
+        addrs = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        with (
+            patch.dict(os.environ, {"SEARXNG_SCRAPE_VERIFY_SSL": "true"}),
+            patch("webui_next.socket.getaddrinfo", return_value=addrs),
+        ):
+            res = webui_next._scrape_url_direct(fake_webapp, "https://example.com/")
+        self.assertEqual(res.get("content"), "hi")
+        fake_client_false.close.assert_not_called()
+        fake_client_true.stream.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
