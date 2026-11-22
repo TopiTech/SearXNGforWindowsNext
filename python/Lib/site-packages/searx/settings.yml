@@ -440,6 +440,26 @@ engines:
     engine: arxiv
     shortcut: arx
 
+  - name: authentic
+    engine: xpath
+    categories: [general, blogs]
+    paging: true
+    search_url: https://authentic.inbeta.cc/?q={query}&p={pageno}
+    first_page_num: 0
+    shortcut: au
+    disabled: true
+    inactive: true
+    results_xpath: //ol[contains(@class, "res")]/li
+    url_xpath: ./a/@href
+    title_xpath: ./a
+    content_xpath: ./div[contains(@class, "s")]
+    about:
+      website: https://authentic.inbeta.cc
+      description: "Search engine with the goal of surfacing authentic human expression on the internet"
+      use_official_api: false
+      require_api_key: false
+      results: HTML
+
   - name: avalw
     engine: json_engine
     shortcut: av
@@ -1756,6 +1776,11 @@ engines:
     timeout: 5.0
     disabled: true
 
+  - name: nuget
+    engine: nuget
+    shortcut: nuget
+    disabled: true
+
   - name: nyaa
     engine: nyaa
     shortcut: nt
@@ -2039,6 +2064,32 @@ engines:
   - name: pubmed
     engine: pubmed
     shortcut: pub
+
+  - name: purili
+    engine: purili
+    categories: general
+    purili_categ: search
+    shortcut: pur
+    disabled: true
+    inactive: true
+
+  - name: purili images
+    engine: purili
+    categories: images
+    purili_categ: images
+    shortcut: puri
+    disabled: true
+    inactive: true
+
+  - name: purili news
+    engine: purili
+    categories: news
+    purili_categ: news
+    shortcut: purn
+    paging: false
+    timeout: 5
+    disabled: true
+    inactive: true
 
   - name: pypi
     shortcut: pypi
@@ -3279,6 +3330,7 @@ engines:
     categories: [general, web]
     brave_category: search
     # brave_spellcheck: true
+    disabled: true
 
   - name: brave.images
     engine: brave
