@@ -441,7 +441,7 @@ class QueryOptimizer:
         if intent == "code":
             return "it", "bing,brave,github"
         elif intent == "academic":
-            return "science,general", "bing,brave,arxiv,google_scholar"
+            return "science,general", "bing,brave,arxiv,google scholar"
         elif intent == "news":
             return "news,general", "bing,brave,google"
         return "general", "bing,brave,google"
@@ -450,8 +450,9 @@ class QueryOptimizer:
     def extract_keywords(cls, query: str) -> list[str]:
         """Extract meaningful keywords removing common stopwords."""
         tokens = MultilingualTokenizer.tokenize(query)
-        keywords: list[str] = [t for t in tokens if len(t) > 1]
-        return keywords or [query.lower()]
+        non_single = [t for t in tokens if len(t) > 1]
+        keywords: list[str] = [t for t in non_single if t not in STOP_WORDS]
+        return keywords or non_single or [query.lower()]
 
 
 class DomainScorer:
@@ -590,8 +591,9 @@ class BM25PassageExtractor:
 
     def split_passages(self, text: str, min_chars: int = 40, max_chars: int = 800) -> list[str]:
         """Split text into coherent paragraphs and code blocks."""
-        if not text:
+        if not text or max_chars <= 0:
             return []
+        eff_min = max(0, min_chars)
 
         # Normalize CRLF and wrap with newline so start/end code blocks are captured cleanly
         clean_text = "\n" + text.replace("\r\n", "\n").strip() + "\n"
@@ -622,7 +624,8 @@ class BM25PassageExtractor:
                     s_clean = s.strip()
                     if not s_clean:
                         continue
-                    if len(buffer) + len(s_clean) + 1 <= max_chars:
+                    sep_len = 2 if buffer else 0
+                    if len(buffer) + sep_len + len(s_clean) <= max_chars:
                         buffer = f"{buffer}\n\n{s_clean}" if buffer else s_clean
                     else:
                         if buffer:
@@ -634,21 +637,22 @@ class BM25PassageExtractor:
                 continue
 
             # Normal text block
-            if len(buffer) + len(b) < max_chars:
+            sep_len = 2 if buffer else 0
+            if len(buffer) + sep_len + len(b) <= max_chars:
                 buffer = f"{buffer}\n\n{b}" if buffer else b
             else:
                 if buffer:
                     passages.append(buffer.strip())
                 buffer = b
 
-        if buffer and len(buffer.strip()) >= min_chars:
+        if buffer and len(buffer.strip()) >= eff_min:
             passages.append(buffer.strip())
 
         # If passages are still empty, fallback to sentence chunks
-        if not passages and len(text.strip()) >= min_chars:
+        if not passages and len(text.strip()) >= eff_min:
             passages = [text.strip()[:max_chars].strip()]
 
-        return [p for p in passages if len(p) >= min_chars]
+        return [p for p in passages if len(p) >= eff_min]
 
     def extract_highlights(self, text: str, query: str, top_k: int = 2) -> list[str]:
         """Extract top_k most relevant passages from text for a query."""

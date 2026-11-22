@@ -1397,13 +1397,29 @@ class TestQueryPipeline(unittest.TestCase):
         self.assertTrue(_is_reserved_scrape_host("7f000001.nip.io"))
         self.assertTrue(_is_reserved_scrape_host("--1.sslip.io"))
         self.assertTrue(_is_reserved_scrape_host("fe80--1.sslip.io"))
+        self.assertTrue(_is_reserved_scrape_host("2130706433.nip.io"))
+        self.assertTrue(_is_reserved_scrape_host("8.8.8.8.2130706433.nip.io"))
+        self.assertTrue(_is_reserved_scrape_host("0x7f000001.nip.io"))
+        self.assertTrue(_is_reserved_scrape_host("999.0.0.1.nip.io"))
+        self.assertTrue(_is_reserved_scrape_host("unknown.nip.io"))
+        self.assertTrue(_is_reserved_scrape_host("127.0.0.1.xip.io"))
         self.assertFalse(_is_reserved_scrape_host("93.184.216.34.nip.io"))
+        self.assertFalse(_is_reserved_scrape_host("www.93.184.216.34.nip.io"))
+        self.assertFalse(_is_reserved_scrape_host("93.184.216.34.xip.io"))
 
         self.assertFalse(is_safe_retrieval_url("http://167772161/"))  # 10.0.0.1
         self.assertFalse(is_safe_retrieval_url("http://2130706433/"))  # 127.0.0.1
         self.assertFalse(is_safe_retrieval_url("http://0177.0.0.1/"))
         self.assertFalse(is_safe_retrieval_url("http://0x7f.0.0.1/"))
         self.assertFalse(is_safe_retrieval_url("http://127.1/"))
+        # NAT64 embedded private/loopback IPv4 & zone IDs must be rejected
+        self.assertFalse(is_safe_retrieval_url("http://[64:ff9b::127.0.0.1]/"))
+        self.assertFalse(is_safe_retrieval_url("http://[64:ff9b::169.254.169.254]/"))
+        self.assertFalse(is_safe_retrieval_url("http://[64:ff9b::10.0.0.1]/"))
+        self.assertFalse(is_safe_retrieval_url("http://[fe80::1%eth0]/"))
+        self.assertFalse(is_safe_retrieval_url("http://[64:ff9b::127.0.0.1%eth0]/"))
+        self.assertFalse(is_safe_retrieval_url("http://[2001:4860:4860::8888%25eth0]/"))
+        self.assertTrue(is_safe_retrieval_url("http://[2001:4860:4860::8888]/"))
 
     def test_deduplication_youtube_case_and_boilerplate_snippet_safety(self) -> None:
         """Verify YouTube video IDs preserve case and distinct URLs on same domain with templated snippets survive."""

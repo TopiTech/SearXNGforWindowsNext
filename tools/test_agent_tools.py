@@ -11,7 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
-from typing import Any
+from typing import Any, Self
 from unittest.mock import MagicMock, patch
 
 # Ensure tools directory is in sys.path
@@ -1464,6 +1464,44 @@ class TestAgentToolsRegressionFixes(unittest.TestCase):
         self.assertIsNotNone(bad_args_resp)
         assert bad_args_resp is not None
         self.assertEqual(bad_args_resp["error"]["code"], -32602)
+
+    @patch("searxng_client.search")
+    def test_mcp_page_zero_does_not_fall_back_to_pageno(self, mock_search: MagicMock) -> None:
+        """Explicit page=0 in MCP arguments must clamp to 1 instead of falling through to pageno."""
+        mock_search.return_value = {"query": "python", "results": []}
+        resp = mcp_server.process_message(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 99,
+                    "method": "tools/call",
+                    "params": {"name": "searxng_search", "arguments": {"query": "python", "page": 0, "pageno": 4}},
+                }
+            )
+        )
+        self.assertIsNotNone(resp)
+        mock_search.assert_called_once()
+        self.assertNotIn("pageno", mock_search.call_args.kwargs)
+
+    @patch("urllib.request.urlopen")
+    def test_client_scrape_zero_max_length_defaults_safely(self, mock_urlopen: MagicMock) -> None:
+        """max_length=0 should normalize to default 4000 and truncate oversized content rather than passing unlimited body."""
+        huge = "X" * 5000
+
+        class _FakeResp:
+            def __enter__(self) -> Self:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, n: int = -1) -> bytes:
+                return json.dumps({"content": huge}).encode("utf-8")
+
+        mock_urlopen.return_value = _FakeResp()
+        res = searxng_client.scrape("https://93.184.216.34/", max_length=0)
+        self.assertEqual(len(res["content"]), 4000)
+        self.assertTrue(res["is_truncated"])
 
 
 if __name__ == "__main__":

@@ -1270,6 +1270,8 @@ def patch_webapp_scrape_route(content, path):
         "Port mismatch for pinned host",
         "URLs with embedded credentials or backslashes are not allowed",
         "except _ScrapeBlockedError:",
+        "lacolhost.com",
+        "_redirect_deadline",
     ]
     if all(anchor in content for anchor in required_anchors) and (
         "def pinned_dns(" not in content or "prev_pin = getattr(_thread_local_dns, 'pin', None)" in content
@@ -1579,16 +1581,16 @@ def _is_reserved_scrape_host(host):
     for dot in (chr(0x3002), chr(0xFF0E), chr(0xFF61)):
         h = h.replace(dot, '.')
     h = h.rstrip('.').lower()
-    if not h or h == 'localhost':
+    if not h or h in ('localhost', 'ip6-localhost', 'ip6-loopback'):
         return True
     for tld in _RESERVED_TLDS:
         bare = tld.lstrip('.')
         if h == bare or h.endswith(tld):
             return True
-    for loop_tld in ('.lvh.me', '.localtest.me', '.vcap.me'):
+    for loop_tld in ('.lvh.me', '.localtest.me', '.vcap.me', '.lacolhost.com', '.localh4.st', '.traefik.me'):
         if h == loop_tld.lstrip('.') or h.endswith(loop_tld):
             return True
-    for wc_tld in ('.nip.io', '.sslip.io', '.xip.io', '.traefik.me'):
+    for wc_tld in ('.nip.io', '.sslip.io', '.xip.io'):
         bare = wc_tld.lstrip('.')
         if h == bare:
             return True
@@ -1929,8 +1931,17 @@ def scrape():
             except Exception as e:
                 raise RuntimeError(f'DNS resolution failed for {host}: {e}')
 
+        try:
+            _env_dur = float(os.environ.get('SEARXNG_SCRAPE_MAX_DURATION', '15.0'))
+            _redirect_budget = _env_dur if (math.isfinite(_env_dur) and _env_dur > 0) else 15.0
+        except (ValueError, TypeError):
+            _redirect_budget = 15.0
+        _redirect_deadline = time.monotonic() + _redirect_budget
         current_url = request_url
         for _ in range(5):
+            if time.monotonic() >= _redirect_deadline:
+                raise httpx.TimeoutException('Scrape redirect deadline exceeded')
+
             cur_parsed = _parse_scrape_url(current_url)
             if (cur_parsed.scheme or '').lower() not in ('http', 'https'):
                 raise _ScrapeBlockedError(f'Blocked invalid scheme during redirect: {cur_parsed.scheme}')
@@ -1947,7 +1958,8 @@ def scrape():
                 with active_client.stream('GET', safe_url, headers=headers) as response:
                     if response.status_code not in (301, 302, 303, 307, 308):
                         response.raise_for_status()
-                        return _read_scrape_response(response)
+                        remaining_dur = max(0.1, _redirect_deadline - time.monotonic())
+                        return _read_scrape_response(response, max_duration=remaining_dur)
 
                     location = response.headers.get('location')
                     if not location or not location.strip():

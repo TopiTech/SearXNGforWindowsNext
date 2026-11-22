@@ -384,7 +384,7 @@ def scrape(
         max_length = 4000 if isinstance(max_length, bool) else int(max_length)
     except (ValueError, TypeError, OverflowError):
         max_length = 4000
-    if max_length < 0:
+    if max_length <= 0:
         max_length = 4000
 
     params = {"url": clean_url}

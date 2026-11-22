@@ -2254,6 +2254,202 @@ class TestUnit5RegressionFixes(unittest.TestCase):
         fake_client_false.close.assert_not_called()
         fake_client_true.stream.assert_called_once()
 
+    def test_csrf_guard_port_non_loopback_and_clear_cookies_get(self) -> None:
+        """CSRF guard must validate ports, reject localhost Origin on non-loopback targets, and protect GET /clear_cookies."""
+        app = Flask(__name__)
+
+        @app.route("/clear_cookies")
+        def clear_cookies() -> str:
+            return "cleared"
+
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        with patch("webui_next.save_engines_settings_data") as mock_save:
+            mock_save.return_value = {"success": True}
+            # Different loopback port against explicit Host:port must be rejected
+            r_port = client.post(
+                "/api/settings/engines",
+                json={"enabled_engines": ["google"]},
+                headers={"Host": "127.0.0.1:8888", "Origin": "http://localhost:9999"},
+            )
+            self.assertEqual(r_port.status_code, 403)
+
+            # Same loopback port against explicit Host:port is allowed
+            r_ok = client.post(
+                "/api/settings/engines",
+                json={"enabled_engines": ["google"]},
+                headers={"Host": "127.0.0.1:8888", "Origin": "http://localhost:8888"},
+            )
+            self.assertEqual(r_ok.status_code, 200)
+
+            # Non-loopback deployment must NEVER accept Origin: http://localhost:8888
+            with patch.dict(os.environ, {"SEARXNG_BASE_URL": "https://search.example.com"}):
+                r_non_local = client.post(
+                    "/api/settings/engines",
+                    json={"enabled_engines": ["google"]},
+                    headers={"Host": "search.example.com", "Origin": "http://localhost:8888"},
+                )
+                self.assertEqual(r_non_local.status_code, 403)
+
+                r_same_public = client.post(
+                    "/api/settings/engines",
+                    json={"enabled_engines": ["google"]},
+                    headers={"Host": "search.example.com", "Origin": "https://search.example.com"},
+                )
+                self.assertEqual(r_same_public.status_code, 200)
+
+        # GET /clear_cookies subresource or cross-site requests must be rejected
+        r_img = client.get("/clear_cookies", headers={"Host": "127.0.0.1:8888", "Sec-Fetch-Dest": "image"})
+        self.assertEqual(r_img.status_code, 403)
+        r_ref = client.get(
+            "/clear_cookies",
+            headers={"Host": "127.0.0.1:8888", "Referer": "https://evil.example.com/csrf.html"},
+        )
+        self.assertEqual(r_ref.status_code, 403)
+        # Same-origin navigation GET /clear_cookies still works
+        r_nav = client.get(
+            "/clear_cookies",
+            headers={
+                "Host": "127.0.0.1:8888",
+                "Sec-Fetch-Site": "same-origin",
+                "Sec-Fetch-Dest": "document",
+                "Referer": "http://127.0.0.1:8888/preferences",
+            },
+        )
+        self.assertEqual(r_nav.status_code, 200)
+
+    def test_autocompleter_runs_fallback_when_upstream_returns_empty(self) -> None:
+        """Fallback autocomplete must trigger when orig_autocompleter exists but returns empty/errors."""
+        app = Flask(__name__)
+
+        @app.route("/autocompleter")
+        def autocompleter() -> tuple[str, int, dict[str, str]]:
+            return "[]", 200, {"Content-Type": "application/json"}
+
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        fake_ac = types.SimpleNamespace(
+            backends={"duckduckgo": object(), "google": object()},
+            search_autocomplete=lambda backend, q, loc: [f"{q} docs", f"{q} tutorial"],
+        )
+        with patch.dict(sys.modules, {"searx.autocomplete": fake_ac}):
+            resp = client.get("/autocompleter?q=fastapi", headers={"X-Requested-With": "XMLHttpRequest"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), ["fastapi docs", "fastapi tutorial"])
+
+    def test_general_prefs_roundtrip_reset_and_falsy_zero_routing(self) -> None:
+        """General prefs save/read/reset and falsy-zero JSON param prioritization behave cleanly."""
+        app = Flask(__name__)
+        webui_next.register_next_webui(app, None)
+        client = app.test_client()
+
+        # General prefs POST without engine lists must succeed without settings.yml error
+        save_resp = client.post(
+            "/api/settings/engines",
+            json={"safesearch": "2", "autocomplete": "google", "default_mode": "classic"},
+        )
+        self.assertEqual(save_resp.status_code, 200)
+        save_data = save_resp.get_json()
+        self.assertTrue(save_data["synced_settings_yml"])
+
+        get_resp = client.get("/api/settings/engines")
+        self.assertEqual(get_resp.status_code, 200)
+        get_data = get_resp.get_json()
+        self.assertEqual(get_data.get("safesearch"), "2")
+        self.assertEqual(get_data.get("autocomplete"), "google")
+
+        # Reset preferences deletes HttpOnly preference cookies cleanly
+        reset_resp = client.post("/api/settings/engines", json={"reset_preferences": True})
+        self.assertEqual(reset_resp.status_code, 200)
+        set_cookies = reset_resp.headers.getlist("Set-Cookie")
+        self.assertTrue(any(c.startswith("safesearch=;") for c in set_cookies))
+
+        # Falsy-zero JSON key must NOT fall through to alias key
+        captured: dict[str, Any] = {}
+
+        def mock_deep(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            captured.update(kwargs)
+            return {"query": "test", "results": []}
+
+        with patch.object(webui_next, "execute_server_deep_search", side_effect=mock_deep):
+            zero_resp = client.post("/deep_search", json={"q": "test", "max_results": 0, "count": 40})
+        self.assertEqual(zero_resp.status_code, 200)
+        self.assertEqual(captured.get("max_results"), 1)
+
+    def test_scrape_url_direct_non_dict_client_no_close_race_and_redirect_deadline(self) -> None:
+        """Non-dict legacy _scrape_client must not be closed mid-flight, and redirect loop stops at deadline."""
+        import contextlib
+        import socket
+
+        old_client = MagicMock()
+        new_client = MagicMock()
+        mock_ok = MagicMock(status_code=200, headers={})
+        new_client.stream.return_value.__enter__.return_value = mock_ok
+
+        fake_httpx = MagicMock()
+        fake_httpx.Client.return_value = new_client
+        fake_httpx.Limits.return_value = object()
+        fake_httpx.Timeout.side_effect = lambda *a, **kw: ("timeout", a, kw)
+
+        fake_webapp = types.SimpleNamespace(
+            _is_blocked_scrape_host=lambda h: False,
+            _is_reserved_scrape_host=lambda h: False,
+            _is_ip_blocked=lambda ip: False,
+            _scrape_clients=None,
+            _scrape_client=old_client,
+            _scrape_client_verify_ssl=False,
+            _scrape_client_lock=contextlib.nullcontext(),
+            _read_scrape_response=lambda resp, max_duration=15.0: "<html><body>ok</body></html>",
+            pinned_dns=lambda h, ips, p: contextlib.nullcontext(),
+            httpx=fake_httpx,
+            trafilatura=types.SimpleNamespace(extract=lambda html, **kw: "ok"),
+        )
+        addrs = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        with (
+            patch.dict(os.environ, {"SEARXNG_SCRAPE_VERIFY_SSL": "true"}),
+            patch("webui_next.socket.getaddrinfo", return_value=addrs),
+        ):
+            res = webui_next._scrape_url_direct(fake_webapp, "https://example.com/")
+        self.assertEqual(res.get("content"), "ok")
+        old_client.close.assert_not_called()
+
+        # Expired redirect deadline should abort immediately
+        mock_redir = MagicMock(status_code=302, headers={"location": "https://example.com/hop2"})
+        new_client.stream.return_value.__enter__.return_value = mock_redir
+        fake_webapp._scrape_clients = {True: new_client}
+        with (
+            patch.dict(os.environ, {"SEARXNG_SCRAPE_VERIFY_SSL": "true"}),
+            patch("webui_next.socket.getaddrinfo", return_value=addrs),
+            patch("webui_next.time.monotonic", side_effect=[100.0, 100.1, 200.0]),
+        ):
+            res_timeout = webui_next._scrape_url_direct(fake_webapp, "https://example.com/", timeout=1.0)
+        self.assertIn("deadline", res_timeout.get("error", "").lower())
+
+    def test_frontend_bundle_favicon_privacy_state_and_settings_diff(self) -> None:
+        """Verify favicon no-referrer helper, state.lastData usage, and minimal engine settings diff."""
+        html = webui_next.AI_WORKSPACE_HTML
+        # All Google favicon requests must go through createFaviconElement with no-referrer
+        self.assertEqual(html.count("google.com/s2/favicons"), 1)
+        fn_start = html.find("function createFaviconElement(domain)")
+        self.assertNotEqual(fn_start, -1)
+        fn_end = html.find("return fav;", fn_start)
+        self.assertIn("fav.referrerPolicy = 'no-referrer'", html[fn_start:fn_end])
+
+        # state.raw typo must be gone; state.lastData must be populated and cleared on popstate
+        self.assertNotIn("state.raw =", html)
+        self.assertIn("state.lastData = res;", html)
+        self.assertIn("state.lastData = null;", html)
+
+        # Engine save uses override/diff tracking instead of posting all engines unconditionally
+        self.assertIn("_origEnabled", html)
+        self.assertIn("reset_preferences: true", html)
+        # Consistent reset count without conflicting '#opt-count = 5' override
+        reset_start = html.find("addListener('btn-reset-general-prefs'")
+        reset_block = html[reset_start : html.find("showToast('初期設定を復元しました'", reset_start)]
+        self.assertNotIn("opt-count').value = '5'", reset_block)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -731,6 +731,8 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
             "_normalize_scrape_host\n"
             "return ordered_ips, host_clean, port, safe_url\n"
             "stream('GET', safe_url, headers=headers)\n"
+            "lacolhost.com\n"
+            "_redirect_deadline\n"
         )
         self.assertEqual(self.fn(content, "webapp.py"), "ALREADY_APPLIED")
 
@@ -939,6 +941,33 @@ class TestPatchWebappScrapeRoute(unittest.TestCase):
         # Public global hosts must not be blocked statically
         self.assertFalse(is_blocked("example.com", resolve_dns=False))
         self.assertFalse(is_blocked("93.184.216.34", resolve_dns=False))
+
+    def test_scrape_blocks_extended_loopback_hosts_and_enforces_redirect_deadline(self):
+        """Verify ip6-localhost/lacolhost/localh4/traefik.me blocking and cumulative redirect deadline."""
+        content = "import warnings\nfrom flask import Flask\n\n@app.route('/search')\ndef search():\n    pass\n"
+        patched = self.fn(content, "webapp.py")
+
+        namespace: dict[str, Any] = {
+            "chr": chr,
+            "idna": idna,
+            "ipaddress": ipaddress,
+            "socket": socket,
+            "_RESERVED_TLDS": (".localhost", ".local", ".internal", ".lan", ".home.arpa", ".arpa"),
+        }
+        helpers_code = re_mod.search(
+            r"(def _is_reserved_scrape_host\(host\):.*?)(?=@app\.route\('/scrape')", patched, re_mod.DOTALL
+        )
+        self.assertIsNotNone(helpers_code)
+        assert helpers_code is not None
+        exec(helpers_code.group(1), namespace)  # noqa: S102
+        is_blocked = namespace["_is_blocked_scrape_host"]
+
+        for host in ("ip6-localhost", "ip6-loopback", "lacolhost.com", "sub.localh4.st", "traefik.me"):
+            self.assertTrue(is_blocked(host, resolve_dns=False), f"Expected blocked: {host}")
+
+        self.assertIn("_redirect_deadline = time.monotonic() + _redirect_budget", patched)
+        self.assertIn("if time.monotonic() >= _redirect_deadline:", patched)
+        self.assertIn("return _read_scrape_response(response, max_duration=remaining_dur)", patched)
 
     def test_strip_html_to_text_is_linear_and_correct(self):
         """v20 ReDoS regression: the injected scrape fallback extractor must

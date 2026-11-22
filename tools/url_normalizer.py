@@ -407,6 +407,7 @@ KNOWN_LOOPBACK_DOMAINS: tuple[str, ...] = (
 WILDCARD_DNS_DOMAINS: tuple[str, ...] = (
     ".nip.io",
     ".sslip.io",
+    ".xip.io",
 )
 
 _WILDCARD_IPV4_PATTERN: re.Pattern[str] = re.compile(r"(?:^|[.-])(?P<ip>\d{1,4}(?:[.-]\d{1,4}){3})(?=[.-]|$)")
@@ -439,12 +440,85 @@ def _is_ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address | str) -> b
     if s6to4 is not None and _is_ip_blocked(s6to4):
         return True
     teredo = getattr(ip, "teredo", None)
-    return bool(teredo is not None and (_is_ip_blocked(teredo[0]) or _is_ip_blocked(teredo[1])))
+    if teredo is not None and (_is_ip_blocked(teredo[0]) or _is_ip_blocked(teredo[1])):
+        return True
+    if ip.version == 6:
+        ip_int = int(ip)
+        # NAT64 Well-Known Prefix 64:ff9b::/96 (embedded IPv4 in low 32 bits)
+        if (ip_int >> 32) == 0x0064FF9B0000000000000000 and _is_ip_blocked(ipaddress.IPv4Address(ip_int & 0xFFFFFFFF)):
+            return True
+    return False
+
+
+def _wildcard_prefix_is_blocked(prefix: str) -> bool:
+    """Validate embedded IPs in a wildcard-DNS subdomain prefix (fail-closed if unresolved)."""
+    if not prefix:
+        return True
+
+    matched_any = False
+    consumed_spans: list[tuple[int, int]] = []
+    for match_ip in _WILDCARD_IPV4_PATTERN.finditer(prefix):
+        consumed_spans.append(match_ip.span())
+        raw_ip = match_ip.group("ip").replace("-", ".")
+        try:
+            ip_addr = ipaddress.IPv4Address(raw_ip)
+            matched_any = True
+            if _is_ip_blocked(ip_addr):
+                return True
+        except (ValueError, ipaddress.AddressValueError):
+            try:
+                packed = socket.inet_aton(raw_ip)
+                matched_any = True
+                if _is_ip_blocked(ipaddress.IPv4Address(packed)):
+                    return True
+            except (OSError, ValueError):
+                return True
+
+    for match_hex in _WILDCARD_HEX_PATTERN.finditer(prefix):
+        consumed_spans.append(match_hex.span())
+        try:
+            ip_int = int(match_hex.group("hex"), 16)
+            matched_any = True
+            if _is_ip_blocked(ipaddress.IPv4Address(ip_int)):
+                return True
+        except (ValueError, ipaddress.AddressValueError):
+            return True
+
+    # Build remainder by blanking already-validated IPv4/hex spans so octets like
+    # "93" from "93.184.216.34" are never re-parsed as single-integer IPs.
+    rem_chars = list(prefix)
+    for start, end in consumed_spans:
+        for idx in range(start, end):
+            rem_chars[idx] = "."
+    remainder = "".join(rem_chars)
+
+    for label in remainder.split("."):
+        if not label:
+            continue
+        if label.lower().startswith(("0x", "0o", "0b")) or label.isdigit():
+            try:
+                ip_int = int(label, 0)
+                if not (0 <= ip_int <= 0xFFFFFFFF) or _is_ip_blocked(ipaddress.IPv4Address(ip_int)):
+                    return True
+                matched_any = True
+            except (ValueError, ipaddress.AddressValueError):
+                return True
+        elif "-" in label:
+            candidate_v6 = label.replace("-", ":")
+            try:
+                ip_v6 = ipaddress.IPv6Address(candidate_v6)
+                matched_any = True
+                if _is_ip_blocked(ip_v6):
+                    return True
+            except (ValueError, ipaddress.AddressValueError):
+                pass
+
+    return not matched_any
 
 
 def _is_reserved_scrape_host(host: str) -> bool:
     """Check if host is a local, reserved, loopback, or private wildcard domain name."""
-    h = (host or "").strip().rstrip(".").lower()
+    h = _normalize_host_spelling((host or "").strip()).lower()
     if not h or h in ("localhost", "ip6-localhost", "ip6-loopback"):
         return True
     for tld in RESERVED_TLDS:
@@ -456,39 +530,10 @@ def _is_reserved_scrape_host(host: str) -> bool:
             return True
     for wc_dom in WILDCARD_DNS_DOMAINS:
         bare_wc = wc_dom.lstrip(".")
-        if h == bare_wc or h.endswith(wc_dom):
-            prefix = h[: -len(wc_dom)] if h.endswith(wc_dom) else ""
-            if not prefix:
-                return True
-            for match_ip in _WILDCARD_IPV4_PATTERN.finditer(prefix):
-                raw_ip = match_ip.group("ip").replace("-", ".")
-                try:
-                    ip_addr = ipaddress.IPv4Address(raw_ip)
-                    if _is_ip_blocked(ip_addr):
-                        return True
-                except (ValueError, ipaddress.AddressValueError):
-                    try:
-                        packed = socket.inet_aton(raw_ip)
-                        if _is_ip_blocked(ipaddress.IPv4Address(packed)):
-                            return True
-                    except (OSError, ValueError):
-                        pass
-            for match_hex in _WILDCARD_HEX_PATTERN.finditer(prefix):
-                try:
-                    ip_int = int(match_hex.group("hex"), 16)
-                    if _is_ip_blocked(ipaddress.IPv4Address(ip_int)):
-                        return True
-                except (ValueError, ipaddress.AddressValueError):
-                    pass
-            for label in prefix.split("."):
-                if "-" in label:
-                    candidate_v6 = label.replace("-", ":")
-                    try:
-                        ip_v6 = ipaddress.IPv6Address(candidate_v6)
-                        if _is_ip_blocked(ip_v6):
-                            return True
-                    except (ValueError, ipaddress.AddressValueError):
-                        pass
+        if h == bare_wc:
+            return True
+        if h.endswith(wc_dom):
+            return _wildcard_prefix_is_blocked(h[: -len(wc_dom)])
     return False
 
 
@@ -546,19 +591,12 @@ def is_safe_retrieval_url(url: str, resolve_dns: bool = False) -> bool:
         host = host.replace(dot, ".")
     host = host.rstrip(".")
 
-    # Zone IDs (%) are only meaningful on IPv6 literals; reject % on all other hosts
-    # so malformed hostnames like `8.8.8.8%25.internal` cannot be truncated.
+    # Zone IDs (%) are only valid on link-local IPv6 scopes (RFC 4007), which
+    # are always blocked for external retrieval, and HTTP URL zone IDs cause
+    # parser differentials between urllib, socket, and httpx. Reject any URL host
+    # containing '%' (even after validating IPv6 base structure).
     if "%" in host:
-        if ":" not in host:
-            return False
-        host_base, zone_id = host.split("%", 1)
-        if not zone_id:
-            return False
-        try:
-            ip = ipaddress.IPv6Address(host_base)
-        except ValueError:
-            return False
-        return not _is_ip_blocked(ip)
+        return False
 
     if host and ":" not in host and not host.isascii():
         try:

@@ -1109,6 +1109,39 @@ class TestAgenticSearchRegressionFixes(unittest.TestCase):
         self.assertEqual(len(hl), 1)
         self.assertIn("非同期", hl[0])
 
+    def test_academic_routing_uses_display_name_and_split_passages_respects_max_chars(self) -> None:
+        """Verify academic routing matches SearXNG 'google scholar' name, stopwords are filtered, and split_passages never hangs or exceeds max_chars."""
+        _, eng_acad = agentic_search.QueryOptimizer.get_routing("academic")
+        self.assertIn("google scholar", eng_acad.split(","))
+        self.assertNotIn("google_scholar", eng_acad.split(","))
+
+        kws = agentic_search.QueryOptimizer.extract_keywords("how to find the best python asyncio guide")
+        self.assertNotIn("how", kws)
+        self.assertNotIn("the", kws)
+        self.assertIn("python", kws)
+        self.assertIn("asyncio", kws)
+        # Fallback if every token is a stopword
+        self.assertTrue(agentic_search.QueryOptimizer.extract_keywords("this that what"))
+
+        extractor = agentic_search.BM25PassageExtractor()
+        # max_chars <= 0 must return [] immediately rather than hanging
+        self.assertEqual(extractor.split_passages("Some body text that is fairly long", max_chars=0), [])
+        self.assertEqual(extractor.split_passages("Some body text that is fairly long", max_chars=-5), [])
+
+        # Exact max_chars accounting for "\n\n" separator (2 chars, not 1)
+        para1 = "A" * 20
+        para2 = "B" * 20
+        joined = f"{para1}\n\n{para2}"
+        # With max_chars=41, len(joined)==42 so they must NOT be combined into 42 chars
+        split_41 = extractor.split_passages(joined, min_chars=5, max_chars=41)
+        self.assertEqual(len(split_41), 2)
+        self.assertTrue(all(len(p) <= 41 for p in split_41))
+
+        # Long sentence block merge boundary check
+        long_block = "First sentence is ok. " + "X" * 30 + ". " + "Y" * 30 + "."
+        split_long = extractor.split_passages(long_block, min_chars=5, max_chars=50)
+        self.assertTrue(all(len(p) <= 50 for p in split_long))
+
 
 if __name__ == "__main__":
     unittest.main()

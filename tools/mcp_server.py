@@ -376,6 +376,14 @@ def _parse_bool(val: Any, default: bool = True) -> bool:
     return default
 
 
+def _first_present(*values: Any) -> Any:
+    """Return the first value that is neither None nor an empty string."""
+    for v in values:
+        if v is not None and v != "":
+            return v
+    return None
+
+
 def _parse_bounded_int(raw: Any, default: int, minimum: int, maximum: int | None = None) -> int:
     """Coerce an untrusted tool argument to a bounded int without raising OverflowError."""
     if raw is None or isinstance(raw, bool):
@@ -438,7 +446,7 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
 
     if tool_name == "searxng_search":
         query = str(arguments.get("query") or "")
-        count = _parse_bounded_int(arguments.get("count", 5), default=5, minimum=1, maximum=50)
+        count = _parse_bounded_int(_first_present(arguments.get("count"), 5), default=5, minimum=1, maximum=50)
         categories = str(arguments.get("categories") or "")
         engines = str(arguments.get("engines") or "")
         time_range = str(arguments.get("time_range") or "")
@@ -448,7 +456,9 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         include_highlights = _parse_bool(raw_hl, default=True)
         include_domains = _clean_domain_list(arguments.get("include_domains"))
         exclude_domains = _clean_domain_list(arguments.get("exclude_domains"))
-        page = _parse_bounded_int(arguments.get("page") or arguments.get("pageno") or 1, default=1, minimum=1)
+        page = _parse_bounded_int(
+            _first_present(arguments.get("page"), arguments.get("pageno"), 1), default=1, minimum=1
+        )
 
         use_unified = (
             mode in ("fast", "balanced", "deep", "scrape")
@@ -524,14 +534,16 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         ret_mode = str(arguments.get("mode") or "balanced").strip().lower()
         if ret_mode not in ("fast", "balanced", "deep"):
             ret_mode = "balanced"
-        count = _parse_bounded_int(arguments.get("count", 5), default=5, minimum=1, maximum=50)
+        count = _parse_bounded_int(_first_present(arguments.get("count"), 5), default=5, minimum=1, maximum=50)
         categories = str(arguments.get("categories") or "")
         engines = str(arguments.get("engines") or "")
         time_range = str(arguments.get("time_range") or "")
         include_domains = _clean_domain_list(arguments.get("include_domains"))
         exclude_domains = _clean_domain_list(arguments.get("exclude_domains"))
         out_format = str(arguments.get("format") or "markdown").strip().lower()
-        page = _parse_bounded_int(arguments.get("page") or arguments.get("pageno") or 1, default=1, minimum=1)
+        page = _parse_bounded_int(
+            _first_present(arguments.get("page"), arguments.get("pageno"), 1), default=1, minimum=1
+        )
 
         ret_kwargs = {
             "query": query,
@@ -592,16 +604,22 @@ def handle_tools_call(msg_id: Any, params: dict[str, Any]) -> dict[str, Any]:
     elif tool_name == "searxng_deep_search":
         query = str(arguments.get("query") or "")
         search_depth = str(arguments.get("search_depth") or "advanced")
-        max_results = _parse_bounded_int(arguments.get("max_results", 5), default=5, minimum=1, maximum=50)
+        max_results = _parse_bounded_int(
+            _first_present(arguments.get("max_results"), 5), default=5, minimum=1, maximum=50
+        )
         raw_hl = arguments.get("include_highlights")
         include_highlights = _parse_bool(raw_hl, default=True)
         include_domains = _clean_domain_list(arguments.get("include_domains"))
         exclude_domains = _clean_domain_list(arguments.get("exclude_domains"))
-        max_tokens = _parse_bounded_int(arguments.get("max_tokens", 3000), default=3000, minimum=500, maximum=16000)
-        page = _parse_bounded_int(arguments.get("page") or arguments.get("pageno") or 1, default=1, minimum=1)
+        max_tokens = _parse_bounded_int(
+            _first_present(arguments.get("max_tokens"), 3000), default=3000, minimum=500, maximum=16000
+        )
+        page = _parse_bounded_int(
+            _first_present(arguments.get("page"), arguments.get("pageno"), 1), default=1, minimum=1
+        )
 
-        categories = str(arguments.get("categories") or arguments.get("category") or "").strip()
-        engines = str(arguments.get("engines") or arguments.get("engine") or "").strip()
+        categories = str(_first_present(arguments.get("categories"), arguments.get("category"), "")).strip()
+        engines = str(_first_present(arguments.get("engines"), arguments.get("engine"), "")).strip()
         time_range = str(arguments.get("time_range") or "").strip()
 
         deep_kwargs = {

@@ -120,6 +120,14 @@ def _strip_html_to_text(sample_html: str | None) -> str:
     return re.sub(r"\s+", " ", extractor.get_text()).strip()
 
 
+def _first_present(*values: Any) -> Any:
+    """Return the first value that is neither None nor an empty string."""
+    for v in values:
+        if v is not None and v != "":
+            return v
+    return None
+
+
 def _parse_bool(val: Any, default: bool = True) -> bool:
     """Parse boolean query/body parameter safely."""
     if val is None:
@@ -406,9 +414,8 @@ def _scrape_url_direct(
                     or getattr(webapp_mod, "_scrape_client_verify_ssl", None) != verify_ssl
                 ):
                     scrape_limits = httpx_mod.Limits(max_keepalive_connections=0, max_connections=50)
-                    if getattr(webapp_mod, "_scrape_client", None) is not None:
-                        with contextlib.suppress(Exception):
-                            webapp_mod._scrape_client.close()
+                    # Do not call .close() on the prior shared client while holding the lock:
+                    # concurrent worker threads may still have an in-flight stream open on it.
                     webapp_mod._scrape_client = httpx_mod.Client(
                         timeout=httpx_mod.Timeout(10.0, connect=5.0, read=10.0, write=5.0),
                         follow_redirects=False,
@@ -420,15 +427,19 @@ def _scrape_url_direct(
                 active_client = webapp_mod._scrape_client
 
         eff_stream_timeout = _parse_float(timeout, 10.0, 0.5, 60.0)
-        req_timeout = httpx_mod.Timeout(
-            eff_stream_timeout,
-            connect=min(eff_stream_timeout, 5.0),
-            read=eff_stream_timeout,
-            write=min(eff_stream_timeout, 5.0),
-        )
+        redirect_deadline = time.monotonic() + eff_stream_timeout
         current_url = clean_url
         downloaded = ""
         for _ in range(5):
+            remaining_s = redirect_deadline - time.monotonic()
+            if remaining_s <= 0:
+                raise TimeoutError("Scrape redirect deadline exceeded")
+            hop_timeout = httpx_mod.Timeout(
+                remaining_s,
+                connect=min(remaining_s, 5.0),
+                read=remaining_s,
+                write=min(remaining_s, 5.0),
+            )
             cur_parsed = _parse_url(current_url)
             if (cur_parsed.scheme or "").lower() not in ("http", "https"):
                 raise blocked_exc_cls(f"Blocked invalid scheme during redirect: {cur_parsed.scheme}")
@@ -436,13 +447,12 @@ def _scrape_url_direct(
             headers = {"User-Agent": ua}
             with (
                 webapp_mod.pinned_dns(original_host, safe_ips, port),
-                active_client.stream("GET", safe_url, headers=headers, timeout=req_timeout) as response,
+                active_client.stream("GET", safe_url, headers=headers, timeout=hop_timeout) as response,
             ):
                 if response.status_code not in (301, 302, 303, 307, 308):
                     response.raise_for_status()
-                    downloaded = webapp_mod._read_scrape_response(
-                        response, max_duration=min(max(eff_stream_timeout, 2.0), 15.0)
-                    )
+                    read_budget = max(0.1, redirect_deadline - time.monotonic())
+                    downloaded = webapp_mod._read_scrape_response(response, max_duration=min(read_budget, 15.0))
                     break
                 location = response.headers.get("location")
                 if not location or not location.strip():
@@ -1036,6 +1046,44 @@ def get_engines_settings_data(
     avg_latency = round(total_latency / latency_count, 1) if latency_count > 0 else 0
     avg_rel = round(total_reliability / rel_count, 1) if rel_count > 0 else 100.0
 
+    # Resolve configured defaults and active cookie/preference overrides for autocomplete & safesearch
+    default_ac = "duckduckgo"
+    default_ss = "1"
+    searx_loaded = sys.modules.get("searx")
+    search_cfg: dict[str, Any] = {}
+    if searx_loaded is not None and isinstance(getattr(searx_loaded, "settings", None), dict):
+        search_cfg = searx_loaded.settings.get("search") or {}
+    elif webapp_mod is not None:
+        w_searx = getattr(webapp_mod, "searx", None)
+        if w_searx is not None and isinstance(getattr(w_searx, "settings", None), dict):
+            search_cfg = w_searx.settings.get("search") or {}
+    if isinstance(search_cfg, dict):
+        cfg_ac = str(search_cfg.get("autocomplete") or "").strip().lower()
+        if cfg_ac:
+            default_ac = cfg_ac
+        cfg_ss = search_cfg.get("safe_search")
+        if cfg_ss is not None and str(cfg_ss).strip() in ("0", "1", "2"):
+            default_ss = str(cfg_ss).strip()
+
+    pref_ac = ""
+    pref_ss = ""
+    if webapp_mod is not None:
+        with contextlib.suppress(Exception):
+            sxng_req = getattr(webapp_mod, "sxng_request", None)
+            prefs = getattr(sxng_req, "preferences", None) if sxng_req else None
+            if prefs and hasattr(prefs, "get_value"):
+                val_ac = str(prefs.get_value("autocomplete") or "").strip().lower()
+                if val_ac:
+                    pref_ac = val_ac
+                val_ss = str(prefs.get_value("safesearch") or "").strip()
+                if val_ss in ("0", "1", "2"):
+                    pref_ss = val_ss
+
+    cookie_ac = (cookies.get("autocomplete") or "").strip().lower()
+    eff_ac = cookie_ac or pref_ac or default_ac
+    cookie_ss = (cookies.get("safesearch") or "").strip()
+    eff_ss = cookie_ss if cookie_ss in ("0", "1", "2") else (pref_ss or default_ss)
+
     return {
         "success": True,
         "total_engines": len(engine_items),
@@ -1045,7 +1093,8 @@ def get_engines_settings_data(
         "avg_reliability": avg_rel,
         "categories": category_names,
         "engines": engine_items,
-        "autocomplete": (cookies.get("autocomplete") or "").strip() or "duckduckgo",
+        "autocomplete": eff_ac,
+        "safesearch": eff_ss,
     }
 
 
@@ -1354,6 +1403,12 @@ def apply_settings_cookies(response: Any, payload: dict[str, Any]) -> None:
     # cross-site requests (CSRF via cookie-based state) nor be readable
     # from injected script.
     cookie_kwargs = {"max_age": cookie_max_age, "path": "/", "samesite": "Lax", "httponly": True}
+    if payload.get("reset_preferences") is True:
+        for pref_cookie in ("safesearch", "autocomplete"):
+            if hasattr(response, "delete_cookie"):
+                response.delete_cookie(pref_cookie, path="/", samesite="Lax", httponly=True)
+            else:
+                response.set_cookie(pref_cookie, "", max_age=0, path="/", samesite="Lax", httponly=True)
     if "disabled_engines" in payload:
         clean_dis = _clean_engine_names(payload.get("disabled_engines"))
         response.set_cookie("disabled_engines", ",".join(clean_dis), **cookie_kwargs)
@@ -1390,11 +1445,17 @@ def save_engines_settings_data(
     dis_str = ",".join(clean_dis)
     en_str = ",".join(clean_en)
 
-    # 1. Persist engine enablement directly into config/settings.yml.
-    # `persisted` is True for a successful no-op too; only an actual failure
-    # (missing/unwritable settings.yml) must make the UI warn.
-    sync_result = sync_engines_to_settings_file_result(clean_en, clean_dis)
-    synced_yml = sync_result.persisted
+    has_engine_changes = bool(clean_en or clean_dis)
+    has_general_prefs = any(k in payload for k in ("safesearch", "autocomplete", "default_mode", "reset_preferences"))
+
+    # 1. Persist engine enablement directly into config/settings.yml when engines were supplied.
+    # General-preferences-only POSTs ({safesearch, default_mode, autocomplete}) must not fail YAML sync
+    # with "no engine names provided".
+    if has_engine_changes or not has_general_prefs:
+        sync_result = sync_engines_to_settings_file_result(clean_en, clean_dis)
+        synced_yml = sync_result.persisted
+    else:
+        synced_yml = True
 
     # 2. Live in-memory update for the running process
     se = None
@@ -1417,8 +1478,26 @@ def save_engines_settings_data(
         with contextlib.suppress(Exception):
             sxng_req = getattr(webapp_mod, "sxng_request", None)
             prefs = getattr(sxng_req, "preferences", None) if sxng_req else None
-            if prefs and hasattr(prefs, "engines") and hasattr(prefs.engines, "parse_cookie"):
+            if (
+                prefs
+                and (has_engine_changes or "enabled_engines" in payload or "disabled_engines" in payload)
+                and hasattr(prefs, "engines")
+                and hasattr(prefs.engines, "parse_cookie")
+            ):
                 prefs.engines.parse_cookie(dis_str, en_str)
+            if prefs and hasattr(prefs, "key_value_settings"):
+                if "safesearch" in payload:
+                    ss_val = str(payload["safesearch"]).strip()
+                    ss_setting = prefs.key_value_settings.get("safesearch")
+                    if ss_val in ("0", "1", "2") and ss_setting and hasattr(ss_setting, "parse"):
+                        ss_setting.parse(ss_val)
+                if "autocomplete" in payload:
+                    ac_val = str(payload["autocomplete"]).strip().lower()
+                    if ac_val in ("off", "none", "0", "false", ""):
+                        ac_val = ""
+                    ac_setting = prefs.key_value_settings.get("autocomplete")
+                    if ac_setting and hasattr(ac_setting, "parse"):
+                        ac_setting.parse(ac_val)
 
     # 4. Set persistent session cookies if response object provided
     if response is not None:
@@ -4133,6 +4212,17 @@ footer.ws-footer {
         return (http === '#') ? '' : http;
       }
 
+      function createFaviconElement(domain) {
+        var fav = document.createElement('img');
+        fav.className = 'card-favicon';
+        fav.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(domain) + '&sz=32';
+        fav.alt = '';
+        fav.loading = 'lazy';
+        fav.referrerPolicy = 'no-referrer';
+        fav.onerror = function () { this.style.display = 'none'; };
+        return fav;
+      }
+
       function escapeShellDoubleQuoted(str) {
         return String(str == null ? '' : str)
           .replace(/[\\$"\\`!]/g, function (ch) { return String.fromCharCode(92) + ch; });
@@ -4408,37 +4498,42 @@ footer.ws-footer {
 
         suppressUrlSync = true;
         try {
-          setMode(m, true);
-          if (q) {
-            if (isUrlText(q)) runScrapeMode(q);
-            else if (m === 'classic') runClassicSearch(q, pg);
-            else runUnifiedSearch(q);
+          if (q && isUrlText(q)) {
+            if (m !== 'deep') setMode('deep', true);
+            else setMode(m, true);
+            runScrapeMode(q);
           } else {
-            cancelPendingRequest();
-            activeRequestContainer = null;
-            var rList = document.getElementById('results-container');
-            if (rList && initialResultsEmptyHtml) {
-              rList.innerHTML = initialResultsEmptyHtml;
+            setMode(m, true);
+            if (q) {
+              if (m === 'classic') runClassicSearch(q, pg);
+              else runUnifiedSearch(q);
+            } else {
+              cancelPendingRequest();
+              activeRequestContainer = null;
+              var rList = document.getElementById('results-container');
+              if (rList && initialResultsEmptyHtml) {
+                rList.innerHTML = initialResultsEmptyHtml;
+              }
+              var cList = document.getElementById('classic-results-container');
+              if (cList && initialClassicEmptyHtml) {
+                cList.innerHTML = initialClassicEmptyHtml;
+              }
+              var tBar = document.getElementById('telemetry-bar');
+              if (tBar) tBar.classList.remove('visible');
+              var cMeta = document.getElementById('classic-telemetry-pill');
+              if (cMeta) cMeta.style.display = 'none';
+              var cAns = document.getElementById('classic-answers-container');
+              if (cAns) cAns.innerHTML = '';
+              var cPag = document.getElementById('classic-pagination-bar');
+              if (cPag) cPag.style.display = 'none';
+              state.markdown = '';
+              state.prompt = '';
+              state.jsonStr = '';
+              state.curlStr = '';
+              state.lastData = null;
+              updateContextView();
+              bindSampleQueryChips();
             }
-            var cList = document.getElementById('classic-results-container');
-            if (cList && initialClassicEmptyHtml) {
-              cList.innerHTML = initialClassicEmptyHtml;
-            }
-            var tBar = document.getElementById('telemetry-bar');
-            if (tBar) tBar.classList.remove('visible');
-            var cMeta = document.getElementById('classic-telemetry-pill');
-            if (cMeta) cMeta.style.display = 'none';
-            var cAns = document.getElementById('classic-answers-container');
-            if (cAns) cAns.innerHTML = '';
-            var cPag = document.getElementById('classic-pagination-bar');
-            if (cPag) cPag.style.display = 'none';
-            state.markdown = '';
-            state.prompt = '';
-            state.jsonStr = '';
-            state.curlStr = '';
-            state.raw = null;
-            updateContextView();
-            bindSampleQueryChips();
           }
         } finally {
           suppressUrlSync = false;
@@ -4813,7 +4908,6 @@ footer.ws-footer {
           var qVal = document.getElementById('q').value.trim();
           if (qVal) {
             runClassicSearch(qVal, 1);
-            updateUrlState(false);
           }
         });
       });
@@ -5106,13 +5200,7 @@ footer.ws-footer {
           })();
 
           if (domain) {
-            var fav = document.createElement('img');
-            fav.className = 'card-favicon';
-            fav.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(domain) + '&sz=32';
-            fav.alt = '';
-            fav.loading = 'lazy';
-            fav.onerror = function () { this.style.display = 'none'; };
-            domainWrap.appendChild(fav);
+            domainWrap.appendChild(createFaviconElement(domain));
           }
 
           var domSpan = document.createElement('span');
@@ -5286,6 +5374,7 @@ footer.ws-footer {
               container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">' + icon('alert') + ' エラー</h2><p>' + escapeHtml(res.error) + '</p></div>';
               return;
             }
+            state.lastData = res;
             state.markdown = res.markdown || '';
             state.prompt = res.rag_prompt || '';
             state.jsonStr = JSON.stringify(res, null, 2);
@@ -5536,13 +5625,7 @@ footer.ws-footer {
               try { return new URL(item.url).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
             })();
             if (domain) {
-              var fav = document.createElement('img');
-              fav.className = 'card-favicon';
-              fav.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(domain) + '&sz=32';
-              fav.alt = '';
-              fav.loading = 'lazy';
-              fav.onerror = function () { this.style.display = 'none'; };
-              urlSpan.appendChild(fav);
+              urlSpan.appendChild(createFaviconElement(domain));
             }
             var dName = document.createElement('span');
             dName.textContent = domain || item.url;
@@ -5631,13 +5714,7 @@ footer.ws-footer {
           })();
 
           if (domain) {
-            var fav = document.createElement('img');
-            fav.className = 'card-favicon';
-            fav.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(domain) + '&sz=32';
-            fav.alt = '';
-            fav.loading = 'lazy';
-            fav.onerror = function () { this.style.display = 'none'; };
-            urlSpan.appendChild(fav);
+            urlSpan.appendChild(createFaviconElement(domain));
           }
           var dName = document.createElement('span');
           dName.textContent = domain || item.url;
@@ -5912,6 +5989,7 @@ footer.ws-footer {
               container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">' + icon('alert') + ' 抽出エラー</h2><p>' + escapeHtml(res.error) + '</p></div>';
               return;
             }
+            state.lastData = res;
             state.markdown = res.markdown || res.content || '';
             state.prompt = res.rag_prompt || ('以下のWebページ抽出本文を根拠として要点を解説してください。\n\nURL: ' + targetUrl + '\n\n' + state.markdown);
             state.jsonStr = JSON.stringify(res, null, 2);
@@ -6084,6 +6162,7 @@ footer.ws-footer {
             e.enabled = chk.checked;
             e.status = e.enabled ? 'online' : 'disabled';
             dot.style.background = e.enabled ? 'var(--emerald)' : 'var(--text-muted)';
+            dot.title = e.enabled ? '稼働中' : '無効';
             setUnsavedChanges(true);
             updateOverviewStats();
           });
@@ -6174,8 +6253,17 @@ footer.ws-footer {
         fetchJson('/api/settings/engines')
           .then(function (res) {
             if (!res.success) throw new Error('Failed to load engines');
-            state.settingsEngines = res.engines || [];
+            state.settingsEngines = (res.engines || []).map(function (eng) {
+              eng._origEnabled = !!eng.enabled;
+              return eng;
+            });
             state.settingsCategories = res.categories || [];
+            if (!safeGetStorage('sxng_pref_safesearch', null) && res.safesearch !== undefined && document.getElementById('pref-safesearch')) {
+              document.getElementById('pref-safesearch').value = String(res.safesearch);
+            }
+            if (!safeGetStorage('sxng_pref_autocomplete', null) && res.autocomplete && document.getElementById('pref-autocomplete')) {
+              document.getElementById('pref-autocomplete').value = String(res.autocomplete);
+            }
 
             document.getElementById('stat-active-engines').textContent = res.active_engines + ' / ' + res.total_engines;
             document.getElementById('stat-suspended-engines').textContent = res.suspended_engines;
@@ -6327,9 +6415,20 @@ footer.ws-footer {
         var disabled = [];
         var enabled = [];
         state.settingsEngines.forEach(function (e) {
-          if (e.enabled) enabled.push(e.name);
-          else disabled.push(e.name);
+          var isEn = !!e.enabled;
+          var defEn = !!e.default_enabled;
+          var origEn = (e._origEnabled !== undefined) ? !!e._origEnabled : defEn;
+          if (isEn !== defEn || isEn !== origEn) {
+            if (isEn) enabled.push(e.name);
+            else disabled.push(e.name);
+          }
         });
+
+        if (!enabled.length && !disabled.length) {
+          setUnsavedChanges(false);
+          showToast('変更はありません');
+          return;
+        }
 
         fetch('/api/settings/engines', {
           method: 'POST',
@@ -6348,6 +6447,9 @@ footer.ws-footer {
               showToast('ブラウザには保存しましたが、設定ファイルに書き込めませんでした', true);
               return;
             }
+            state.settingsEngines.forEach(function (e) {
+              e._origEnabled = !!e.enabled;
+            });
             showToast('検索エンジン構成を保存しました');
             // Clear the dirty flag only after a confirmed save so the
             // beforeunload guard stays active if the POST failed.
@@ -6400,6 +6502,11 @@ footer.ws-footer {
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.json();
           })
+          .then(function (res) {
+            if (res && res.synced_settings_yml === false) {
+              throw new Error('Failed to persist preferences');
+            }
+          })
           .then(function () {
             safeSetStorage('sxng_pref_mode', mode);
             safeSetStorage('sxng_pref_safesearch', ss);
@@ -6418,7 +6525,6 @@ footer.ws-footer {
         if (document.getElementById('pref-default-mode')) document.getElementById('pref-default-mode').value = 'deep';
         if (document.getElementById('pref-safesearch')) document.getElementById('pref-safesearch').value = '1';
         applySearchPreferenceControls('10', '3000');
-        if (document.getElementById('opt-count')) document.getElementById('opt-count').value = '5';
         if (document.getElementById('pref-autocomplete')) {
           document.getElementById('pref-autocomplete').value = 'duckduckgo';
         }
@@ -6429,6 +6535,11 @@ footer.ws-footer {
           localStorage.removeItem('sxng_pref_tokens');
           localStorage.removeItem('sxng_pref_autocomplete');
         } catch (e) {}
+        fetch('/api/settings/engines', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reset_preferences: true })
+        }).catch(function () {});
         showToast('初期設定を復元しました');
       });
 
@@ -6854,14 +6965,20 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                         else:
                             results = [x for x in parsed if isinstance(x, str) and x.strip() and x != "[object Object]"]
 
-        if not results and orig_autocompleter is None:
+        if not results:
             with contextlib.suppress(Exception):
                 import searx.autocomplete as sxng_ac
 
+                cfg_ac = ""
+                if webapp_mod is not None:
+                    w_searx = getattr(webapp_mod, "searx", None)
+                    w_settings = getattr(w_searx, "settings", None) if w_searx else None
+                    if isinstance(w_settings, dict):
+                        cfg_ac = str((w_settings.get("search") or {}).get("autocomplete") or "").strip().lower()
+
                 backends_dict = getattr(sxng_ac, "backends", {})
-                preferred = (
-                    effective_backend if effective_backend and effective_backend in backends_dict else "duckduckgo"
-                )
+                candidate_pref = effective_backend or cfg_ac
+                preferred = candidate_pref if candidate_pref and candidate_pref in backends_dict else "duckduckgo"
                 fallback_backends = [preferred]
                 if "duckduckgo" not in fallback_backends:
                     fallback_backends.append("duckduckgo")
@@ -6952,64 +7069,115 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
     # but a rebinding attacker can send JSON directly — so the Host header
     # must match a locally trusted name.
     _STATE_CHANGING_PATHS = frozenset({"/api/settings/engines", "/preferences", "/clear_cookies"})
-    _TRUSTED_HOST_NAMES = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
+    _LOOPBACK_HOST_NAMES = frozenset({"127.0.0.1", "localhost", "::1"})
+    _BLOCKED_FETCH_DESTS = frozenset({"image", "script", "style", "font", "audio", "video", "embed", "object"})
+
+    def _split_host_port(raw_host: str) -> tuple[str, int | None]:
+        h = (raw_host or "").strip().lower()
+        if not h:
+            return "", None
+        if h.startswith("["):
+            end = h.find("]")
+            if end == -1:
+                return h, None
+            name = h[1:end]
+            rest = h[end + 1 :]
+            if rest.startswith(":") and rest[1:].isdigit():
+                return name, int(rest[1:])
+            return name, None
+        if h.count(":") == 1:
+            name_part, port_part = h.rsplit(":", 1)
+            if port_part.isdigit():
+                return name_part, int(port_part)
+        return h, None
+
+    def _configured_base_origin() -> tuple[str, int | None, str]:
+        configured = (os.environ.get("SEARXNG_BASE_URL") or "").strip()
+        if not configured:
+            return "", None, ""
+        try:
+            p = urllib.parse.urlsplit(configured)
+            scheme = (p.scheme or "").lower()
+            host = (p.hostname or "").lower()
+            port = p.port or (443 if scheme == "https" else (80 if scheme == "http" else None))
+            return host, port, scheme
+        except ValueError:
+            return "", None, ""
 
     def _request_host_trusted() -> bool:
-        host = (request.host or "").lower().strip()
-        # Strip the port (Host may be "127.0.0.1:8888" or bare "localhost").
-        if host.startswith("["):
-            host_name = host.split("]", 1)[0] + "]" if "]" in host else host
-        else:
-            host_name = host.rsplit(":", 1)[0] if ":" in host else host
-        if host_name in _TRUSTED_HOST_NAMES:
+        req_name, req_port = _split_host_port(request.host or "")
+        if not req_name:
+            return False
+        if req_name in _LOOPBACK_HOST_NAMES:
             return True
         # Honor the configured public base URL (reverse-proxy deployments)
-        configured = (os.environ.get("SEARXNG_BASE_URL") or "").strip()
-        if configured:
-            with contextlib.suppress(ValueError):
-                parsed = urllib.parse.urlsplit(configured)
-                if (parsed.hostname or "").lower() == host_name.strip("[]"):
-                    return True
-        bind_addr = (os.environ.get("SEARXNG_BIND_ADDRESS") or "").strip().lower()
-        return bool(bind_addr and bind_addr != "0.0.0.0" and host_name.strip("[]") == bind_addr.strip("[]"))
+        base_host, base_port, _ = _configured_base_origin()
+        if base_host and req_name == base_host:
+            return not (base_port is not None and req_port is not None and req_port != base_port)
+        bind_addr = (os.environ.get("SEARXNG_BIND_ADDRESS") or "").strip().lower().strip("[]")
+        return bool(bind_addr and bind_addr not in ("0.0.0.0", "::") and req_name == bind_addr)
+
+    def _is_allowed_origin(url_val: str) -> bool:
+        clean = (url_val or "").strip()
+        if not clean or clean.lower() == "null":
+            return False
+        try:
+            parsed = urllib.parse.urlsplit(clean)
+        except ValueError:
+            return False
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in ("http", "https"):
+            return False
+        o_name = (parsed.hostname or "").lower()
+        if not o_name:
+            return False
+        o_port = parsed.port or (443 if scheme == "https" else 80)
+
+        req_name, req_port = _split_host_port(request.host or "")
+        if req_name in _LOOPBACK_HOST_NAMES:
+            if o_name not in _LOOPBACK_HOST_NAMES:
+                return False
+            if req_port is not None:
+                return o_port == req_port
+            # Loopback Host header omitted port (standard port or Flask test_client default)
+            allowed_ports = {80, 443, 8888}
+            cfg_port_raw = (os.environ.get("SEARXNG_PORT") or "").strip()
+            if cfg_port_raw.isdigit():
+                allowed_ports.add(int(cfg_port_raw))
+            return o_port in allowed_ports
+
+        # Non-loopback deployment: strictly require matching host & port (never accept loopback Origins)
+        base_host, base_port, _ = _configured_base_origin()
+        host_ok = o_name == req_name or (base_host != "" and o_name == base_host)
+        if not host_ok:
+            return False
+        target_port = req_port if req_port is not None else base_port
+        if target_port is not None:
+            return o_port == target_port
+        return o_port in (80, 443)
 
     @app.before_request
     def sxng_state_change_guard() -> Any:
         norm_path = request.path.rstrip("/") or "/"
-        if request.method in ("POST", "PUT", "DELETE") and norm_path in _STATE_CHANGING_PATHS:
+        is_mutating = request.method in ("POST", "PUT", "DELETE") and norm_path in _STATE_CHANGING_PATHS
+        is_clear_cookies_get = request.method == "GET" and norm_path == "/clear_cookies"
+        if is_mutating or is_clear_cookies_get:
             sec_fetch_site = (request.headers.get("Sec-Fetch-Site") or "").strip().lower()
             if sec_fetch_site == "cross-site":
                 return jsonify({"error": "Cross-site request rejected"}), 403
+            if is_clear_cookies_get:
+                sec_fetch_dest = (request.headers.get("Sec-Fetch-Dest") or "").strip().lower()
+                if sec_fetch_dest in _BLOCKED_FETCH_DESTS:
+                    return jsonify({"error": "Cross-context subresource request rejected"}), 403
 
-            req_raw = (request.host or "").lower().strip()
-            if req_raw.startswith("[") and "]" in req_raw:
-                req_name = req_raw[1 : req_raw.index("]")]
-            else:
-                req_name = req_raw.rsplit(":", 1)[0] if ":" in req_raw else req_raw
-
-            # Standard browser CSRF defense: a cross-site form cannot set a
-            # custom Origin; fetch/XHR always carry it for cross-origin calls.
             origin = (request.headers.get("Origin") or "").strip()
             if origin:
-                if origin.lower() == "null":
-                    return jsonify({"error": "Cross-origin request rejected"}), 403
-                try:
-                    o_parsed = urllib.parse.urlsplit(origin)
-                except ValueError:
-                    return jsonify({"error": "Cross-origin request rejected"}), 403
-                o_name = (o_parsed.hostname or "").lower()
-                if not o_name or (o_name != req_name and o_name not in _TRUSTED_HOST_NAMES):
+                if not _is_allowed_origin(origin):
                     return jsonify({"error": "Cross-origin request rejected"}), 403
             else:
                 referer = (request.headers.get("Referer") or "").strip()
-                if referer:
-                    try:
-                        r_parsed = urllib.parse.urlsplit(referer)
-                    except ValueError:
-                        return jsonify({"error": "Cross-origin request rejected"}), 403
-                    r_name = (r_parsed.hostname or "").lower()
-                    if not r_name or (r_name != req_name and r_name not in _TRUSTED_HOST_NAMES):
-                        return jsonify({"error": "Cross-origin request rejected"}), 403
+                if referer and not _is_allowed_origin(referer):
+                    return jsonify({"error": "Cross-origin request rejected"}), 403
             if not _request_host_trusted():
                 return jsonify({"error": "Untrusted Host header"}), 403
         return None
@@ -7126,10 +7294,20 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         payload = request.get_json(silent=True) if request.is_json else None
         payload = payload if isinstance(payload, dict) else {}
 
-        url = request.values.get("url") or payload.get("url") or ""
-        query = request.values.get("q") or request.values.get("query") or payload.get("q") or payload.get("query") or ""
-        max_len = _parse_int(request.values.get("max_length") or payload.get("max_length"), 8000, 500, 50000)
-        timeout = _parse_float(request.values.get("timeout") or payload.get("timeout"), 10.0, 1.0, 60.0)
+        url = _first_present(request.values.get("url"), payload.get("url")) or ""
+        query = (
+            _first_present(
+                request.values.get("q"),
+                request.values.get("query"),
+                payload.get("q"),
+                payload.get("query"),
+            )
+            or ""
+        )
+        max_len = _parse_int(
+            _first_present(request.values.get("max_length"), payload.get("max_length")), 8000, 500, 50000
+        )
+        timeout = _parse_float(_first_present(request.values.get("timeout"), payload.get("timeout")), 10.0, 1.0, 60.0)
 
         if not isinstance(url, str) or not url.strip():
             return jsonify({"error": "No URL provided", "url": "", "content": ""}), 400
@@ -7165,18 +7343,20 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         payload = payload if isinstance(payload, dict) else {}
 
         query = (
-            request.values.get("q")
-            or request.values.get("query")
-            or request.values.get("url")
-            or payload.get("q")
-            or payload.get("query")
-            or payload.get("url")
+            _first_present(
+                request.values.get("q"),
+                request.values.get("query"),
+                request.values.get("url"),
+                payload.get("q"),
+                payload.get("query"),
+                payload.get("url"),
+            )
             or ""
         )
-        out_fmt = (
-            request.values.get("format")
-            or payload.get("format")
-            or ("markdown" if "text/markdown" in (request.headers.get("Accept") or "") else "json")
+        out_fmt = _first_present(
+            request.values.get("format"),
+            payload.get("format"),
+            "markdown" if "text/markdown" in (request.headers.get("Accept") or "") else "json",
         )
         out_fmt = str(out_fmt).strip().lower()
 
@@ -7185,55 +7365,65 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
                 return Response("### Error\n\nNo query provided.", status=400, mimetype="text/markdown")
             return jsonify({"error": "No query", "query": "", "results": []}), 400
 
-        mode = request.values.get("mode") or payload.get("mode") or "auto"
-        depth = (
-            request.values.get("depth")
-            or request.values.get("search_depth")
-            or payload.get("search_depth")
-            or payload.get("depth")
-            or "advanced"
+        mode = _first_present(request.values.get("mode"), payload.get("mode"), "auto")
+        depth = _first_present(
+            request.values.get("depth"),
+            request.values.get("search_depth"),
+            payload.get("search_depth"),
+            payload.get("depth"),
+            "advanced",
         )
-        raw_max_results = (
-            request.values.get("max_results")
-            or request.values.get("count")
-            or request.values.get("n")
-            or payload.get("max_results")
-            or payload.get("count")
+        raw_max_results = _first_present(
+            request.values.get("max_results"),
+            request.values.get("count"),
+            request.values.get("n"),
+            payload.get("max_results"),
+            payload.get("count"),
+            payload.get("n"),
         )
         max_results = _parse_int(raw_max_results, 5, 1, 50)
-        max_tokens = _parse_int(request.values.get("max_tokens") or payload.get("max_tokens"), 3000, 500, 20000)
-        raw_page = (
-            request.values.get("page") or request.values.get("pageno") or payload.get("page") or payload.get("pageno")
+        max_tokens = _parse_int(
+            _first_present(request.values.get("max_tokens"), payload.get("max_tokens")), 3000, 500, 20000
+        )
+        raw_page = _first_present(
+            request.values.get("page"),
+            request.values.get("pageno"),
+            payload.get("page"),
+            payload.get("pageno"),
         )
         pageno = _parse_int(raw_page, 1, 1, 100)
         focus_query = (
-            request.values.get("focus_query")
-            or request.values.get("focus_q")
-            or payload.get("focus_query")
-            or payload.get("focus_q")
+            _first_present(
+                request.values.get("focus_query"),
+                request.values.get("focus_q"),
+                payload.get("focus_query"),
+                payload.get("focus_q"),
+            )
             or ""
         )
-        raw_scrape_len = (
-            request.values.get("max_scrape_length")
-            or request.values.get("max_length")
-            or payload.get("max_scrape_length")
-            or payload.get("max_length")
+        raw_scrape_len = _first_present(
+            request.values.get("max_scrape_length"),
+            request.values.get("max_length"),
+            payload.get("max_scrape_length"),
+            payload.get("max_length"),
         )
         max_scrape_length = _parse_int(raw_scrape_len, 8000, 500, 50000)
         categories = _parse_csv_param(
-            request.values.get("categories")
-            or request.values.get("category")
-            or payload.get("categories")
-            or payload.get("category")
+            _first_present(
+                request.values.get("categories"),
+                request.values.get("category"),
+                payload.get("categories"),
+                payload.get("category"),
+            )
         )
-        engines = _parse_csv_param(request.values.get("engines") or payload.get("engines"))
-        time_range = _parse_csv_param(request.values.get("time_range") or payload.get("time_range"))
-        raw_timeout = request.values.get("timeout") or payload.get("timeout")
+        engines = _parse_csv_param(_first_present(request.values.get("engines"), payload.get("engines")))
+        time_range = _parse_csv_param(_first_present(request.values.get("time_range"), payload.get("time_range")))
+        raw_timeout = _first_present(request.values.get("timeout"), payload.get("timeout"))
         timeout = _parse_float(raw_timeout, 15.0, 1.0, 60.0) if raw_timeout is not None else None
-        raw_base_url = request.values.get("base_url") or payload.get("base_url")
+        raw_base_url = _first_present(request.values.get("base_url"), payload.get("base_url"))
         base_url = str(raw_base_url).strip() if raw_base_url else None
         inc_hl = _parse_bool(
-            request.values.get("include_highlights", payload.get("include_highlights")),
+            _first_present(request.values.get("include_highlights"), payload.get("include_highlights")),
             default=True,
         )
 
@@ -7301,23 +7491,39 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
         payload = request.get_json(silent=True) if request.is_json else None
         payload = payload if isinstance(payload, dict) else {}
 
-        query = request.values.get("q") or request.values.get("query") or payload.get("q") or payload.get("query") or ""
+        query = (
+            _first_present(
+                request.values.get("q"),
+                request.values.get("query"),
+                payload.get("q"),
+                payload.get("query"),
+            )
+            or ""
+        )
         if not isinstance(query, str) or not query.strip():
             return jsonify({"error": "No query", "schema_version": "1.0", "results": []}), 400
 
-        mode = request.values.get("mode") or payload.get("mode") or "balanced"
-        raw_count = request.values.get("count") or request.values.get("n") or payload.get("count")
+        mode = _first_present(request.values.get("mode"), payload.get("mode"), "balanced")
+        raw_count = _first_present(
+            request.values.get("count"),
+            request.values.get("n"),
+            payload.get("count"),
+            payload.get("n"),
+        )
         count = _parse_int(raw_count, 5, 1, 50)
-        raw_page = (
-            request.values.get("page") or request.values.get("pageno") or payload.get("page") or payload.get("pageno")
+        raw_page = _first_present(
+            request.values.get("page"),
+            request.values.get("pageno"),
+            payload.get("page"),
+            payload.get("pageno"),
         )
         pageno = _parse_int(raw_page, 1, 1, 100)
-        categories = _parse_csv_param(request.values.get("categories") or payload.get("categories"))
-        engines = _parse_csv_param(request.values.get("engines") or payload.get("engines"))
-        time_range = _parse_csv_param(request.values.get("time_range") or payload.get("time_range"))
-        raw_timeout = request.values.get("timeout") or payload.get("timeout")
+        categories = _parse_csv_param(_first_present(request.values.get("categories"), payload.get("categories")))
+        engines = _parse_csv_param(_first_present(request.values.get("engines"), payload.get("engines")))
+        time_range = _parse_csv_param(_first_present(request.values.get("time_range"), payload.get("time_range")))
+        raw_timeout = _first_present(request.values.get("timeout"), payload.get("timeout"))
         timeout = _parse_float(raw_timeout, 15.0, 1.0, 60.0) if raw_timeout is not None else None
-        raw_base_url = request.values.get("base_url") or payload.get("base_url")
+        raw_base_url = _first_present(request.values.get("base_url"), payload.get("base_url"))
         base_url = str(raw_base_url).strip() if raw_base_url else None
         inc_domains = _parse_domain_list(
             request.values.getlist("site")

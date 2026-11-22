@@ -90,6 +90,17 @@
         return (http === '#') ? '' : http;
       }
 
+      function createFaviconElement(domain) {
+        var fav = document.createElement('img');
+        fav.className = 'card-favicon';
+        fav.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(domain) + '&sz=32';
+        fav.alt = '';
+        fav.loading = 'lazy';
+        fav.referrerPolicy = 'no-referrer';
+        fav.onerror = function () { this.style.display = 'none'; };
+        return fav;
+      }
+
       function escapeShellDoubleQuoted(str) {
         return String(str == null ? '' : str)
           .replace(/[\\$"\\`!]/g, function (ch) { return String.fromCharCode(92) + ch; });
@@ -365,37 +376,42 @@
 
         suppressUrlSync = true;
         try {
-          setMode(m, true);
-          if (q) {
-            if (isUrlText(q)) runScrapeMode(q);
-            else if (m === 'classic') runClassicSearch(q, pg);
-            else runUnifiedSearch(q);
+          if (q && isUrlText(q)) {
+            if (m !== 'deep') setMode('deep', true);
+            else setMode(m, true);
+            runScrapeMode(q);
           } else {
-            cancelPendingRequest();
-            activeRequestContainer = null;
-            var rList = document.getElementById('results-container');
-            if (rList && initialResultsEmptyHtml) {
-              rList.innerHTML = initialResultsEmptyHtml;
+            setMode(m, true);
+            if (q) {
+              if (m === 'classic') runClassicSearch(q, pg);
+              else runUnifiedSearch(q);
+            } else {
+              cancelPendingRequest();
+              activeRequestContainer = null;
+              var rList = document.getElementById('results-container');
+              if (rList && initialResultsEmptyHtml) {
+                rList.innerHTML = initialResultsEmptyHtml;
+              }
+              var cList = document.getElementById('classic-results-container');
+              if (cList && initialClassicEmptyHtml) {
+                cList.innerHTML = initialClassicEmptyHtml;
+              }
+              var tBar = document.getElementById('telemetry-bar');
+              if (tBar) tBar.classList.remove('visible');
+              var cMeta = document.getElementById('classic-telemetry-pill');
+              if (cMeta) cMeta.style.display = 'none';
+              var cAns = document.getElementById('classic-answers-container');
+              if (cAns) cAns.innerHTML = '';
+              var cPag = document.getElementById('classic-pagination-bar');
+              if (cPag) cPag.style.display = 'none';
+              state.markdown = '';
+              state.prompt = '';
+              state.jsonStr = '';
+              state.curlStr = '';
+              state.lastData = null;
+              updateContextView();
+              bindSampleQueryChips();
             }
-            var cList = document.getElementById('classic-results-container');
-            if (cList && initialClassicEmptyHtml) {
-              cList.innerHTML = initialClassicEmptyHtml;
-            }
-            var tBar = document.getElementById('telemetry-bar');
-            if (tBar) tBar.classList.remove('visible');
-            var cMeta = document.getElementById('classic-telemetry-pill');
-            if (cMeta) cMeta.style.display = 'none';
-            var cAns = document.getElementById('classic-answers-container');
-            if (cAns) cAns.innerHTML = '';
-            var cPag = document.getElementById('classic-pagination-bar');
-            if (cPag) cPag.style.display = 'none';
-            state.markdown = '';
-            state.prompt = '';
-            state.jsonStr = '';
-            state.curlStr = '';
-            state.raw = null;
-            updateContextView();
-            bindSampleQueryChips();
           }
         } finally {
           suppressUrlSync = false;
@@ -770,7 +786,6 @@
           var qVal = document.getElementById('q').value.trim();
           if (qVal) {
             runClassicSearch(qVal, 1);
-            updateUrlState(false);
           }
         });
       });
@@ -1063,13 +1078,7 @@
           })();
 
           if (domain) {
-            var fav = document.createElement('img');
-            fav.className = 'card-favicon';
-            fav.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(domain) + '&sz=32';
-            fav.alt = '';
-            fav.loading = 'lazy';
-            fav.onerror = function () { this.style.display = 'none'; };
-            domainWrap.appendChild(fav);
+            domainWrap.appendChild(createFaviconElement(domain));
           }
 
           var domSpan = document.createElement('span');
@@ -1243,6 +1252,7 @@
               container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">' + icon('alert') + ' エラー</h2><p>' + escapeHtml(res.error) + '</p></div>';
               return;
             }
+            state.lastData = res;
             state.markdown = res.markdown || '';
             state.prompt = res.rag_prompt || '';
             state.jsonStr = JSON.stringify(res, null, 2);
@@ -1493,13 +1503,7 @@
               try { return new URL(item.url).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
             })();
             if (domain) {
-              var fav = document.createElement('img');
-              fav.className = 'card-favicon';
-              fav.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(domain) + '&sz=32';
-              fav.alt = '';
-              fav.loading = 'lazy';
-              fav.onerror = function () { this.style.display = 'none'; };
-              urlSpan.appendChild(fav);
+              urlSpan.appendChild(createFaviconElement(domain));
             }
             var dName = document.createElement('span');
             dName.textContent = domain || item.url;
@@ -1588,13 +1592,7 @@
           })();
 
           if (domain) {
-            var fav = document.createElement('img');
-            fav.className = 'card-favicon';
-            fav.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(domain) + '&sz=32';
-            fav.alt = '';
-            fav.loading = 'lazy';
-            fav.onerror = function () { this.style.display = 'none'; };
-            urlSpan.appendChild(fav);
+            urlSpan.appendChild(createFaviconElement(domain));
           }
           var dName = document.createElement('span');
           dName.textContent = domain || item.url;
@@ -1869,6 +1867,7 @@
               container.innerHTML = '<div class="empty-state"><h2 style="color:var(--danger);">' + icon('alert') + ' 抽出エラー</h2><p>' + escapeHtml(res.error) + '</p></div>';
               return;
             }
+            state.lastData = res;
             state.markdown = res.markdown || res.content || '';
             state.prompt = res.rag_prompt || ('以下のWebページ抽出本文を根拠として要点を解説してください。\n\nURL: ' + targetUrl + '\n\n' + state.markdown);
             state.jsonStr = JSON.stringify(res, null, 2);
@@ -2041,6 +2040,7 @@
             e.enabled = chk.checked;
             e.status = e.enabled ? 'online' : 'disabled';
             dot.style.background = e.enabled ? 'var(--emerald)' : 'var(--text-muted)';
+            dot.title = e.enabled ? '稼働中' : '無効';
             setUnsavedChanges(true);
             updateOverviewStats();
           });
@@ -2131,8 +2131,17 @@
         fetchJson('/api/settings/engines')
           .then(function (res) {
             if (!res.success) throw new Error('Failed to load engines');
-            state.settingsEngines = res.engines || [];
+            state.settingsEngines = (res.engines || []).map(function (eng) {
+              eng._origEnabled = !!eng.enabled;
+              return eng;
+            });
             state.settingsCategories = res.categories || [];
+            if (!safeGetStorage('sxng_pref_safesearch', null) && res.safesearch !== undefined && document.getElementById('pref-safesearch')) {
+              document.getElementById('pref-safesearch').value = String(res.safesearch);
+            }
+            if (!safeGetStorage('sxng_pref_autocomplete', null) && res.autocomplete && document.getElementById('pref-autocomplete')) {
+              document.getElementById('pref-autocomplete').value = String(res.autocomplete);
+            }
 
             document.getElementById('stat-active-engines').textContent = res.active_engines + ' / ' + res.total_engines;
             document.getElementById('stat-suspended-engines').textContent = res.suspended_engines;
@@ -2284,9 +2293,20 @@
         var disabled = [];
         var enabled = [];
         state.settingsEngines.forEach(function (e) {
-          if (e.enabled) enabled.push(e.name);
-          else disabled.push(e.name);
+          var isEn = !!e.enabled;
+          var defEn = !!e.default_enabled;
+          var origEn = (e._origEnabled !== undefined) ? !!e._origEnabled : defEn;
+          if (isEn !== defEn || isEn !== origEn) {
+            if (isEn) enabled.push(e.name);
+            else disabled.push(e.name);
+          }
         });
+
+        if (!enabled.length && !disabled.length) {
+          setUnsavedChanges(false);
+          showToast('変更はありません');
+          return;
+        }
 
         fetch('/api/settings/engines', {
           method: 'POST',
@@ -2305,6 +2325,9 @@
               showToast('ブラウザには保存しましたが、設定ファイルに書き込めませんでした', true);
               return;
             }
+            state.settingsEngines.forEach(function (e) {
+              e._origEnabled = !!e.enabled;
+            });
             showToast('検索エンジン構成を保存しました');
             // Clear the dirty flag only after a confirmed save so the
             // beforeunload guard stays active if the POST failed.
@@ -2357,6 +2380,11 @@
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.json();
           })
+          .then(function (res) {
+            if (res && res.synced_settings_yml === false) {
+              throw new Error('Failed to persist preferences');
+            }
+          })
           .then(function () {
             safeSetStorage('sxng_pref_mode', mode);
             safeSetStorage('sxng_pref_safesearch', ss);
@@ -2375,7 +2403,6 @@
         if (document.getElementById('pref-default-mode')) document.getElementById('pref-default-mode').value = 'deep';
         if (document.getElementById('pref-safesearch')) document.getElementById('pref-safesearch').value = '1';
         applySearchPreferenceControls('10', '3000');
-        if (document.getElementById('opt-count')) document.getElementById('opt-count').value = '5';
         if (document.getElementById('pref-autocomplete')) {
           document.getElementById('pref-autocomplete').value = 'duckduckgo';
         }
@@ -2386,6 +2413,11 @@
           localStorage.removeItem('sxng_pref_tokens');
           localStorage.removeItem('sxng_pref_autocomplete');
         } catch (e) {}
+        fetch('/api/settings/engines', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reset_preferences: true })
+        }).catch(function () {});
         showToast('初期設定を復元しました');
       });
 
