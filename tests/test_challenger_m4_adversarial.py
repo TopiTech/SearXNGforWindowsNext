@@ -188,6 +188,33 @@ class TestBenchmarkPrecisionOracle(unittest.TestCase):
         # NDCG of identical ideal is 1.0
         self.assertAlmostEqual(calculate_ndcg([2.0, 1.0, 0.0], 3), 1.0, places=4)
 
+    def test_extract_success_rate_counts_attempted_failures(self) -> None:
+        """The extraction metric must count failed attempts, not only successes."""
+        from retrieval_models import RetrievalResultItem
+
+        from tests.evaluation.run_benchmark import compute_extract_success_rate
+
+        self.assertEqual(compute_extract_success_rate([]), 0.0)
+        never_attempted = RetrievalResultItem(id="src_01", title="Fast mode", url="https://example.com/a")
+        self.assertEqual(compute_extract_success_rate([never_attempted]), 0.0)
+
+        results = [
+            RetrievalResultItem(
+                id="src_01",
+                title="Scraped",
+                url="https://example.com/ok",
+                raw_content="body",
+                is_scraped=True,
+            ),
+            RetrievalResultItem(
+                id="src_02",
+                title="Failed",
+                url="https://example.com/fail",
+                scrape_error="Scrape timed out",
+            ),
+        ]
+        self.assertAlmostEqual(compute_extract_success_rate(results), 0.5)
+
     def test_benchmark_full_execution_precision(self) -> None:
         """Execute the benchmark directly and verify P@5 >= 0.90 for all modes."""
         from tests.evaluation.run_benchmark import OfflineRetrievalEvaluator

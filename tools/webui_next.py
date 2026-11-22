@@ -135,12 +135,18 @@ def _parse_bool(val: Any, default: bool = True) -> bool:
 
 
 def _parse_int(val: Any, default: int, minimum: int, maximum: int) -> int:
-    """Parse integer parameter within [minimum, maximum] bounds."""
+    """Parse integer parameter within [minimum, maximum] bounds.
+
+    ``json.loads`` accepts non-finite floats (``Infinity``/``NaN``) and
+    unbounded integers, and ``int()`` raises ``OverflowError`` for values it
+    cannot represent. That is the same class of invalid input as a malformed
+    string and must clamp to ``default`` instead of surfacing a 500.
+    """
     if val is None or val == "" or isinstance(val, bool):
         return default
     try:
         n = int(val)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return default
     return max(minimum, min(n, maximum))
 
@@ -151,7 +157,7 @@ def _parse_float(val: Any, default: float, minimum: float, maximum: float) -> fl
         return default
     try:
         n = float(val)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return default
     if not math.isfinite(n):
         return default
@@ -6801,6 +6807,13 @@ def register_next_webui(app: Any, webapp_mod: Any = None) -> None:
     if getattr(app, "_sxng_next_registered", False):
         return
     app._sxng_next_registered = True
+
+    # Flask ships with ``MAX_CONTENT_LENGTH = None`` (no limit), so an oversized
+    # POST would be buffered in memory before any field validation runs. Every
+    # documented payload is a small query object, so 2 MiB is ample headroom.
+    # An explicit deployment limit is preserved.
+    if app.config.get("MAX_CONTENT_LENGTH") is None:
+        app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 
     from flask import Response, jsonify, redirect, request
 

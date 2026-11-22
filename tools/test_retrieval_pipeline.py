@@ -209,6 +209,14 @@ class TestURLNormalizer(unittest.TestCase):
         self.assertEqual(extract_domain("http://EXAMPLE.COM:8080"), "example.com")
         self.assertEqual(extract_domain("invalid"), "")
 
+    def test_extract_domain_normalizes_root_and_unicode_dots(self) -> None:
+        """FQDN-style and full-width hosts must match the normalized filter form."""
+        self.assertEqual(extract_domain("http://EXAMPLE.com./path"), "example.com")
+        self.assertEqual(extract_domain("https://www.example.com.\uff0e/"), "example.com")
+        self.assertEqual(extract_domain("example\u3002com"), "example.com")
+        self.assertEqual(normalize_domain_list("Example.COM."), ["example.com"])
+        self.assertEqual(normalize_domain_list("example\uff0ecom"), ["example.com"])
+
     def test_get_dedup_key(self) -> None:
         u1 = "https://example.com/page/"
         u2 = "https://example.com/page?utm_source=twitter#anchor"
@@ -1103,6 +1111,40 @@ class TestRetrievalServiceIntegration(unittest.TestCase):
         mock_scrape.assert_called_once()
         self.assertTrue(items[3]["is_scraped"])
 
+    def test_search_propagates_scrape_failure_diagnostics(self) -> None:
+        """Failed scrapes must stay observable on the result item.
+
+        ``scrape_error`` was dropped when building RetrievalResultItem, so the
+        evaluation benchmark could not distinguish an attempted-and-failed
+        scrape from a page that was never scraped.
+        """
+
+        def fake_search(**kwargs: Any) -> dict[str, Any]:
+            return {
+                "results": [
+                    {"url": "https://example.com/ok", "title": "Working page", "content": "ok snippet"},
+                    {"url": "https://example.org/fail", "title": "Blocked page", "content": "blocked snippet"},
+                ]
+            }
+
+        def fake_scrape(url: str, **kwargs: Any) -> dict[str, Any]:
+            if url.endswith("/fail"):
+                raise RuntimeError("blocked by firewall rule")
+            return {
+                "content": "Scraped body text " * 40,
+                "raw_html": "<html><body><p>Scraped body text</p></body></html>",
+            }
+
+        service = RetrievalService(search_func=fake_search, scrape_func=fake_scrape)
+        resp = service.search("python", mode="balanced", count=2)
+        by_url = {item.url: item for item in resp.results}
+        self.assertIn("https://example.com/ok", by_url)
+        self.assertIn("https://example.org/fail", by_url)
+        self.assertTrue(by_url["https://example.com/ok"].is_scraped)
+        self.assertEqual(by_url["https://example.com/ok"].scrape_error, "")
+        self.assertFalse(by_url["https://example.org/fail"].is_scraped)
+        self.assertIn("blocked by firewall rule", by_url["https://example.org/fail"].scrape_error)
+
     def test_search_backend_type_error_is_not_retried(self) -> None:
         """Verify a genuine TypeError inside the backend is reported once, not retried."""
         calls: list[str] = []
@@ -1803,6 +1845,25 @@ class TestQueryPipeline(unittest.TestCase):
         self.assertNotIn("\r\n", md)
         self.assertNotIn("\r", md)
         self.assertIn("> First line of code\n> Second line of code\n> Third line", md)
+
+    def test_markdown_surfaces_partial_and_warnings(self) -> None:
+        """Degraded retrieval runs must not render as complete markdown."""
+        truncated = RetrievalResponse(
+            mode="balanced",
+            partial=True,
+            warnings=["Request deadline reached before page scraping."],
+        )
+        md = truncated.to_markdown()
+        self.assertIn("Partial results", md)
+        self.assertIn("Request deadline reached before page scraping.", md)
+
+        warned = RetrievalResponse(mode="fast", warnings=["1 page scrape(s) timed out."])
+        self.assertIn("Warnings", warned.to_markdown())
+        self.assertIn("1 page scrape(s) timed out.", warned.to_markdown())
+
+        complete = RetrievalResponse(mode="fast")
+        self.assertNotIn("Partial results", complete.to_markdown())
+        self.assertNotIn("Warnings", complete.to_markdown())
 
     def test_normalize_title_fallback_when_stripped_empty(self) -> None:
         """Verify normalize_title does not return an empty string when title has non-whitespace content."""

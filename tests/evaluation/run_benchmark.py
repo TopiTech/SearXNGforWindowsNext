@@ -30,7 +30,7 @@ TOOLS_DIR = os.path.join(REPO_ROOT, "tools")
 if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
 
-from retrieval_models import RetrievalResponse
+from retrieval_models import RetrievalResponse, RetrievalResultItem
 from retrieval_service import RetrievalService
 from url_normalizer import extract_domain, normalize_url
 
@@ -77,6 +77,20 @@ def calculate_ndcg(
     if idcg <= 0.0:
         return 0.0
     return min(1.0, dcg / idcg)
+
+
+def compute_extract_success_rate(results: list[RetrievalResultItem]) -> float:
+    """Fraction of attempted page scrapes that produced usable body text.
+
+    The denominator must include failed attempts. Counting only ``is_scraped``
+    items made the rate structurally 1.0 whenever any page succeeded, hiding
+    scraping regressions from the benchmark.
+    """
+    attempts = sum(1.0 for r in results if r.is_scraped or r.scrape_error)
+    if attempts <= 0:
+        return 0.0
+    successes = sum(1.0 for r in results if r.is_scraped and r.raw_content)
+    return successes / attempts
 
 
 class OfflineRetrievalEvaluator:
@@ -195,9 +209,7 @@ class OfflineRetrievalEvaluator:
             for r in resp.results:
                 total_chars += sum(len(e.text) for e in r.evidence)
 
-            extract_success_count = sum(1.0 for r in resp.results if r.is_scraped and r.raw_content)
-            scraped_attempts = sum(1.0 for r in resp.results if r.is_scraped)
-            extract_success_rate = extract_success_count / scraped_attempts if scraped_attempts > 0 else 0.0
+            extract_success_rate = compute_extract_success_rate(resp.results)
 
             results.append(
                 QueryBenchmarkResult(

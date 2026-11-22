@@ -28,7 +28,7 @@ import retrieval_models
 import retrieval_service
 from callable_compat import call_with_supported_kwargs
 from lexical_rerank import MultilingualTokenizer
-from url_normalizer import is_safe_retrieval_url, normalize_domain_list
+from url_normalizer import URLNormalizer, is_safe_retrieval_url, normalize_domain_list
 
 # High-authority primary domains (Documentation, Source Repositories, Standards)
 DEFAULT_BOOST_DOMAINS: dict[str, float] = {
@@ -260,17 +260,12 @@ class SearchResultItem:
 
 
 def extract_domain(url: str) -> str:
-    """Extract lowercase netloc/domain from a URL."""
-    try:
-        parsed = urllib.parse.urlparse(url)
-        host = (parsed.hostname or "").lower()
-        for dot in (chr(0x3002), chr(0xFF0E), chr(0xFF61)):
-            host = host.replace(dot, ".")
-        host = host.rstrip(".")
-        # Remove leading www.
-        return host.removeprefix("www.")
-    except (ValueError, AttributeError):
-        return ""
+    """Extract lowercase netloc/domain from a URL.
+
+    Delegates to the shared URL layer so filtering, ranking and source
+    classification all apply the same host spelling rules.
+    """
+    return URLNormalizer.extract_domain(url)
 
 
 def is_url_input(text: str) -> bool:

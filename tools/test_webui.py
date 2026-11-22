@@ -901,6 +901,68 @@ class TestWebUIRouteParameterForwarding(unittest.TestCase):
             self.assertEqual(recorded_args.get("engines"), "duckduckgo,brave")
             self.assertEqual(recorded_args.get("categories"), "general")
 
+    def test_non_finite_and_overflowing_numbers_do_not_500(self) -> None:
+        """Non-finite/overflowing JSON numbers must clamp to documented defaults.
+
+        ``json.loads`` accepts ``1e400``/``Infinity`` and unbounded integers,
+        but ``int()``/``float()`` raise ``OverflowError`` for them. That used to
+        surface as HTTP 500 on every documented numeric parameter.
+        """
+        deep_args: dict[str, Any] = {}
+        retrieval_args: dict[str, Any] = {}
+
+        def mock_deep(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            deep_args.update(kwargs)
+            return {"query": kwargs.get("query"), "results": []}
+
+        def mock_retrieval(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            retrieval_args.update(kwargs)
+            return {"query": kwargs.get("query"), "schema_version": "1.0", "results": []}
+
+        with patch.object(webui_next, "execute_server_deep_search", side_effect=mock_deep):
+            resp = self.client.post(
+                "/deep_search",
+                data=(
+                    '{"q": "overflow", "max_results": 1e400, "max_tokens": Infinity,'
+                    ' "page": 1e400, "max_length": 1e400, "timeout": ' + "9" * 400 + "}"
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(deep_args.get("max_results"), 5)
+            self.assertEqual(deep_args.get("max_tokens"), 3000)
+            self.assertEqual(deep_args.get("pageno"), 1)
+            self.assertEqual(deep_args.get("max_scrape_length"), 8000)
+            self.assertEqual(deep_args.get("timeout"), 15.0)
+
+        with patch.object(webui_next, "execute_server_retrieval_search", side_effect=mock_retrieval):
+            resp = self.client.post(
+                "/api/retrieval",
+                data='{"q": "overflow", "count": 1e400, "page": Infinity, "timeout": ' + "9" * 400 + "}",
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(retrieval_args.get("count"), 5)
+            self.assertEqual(retrieval_args.get("pageno"), 1)
+            self.assertEqual(retrieval_args.get("timeout"), 15.0)
+
+        with patch.object(webui_next, "execute_scrape_analyze", return_value={"content": "ok"}) as scrape_call:
+            resp = self.client.post(
+                "/api/scrape_analyze",
+                data='{"url": "https://example.com/", "max_length": 1e400}',
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(scrape_call.call_args.kwargs.get("max_length"), 8000)
+
+    def test_oversized_request_body_is_rejected_before_parsing(self) -> None:
+        """A single request must not be able to buffer an unbounded body."""
+        limit = self.app.config["MAX_CONTENT_LENGTH"]
+        self.assertGreater(limit, 0)
+        body = '{"q": "' + "a" * (limit + 1) + '"}'
+        resp = self.client.post("/deep_search", data=body, content_type="application/json")
+        self.assertEqual(resp.status_code, 413)
+
     def test_scrape_analyze_forwards_timeout(self) -> None:
         recorded_args: dict[str, Any] = {}
 

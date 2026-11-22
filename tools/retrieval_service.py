@@ -646,6 +646,7 @@ class RetrievalService:
                 duplicate_urls=item.get("duplicate_urls") or [],
                 raw_content=raw_body,
                 is_scraped=bool(item.get("is_scraped", False)),
+                scrape_error=str(item.get("scrape_error") or ""),
             )
             final_result_items.append(res_item)
 

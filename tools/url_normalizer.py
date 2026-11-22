@@ -14,6 +14,16 @@ import socket
 import urllib.parse
 from typing import ClassVar
 
+# Unicode full stops that UTS-46 maps to U+002E. A host registered under both
+# spellings would otherwise defeat domain filters, source classification and
+# same-domain deduplication.
+_HOST_DOT_TRANSLATION: dict[int, str] = {0x3002: ".", 0xFF0E: ".", 0xFF61: "."}
+
+
+def _normalize_host_spelling(host: str) -> str:
+    """Fold Unicode full stops and strip the DNS root dot from a hostname."""
+    return host.translate(_HOST_DOT_TRANSLATION).rstrip(".")
+
 
 class URLNormalizer:
     """Normalizes web URLs for deduplication, clustering, and clean citations."""
@@ -273,17 +283,23 @@ class URLNormalizer:
 
     @classmethod
     def extract_domain(cls, url: str) -> str:
-        """Extract lowercase domain/netloc without www. prefix."""
+        """Extract lowercase domain/netloc without www. prefix or root dot.
+
+        Uses the same host spelling rules as :meth:`normalize_host` so that a
+        ``site:`` filter, source classification and same-domain deduplication
+        agree on FQDN-style (``example.com.``) and full-width hosts.
+        """
         try:
             raw = (url or "").strip()
             if not raw:
                 return ""
+            raw = raw.translate(_HOST_DOT_TRANSLATION)
             if "://" not in raw and not raw.startswith("//"):
                 first_part = raw.split("/", 1)[0]
                 if "." in first_part and not any(c.isspace() for c in first_part):
                     raw = f"http://{raw}"
             parsed = urllib.parse.urlsplit(raw)
-            netloc = (parsed.hostname or "").lower()
+            netloc = _normalize_host_spelling((parsed.hostname or "").lower())
             return netloc.removeprefix("www.")
         except ValueError:
             return ""
@@ -340,6 +356,7 @@ def normalize_domain_list(
             .split("/")[0]
             .split(":")[0]
             .removeprefix("www.")
+            .translate(_HOST_DOT_TRANSLATION)
             .strip(".")
         )
         if dom and dom not in cleaned:

@@ -373,6 +373,11 @@ class RetrievalResultItem:
     duplicate_urls: list[str] = field(default_factory=list)
     raw_content: str = ""
     is_scraped: bool = False
+    # Internal diagnostic: why an attempted scrape produced no body (empty when
+    # it succeeded or was never attempted). Not serialized because it is not
+    # part of the schema_version 1.0 payload, but evaluation needs it to count
+    # attempted scrapes rather than only successes.
+    scrape_error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Convert item to the required GenAI JSON structure."""
@@ -469,6 +474,16 @@ class RetrievalResponse:
         q_text = self.query.clean_text or self.query.normalized or self.query.original
         safe_q = re.sub(r"\s+", " ", q_text).strip().replace("`", "'")
         lines: list[str] = [f"## Search Retrieval: `{safe_q}` (Mode: `{self.mode}`, Intent: `{self.query.intent}`)\n"]
+
+        # The structured payload marks truncated/degraded runs with ``partial``
+        # and ``warnings``; a markdown consumer must see the same signal or it
+        # will cite incomplete results as if they were complete.
+        if self.partial or self.warnings:
+            notices = [f"> {w.strip()}" for w in self.warnings if w.strip()]
+            if not notices:
+                notices = ["> Some results may be incomplete."]
+            status = "⚠️ **Partial results**" if self.partial else "⚠️ **Warnings**"
+            lines.append(f"{status}\n" + "\n".join(notices) + "\n")
 
         if self.answers:
             for ans in self.answers:
